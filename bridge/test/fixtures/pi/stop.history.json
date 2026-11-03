@@ -1,0 +1,18 @@
+{
+ "messages": [
+  {
+   "role": "user",
+   "text": "Count from 1 to 400, one number per line, with no other text. Do not use any tools.",
+   "timestamp": 1791801832.17
+  },
+  {
+   "role": "assistant",
+   "text": "1",
+   "timestamp": 1791801832.175,
+   "display_metadata": {
+    "interrupted": true
+   }
+  }
+ ],
+ "title": null
+}

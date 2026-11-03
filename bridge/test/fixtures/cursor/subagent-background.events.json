@@ -1,0 +1,95 @@
+[
+ {
+  "type": "prompt",
+  "text": "Use your Task tool exactly once, in the background (run_in_background true): start one subagent that runs the shell command `sleep 25` and then replies with the single word finished. Do not wait for it: as soon as it has started, reply with the single word started and end your turn."
+ },
+ {
+  "type": "title",
+  "title": "Background Task Starter"
+ },
+ {
+  "type": "reasoning",
+  "text": "I will start one background subagent using the Task tool to run `sleep 25` and reply with \"finished\". I will immediately reply with \"started\" without waiting."
+ },
+ {
+  "type": "text",
+  "text": "Launching one background subagent now."
+ },
+ {
+  "type": "tool.start",
+  "id": "call-a54711d8-c5c7-4a6f-8190-b4539ea25f47-0\nfc_91487a7a-56f5-9242-9b1a-910f5357d0ee_0",
+  "name": "delegate_task",
+  "args": {
+   "task": "Run this shell command exactly: sleep 25\n\nAfter it completes, reply with the single word: finished\n\nDo not add any other text in your final reply."
+  },
+  "context": "Sleep then finish"
+ },
+ {
+  "type": "subagent line",
+  "id": "d37620d3-1886-4123-a64e-b50dd2c448a0",
+  "status": "running",
+  "goal": "Sleep then finish",
+  "background": false,
+  "role": "General purpose"
+ },
+ {
+  "type": "subagent line",
+  "id": "d37620d3-1886-4123-a64e-b50dd2c448a0",
+  "status": "running",
+  "goal": "Sleep then finish",
+  "background": true,
+  "role": "General purpose"
+ },
+ {
+  "type": "tool.end",
+  "id": "call-a54711d8-c5c7-4a6f-8190-b4539ea25f47-0\nfc_91487a7a-56f5-9242-9b1a-910f5357d0ee_0",
+  "name": "delegate_task",
+  "args": {
+   "task": "Run this shell command exactly: sleep 25\n\nAfter it completes, reply with the single word: finished\n\nDo not add any other text in your final reply."
+  },
+  "result": {},
+  "context": "Sleep then finish"
+ },
+ {
+  "type": "reasoning",
+  "text": "The subagent has started. I will reply with \"started\" and end my turn."
+ },
+ {
+  "type": "text",
+  "text": "started"
+ },
+ {
+  "type": "subagent line",
+  "id": "d37620d3-1886-4123-a64e-b50dd2c448a0",
+  "status": "running",
+  "goal": "Sleep then finish",
+  "background": true,
+  "role": "General purpose",
+  "summary": "Running `sleep 25`, then replying with only `finished`.",
+  "tool": "terminal",
+  "toolUses": 1
+ },
+ {
+  "type": "subagent line",
+  "id": "d37620d3-1886-4123-a64e-b50dd2c448a0",
+  "status": "completed",
+  "goal": "Sleep then finish",
+  "background": true,
+  "role": "General purpose",
+  "tool": "terminal",
+  "toolUses": 1,
+  "result": "finished"
+ },
+ {
+  "type": "reasoning",
+  "text": "Checking for follow-up actions from the subagent completion."
+ },
+ {
+  "type": "text",
+  "text": "[Sleep then finish](d37620d3-1886-4123-a64e-b50dd2c448a0) completed successfully with `finished`. No further action needed."
+ },
+ {
+  "type": "turn.end",
+  "status": "complete"
+ }
+]

@@ -1,0 +1,72 @@
+[
+ {
+  "type": "prompt",
+  "text": "Use your Task tool exactly once: start one subagent that runs the shell command `sleep 47` and then replies with the single word done. Wait for it, then reply with the single word done."
+ },
+ {
+  "type": "title",
+  "title": "Sleep And Done"
+ },
+ {
+  "type": "reasoning",
+  "text": "Starting a subagent to run `sleep 47` and reply with \"done\".\n\nI'll wait for the subagent to finish before replying with \"done\"."
+ },
+ {
+  "type": "text",
+  "text": "Starting one subagent to run `sleep 47`, then I'll reply once it finishes."
+ },
+ {
+  "type": "tool.start",
+  "id": "call-0a8730b9-d4d0-43a0-af0a-5252ffc08103-0\nfc_fdc8a4f6-4b9f-9e31-b9e2-9abdc5eccf69_0",
+  "name": "delegate_task",
+  "args": {
+   "task": "Run this exact shell command: sleep 47\n\nAfter it completes, reply with exactly the single word: done\nNothing else in your final reply."
+  },
+  "context": "Sleep then say done"
+ },
+ {
+  "type": "subagent line",
+  "id": "43ed31cb-8fd9-4a46-8a84-23589df847de",
+  "status": "running",
+  "goal": "Sleep then say done",
+  "background": false,
+  "role": "General purpose"
+ },
+ {
+  "type": "subagent line",
+  "id": "43ed31cb-8fd9-4a46-8a84-23589df847de",
+  "status": "running",
+  "goal": "Sleep then say done",
+  "background": false,
+  "role": "General purpose",
+  "tool": "terminal",
+  "toolUses": 1
+ },
+ {
+  "type": "subagent line",
+  "id": "43ed31cb-8fd9-4a46-8a84-23589df847de",
+  "status": "stopped",
+  "goal": "Sleep then say done",
+  "background": false,
+  "role": "General purpose",
+  "tool": "terminal",
+  "toolUses": 1
+ },
+ {
+  "type": "tool.end",
+  "id": "call-0a8730b9-d4d0-43a0-af0a-5252ffc08103-0\nfc_fdc8a4f6-4b9f-9e31-b9e2-9abdc5eccf69_0",
+  "name": "delegate_task",
+  "args": {
+   "task": "Run this exact shell command: sleep 47\n\nAfter it completes, reply with exactly the single word: done\nNothing else in your final reply."
+  },
+  "result": {
+   "status": "error",
+   "error": "Stopped before it finished."
+  },
+  "context": "Sleep then say done"
+ },
+ {
+  "type": "turn.end",
+  "status": "interrupted"
+ }
+]

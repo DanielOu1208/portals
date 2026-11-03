@@ -1,0 +1,35 @@
+// Build settings for the Portals app target, both configurations.
+//
+// The signing team is not committed. Copy Local.example.xcconfig to Local.xcconfig
+// (gitignored) and set DEVELOPMENT_TEAM there. Simulator builds work without it.
+
+#include "Shared.xcconfig"
+
+// The name under the icon.
+INFOPLIST_KEY_CFBundleDisplayName = Portals
+
+// The app's category on a Mac (Finder, Launchpad), which App Store Connect refuses a Mac
+// build without. The App Store's own category is chosen in App Store Connect.
+INFOPLIST_KEY_LSApplicationCategoryType = public.app-category.developer-tools
+
+// The camera only reads the QR code the bridge's setup shows on the Mac.
+INFOPLIST_KEY_NSCameraUsageDescription = Portals uses the camera to scan the code your Mac shows when you set up the bridge.
+
+// Push notifications. One setting fills in both the entitlement (aps-environment) and
+// what the app tells the host about its device address (PortalsPushEnvironment in the
+// Info.plist), so the two cannot disagree. `development` for builds installed from
+// Xcode; `production` for TestFlight and the App Store.
+CODE_SIGN_ENTITLEMENTS = Config/Portals.entitlements
+// On a Mac (Mac Catalyst) the same, under macOS's names, and the sandbox.
+CODE_SIGN_ENTITLEMENTS[sdk=macosx*] = Config/Portals-Mac.entitlements
+PORTALS_APS_ENVIRONMENT = development
+
+// The Portals relay (relay/), which sends notifications for bridges that have no APNs
+// key of their own. The app registers its device with it (PortalsRelayURL in the
+// Info.plist). `//` starts a comment in an xcconfig, hence the `$()` between the slashes.
+PORTALS_RELAY_URL = https:/$()/portals-relay.danielou1208.workers.dev
+
+// The app icon: Portals/Assets.xcassets, rendered from brand/appicon.svg by
+// brand/build-icon.sh.
+ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon
+

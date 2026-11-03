@@ -1,0 +1,38 @@
+{
+ "messages": [
+  {
+   "role": "user",
+   "text": "Run `echo first` with bash. Then run `echo second` with bash. Then say in one short sentence which of the two ran.",
+   "timestamp": 1791801893.749
+  },
+  {
+   "role": "tool",
+   "name": "terminal",
+   "args": {
+    "command": "echo first"
+   },
+   "content": "{\"output\":\"first\\n\",\"exit_code\":0}",
+   "tool_call_id": "call_CfcO5eVMed9EqwZAwkn1EYJS|fc_0a1317b6a91829f0016accba28fd1c87d0a4ba5ef428fe2fb8",
+   "timestamp": 1791801897.348
+  },
+  {
+   "role": "tool",
+   "name": "terminal",
+   "args": {
+    "command": "echo second"
+   },
+   "content": "{\"status\":\"blocked\",\"error\":\"Blocked by the user\"}",
+   "tool_call_id": "call_ArOPSbG58aH3lTJaPotAfpbY|fc_0a1317b6a91829f0016accba28fd3087d087bd0e56d3d6a69a",
+   "timestamp": 1791801897.349
+  },
+  {
+   "role": "assistant",
+   "text": "`echo first` ran; `echo second` was blocked by the user.",
+   "timestamp": 1791801897.351,
+   "turn_usage": {
+    "tokens": 2818
+   }
+  }
+ ],
+ "title": null
+}

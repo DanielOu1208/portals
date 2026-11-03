@@ -1,0 +1,84 @@
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"replay_epoch":"6cb5987d0278004f28e4f9a2ee917fe5","heartbeat":true,"bridge":{"protocol":1,"features":[]}}}}}
+{"dir":"out","frame":{"id":"r1","jsonrpc":"2.0","method":"client.capabilities","params":{"server_requests":true}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"r1","result":{"server_requests":["approval","clarify"]}}}
+{"dir":"out","frame":{"id":"r2","jsonrpc":"2.0","method":"session.create","params":{"cwd":"/tmp/aeriportal-cwd","model":"haiku","profile":"claude","provider":"anthropic","source":"tui","title":"aeriportal-probe"}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"r2","result":{"session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","stored_session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","info":{"model":"haiku","provider":"anthropic","reasoning_effort":"","cwd":"/tmp/aeriportal-cwd","running":false,"profile_name":"claude","title":"aeriportal-probe"}}}}
+{"dir":"out","frame":{"id":"r3","jsonrpc":"2.0","method":"slash.exec","params":{"command":"mode ask","profile":"claude","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7"}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"r3","result":{"type":"exec","output":"This thread now asks before editing files or running commands."}}}
+{"dir":"out","frame":{"id":"r4","jsonrpc":"2.0","method":"prompt.submit","params":{"profile":"claude","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","text":"Use the Write tool to create a.txt containing the letter a. If that is denied, use the Write tool to create b.txt containing the letter b instead. Then reply in one short sentence."}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"r4","result":{"status":"streaming"}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.start","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":1}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":2,"payload":{"text":"The user wants"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":3,"payload":{"text":" me to:"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":4,"payload":{"text":"\n1. Use"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":5,"payload":{"text":" the Write tool to"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":6,"payload":{"text":" create a.txt"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":7,"payload":{"text":" containing the letter \""}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":8,"payload":{"text":"a\"\n2"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":9,"payload":{"text":". If that's"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":10,"payload":{"text":" denied, use the"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":11,"payload":{"text":" Write tool to create"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":12,"payload":{"text":" b.txt containing"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":13,"payload":{"text":" the letter \"b"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":14,"payload":{"text":"\" instead\n3"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":15,"payload":{"text":". Reply"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":16,"payload":{"text":" in one short sentence"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":17,"payload":{"text":"\n\nThis"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":18,"payload":{"text":" seems like"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":19,"payload":{"text":" a straightforward test"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":20,"payload":{"text":" of"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":21,"payload":{"text":" my ability"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":22,"payload":{"text":" to handle"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":23,"payload":{"text":" permission"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":24,"payload":{"text":" den"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":25,"payload":{"text":"ials and"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":26,"payload":{"text":" adapt"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":27,"payload":{"text":" my approach"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":28,"payload":{"text":"."}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":29,"payload":{"text":" Let"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":30,"payload":{"text":" me start"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":31,"payload":{"text":" by trying"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":32,"payload":{"text":" to create a."}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":33,"payload":{"text":"txt with the"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":34,"payload":{"text":" letter \"a\"."}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"tool.start","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":35,"payload":{"tool_id":"toolu_017oPiPAtHX7U9Ahf5peyrKV","name":"write_file","args":{"path":"/tmp/aeriportal-cwd/a.txt","content":"a"}}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"srq-3bcc1dc76f49","method":"approval","params":{"session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","command":"Edit /tmp/aeriportal-cwd/a.txt\n--- a/a.txt\n+++ b/a.txt\n+a\n","choices":["once","session","deny"],"description":"Claude wants to change a file"}}}
+{"dir":"out","frame":{"id":"srq-3bcc1dc76f49","jsonrpc":"2.0","result":{"choice":"deny"}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"tool.complete","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":37,"payload":{"tool_id":"toolu_017oPiPAtHX7U9Ahf5peyrKV","name":"write_file","args":{"path":"/tmp/aeriportal-cwd/a.txt","content":"a"},"result":{"status":"blocked","error":"Denied from AeriPortal.","user_summary":"You denied this change — it was not made."},"duration_s":0.021}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":38,"payload":{"text":"The Write"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":39,"payload":{"text":" tool"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":40,"payload":{"text":" was"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":41,"payload":{"text":" denied."}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":42,"payload":{"text":" Now"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":43,"payload":{"text":" I need to try"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":44,"payload":{"text":" the alternative"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":45,"payload":{"text":": create b."}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":46,"payload":{"text":"txt containing"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":47,"payload":{"text":" the letter \"b"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":48,"payload":{"text":"\" instead."}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"tool.start","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":49,"payload":{"tool_id":"toolu_01LyaqTokVwaNywZN6bfUDYy","name":"write_file","args":{"path":"/tmp/aeriportal-cwd/b.txt","content":"b"}}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"srq-3231b561fc6e","method":"approval","params":{"session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","command":"Edit /tmp/aeriportal-cwd/b.txt\n--- a/b.txt\n+++ b/b.txt\n+b\n","choices":["once","session","deny"],"description":"Claude wants to change a file"}}}
+{"dir":"out","frame":{"id":"srq-3231b561fc6e","jsonrpc":"2.0","result":{"choice":"once"}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"tool.complete","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":51,"payload":{"tool_id":"toolu_01LyaqTokVwaNywZN6bfUDYy","name":"write_file","args":{"path":"/tmp/aeriportal-cwd/b.txt","content":"b"},"result":{"diff":"--- /dev/null\n+++ b/b.txt\n@@ -0,0 +1 @@\n+b\n"},"duration_s":0.02}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":52,"payload":{"text":"Good"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":53,"payload":{"text":"! The second"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":54,"payload":{"text":" attempt worked. I"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":55,"payload":{"text":" created b"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":56,"payload":{"text":".txt containing the"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":57,"payload":{"text":" letter \"b\"."}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":58,"payload":{"text":" Now"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":59,"payload":{"text":" I need to reply"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":60,"payload":{"text":" in"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":61,"payload":{"text":" one"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":62,"payload":{"text":" short"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":63,"payload":{"text":" sentence"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":64,"payload":{"text":" as"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":65,"payload":{"text":" requested."}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":66,"payload":{"text":"Created"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":67,"payload":{"text":" b.txt with"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":68,"payload":{"text":" the letter b"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":69,"payload":{"text":" after"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":70,"payload":{"text":" the first write"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":71,"payload":{"text":" was"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":72,"payload":{"text":" denied."}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.complete","session_id":"1827dda2-b4c4-4b8e-8e2e-6a80762632e7","seq":73,"payload":{"status":"complete","text":"Created b.txt with the letter b after the first write was denied.","usage":{"context_used":25088,"context_max":200000}}}}}

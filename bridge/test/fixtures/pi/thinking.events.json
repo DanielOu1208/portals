@@ -1,0 +1,19 @@
+[
+ {
+  "type": "reasoning",
+  "text": "**Checking the count two ways**",
+  "pieces": 1
+ },
+ {
+  "type": "text",
+  "text": "115 — inclusion–exclusion gives 200 − (66 + 28 − 9) = 115; checking by 9 full blocks of 21 plus the remaining 11 gives 9×12 + 7 = 115.",
+  "pieces": 49
+ },
+ {
+  "type": "turn.end",
+  "status": "complete",
+  "spent": {
+   "tokens": 1408
+  }
+ }
+]

@@ -1,0 +1,5 @@
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"replay_epoch":"6cb5987d0278004f28e4f9a2ee917fe5","heartbeat":true,"bridge":{"protocol":1,"features":[]}}}}}
+{"dir":"out","frame":{"id":"r1","jsonrpc":"2.0","method":"client.capabilities","params":{"server_requests":true}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"r1","result":{"server_requests":["approval","clarify"]}}}
+{"dir":"out","frame":{"id":"r2","jsonrpc":"2.0","method":"profiles.list","params":{}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"r2","result":{"profiles":[{"name":"claude","display_name":"Claude Code","description":"Claude Code on this Mac, with your own settings and sign-in.","model":"default","provider":"anthropic","is_default":true}]}}}

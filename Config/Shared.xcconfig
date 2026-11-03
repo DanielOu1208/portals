@@ -1,0 +1,14 @@
+// Build settings the app and its notification extension share.
+
+// The app group the two share: the app leaves each agent's avatar there for the
+// extension to put on notifications. One setting fills in both targets' entitlement and
+// the PortalsAppGroup key in both Info.plists, which is what the code reads.
+PORTALS_APP_GROUP = group.com.danielou.portals
+
+// The version people see, and the build number. The app and its extension must carry
+// the same pair. Builds from Xcode are build 1; scripts/testflight.sh gives each upload
+// its own number, the time of the build.
+MARKETING_VERSION = 0.1.2
+CURRENT_PROJECT_VERSION = 1
+
+#include? "Local.xcconfig"

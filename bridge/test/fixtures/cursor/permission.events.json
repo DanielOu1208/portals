@@ -1,0 +1,82 @@
+[
+ {
+  "type": "prompt",
+  "text": "Do these two things, and if one is not allowed do not try it another way. 1. Run the command `touch /tmp/portals-record/outside.txt`. 2. Search the web once for: agent client protocol. Then say in one short sentence what happened with each."
+ },
+ {
+  "type": "title",
+  "title": "Command And Search"
+ },
+ {
+  "type": "reasoning",
+  "text": "I need to run the touch command and search for \"agent client protocol\"."
+ },
+ {
+  "type": "text",
+  "text": "I'll run the touch command and do one web search for that phrase, then report what happened with each."
+ },
+ {
+  "type": "tool.start",
+  "id": "call-599c174a-e3b0-47c4-a17c-8445882277e1-0\nfc_c5fca52d-6809-91d5-954f-fcc06472b078_0",
+  "name": "terminal",
+  "args": {
+   "command": "touch /tmp/portals-record/outside.txt"
+  }
+ },
+ {
+  "type": "tool.start",
+  "id": "call-599c174a-e3b0-47c4-a17c-8445882277e1-1\nfc_c5fca52d-6809-91d5-954f-fcc06472b078_1",
+  "name": "web_search",
+  "args": {
+   "query": "agent client protocol"
+  }
+ },
+ {
+  "type": "approval",
+  "command": "Web search: agent client protocol",
+  "description": "Cursor wants to search the web",
+  "choices": [
+   "once",
+   "always",
+   "deny"
+  ],
+  "answered": "deny"
+ },
+ {
+  "type": "tool.end",
+  "id": "call-599c174a-e3b0-47c4-a17c-8445882277e1-1\nfc_c5fca52d-6809-91d5-954f-fcc06472b078_1",
+  "name": "web_search",
+  "args": {
+   "query": "agent client protocol"
+  },
+  "result": {
+   "status": "blocked",
+   "error": "User rejected",
+   "user_summary": "You denied this — it did not run."
+  }
+ },
+ {
+  "type": "tool.end",
+  "id": "call-599c174a-e3b0-47c4-a17c-8445882277e1-0\nfc_c5fca52d-6809-91d5-954f-fcc06472b078_0",
+  "name": "terminal",
+  "args": {
+   "command": "touch /tmp/portals-record/outside.txt"
+  },
+  "result": {
+   "output": "",
+   "exit_code": 0
+  }
+ },
+ {
+  "type": "reasoning",
+  "text": "Both tasks completed successfully."
+ },
+ {
+  "type": "text",
+  "text": "1. The `touch` command succeeded and created `/tmp/portals-record/outside.txt`.  \n2. The web search for “agent client protocol” was rejected, so it did not run."
+ },
+ {
+  "type": "turn.end",
+  "status": "complete"
+ }
+]

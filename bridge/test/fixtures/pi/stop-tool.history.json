@@ -1,0 +1,31 @@
+{
+ "messages": [
+  {
+   "role": "user",
+   "text": "Run `sleep 30` with bash. Then reply with the single word done.",
+   "timestamp": 1791802106.8
+  },
+  {
+   "role": "tool",
+   "name": "terminal",
+   "args": {
+    "command": "sleep 30"
+   },
+   "content": "{\"status\":\"error\",\"error\":\"Stopped before it finished.\"}",
+   "tool_call_id": "call_lkODYhwTdRE1dLkhYxmzYrUF|fc_05c32b1fe0b173d3016accbafc6a4c87d0b07d00b6ccfe333f",
+   "timestamp": 1791802108.928
+  },
+  {
+   "role": "assistant",
+   "text": "",
+   "timestamp": 1791802108.928,
+   "display_metadata": {
+    "interrupted": true
+   },
+   "turn_usage": {
+    "tokens": 1201
+   }
+  }
+ ],
+ "title": null
+}

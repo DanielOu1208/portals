@@ -1,0 +1,53 @@
+[
+ {
+  "type": "prompt",
+  "text": "Search the web once for: agent client protocol. If you are not allowed to, say so in one short sentence."
+ },
+ {
+  "type": "title",
+  "title": "Web Search Protocol"
+ },
+ {
+  "type": "reasoning",
+  "text": "I will search the web once for \"agent client protocol\"."
+ },
+ {
+  "type": "text",
+  "text": "I'll run a single web search for that term."
+ },
+ {
+  "type": "tool.start",
+  "id": "call-d930fc18-fe81-4417-b655-22ffd8072a55-0\nfc_f1bafd13-4fdc-971a-9d0d-8a08c9f4a900_0",
+  "name": "web_search",
+  "args": {
+   "query": "agent client protocol"
+  }
+ },
+ {
+  "type": "approval",
+  "command": "Web search: agent client protocol",
+  "description": "Cursor wants to search the web",
+  "choices": [
+   "once",
+   "always",
+   "deny"
+  ],
+  "answered": "withdrawn"
+ },
+ {
+  "type": "tool.end",
+  "id": "call-d930fc18-fe81-4417-b655-22ffd8072a55-0\nfc_f1bafd13-4fdc-971a-9d0d-8a08c9f4a900_0",
+  "name": "web_search",
+  "args": {
+   "query": "agent client protocol"
+  },
+  "result": {
+   "status": "error",
+   "error": "Stopped before it finished."
+  }
+ },
+ {
+  "type": "turn.end",
+  "status": "interrupted"
+ }
+]

@@ -1,0 +1,7 @@
+// Build settings for the notification extension, both configurations. It puts the
+// agent's avatar on each notification (PortalsNotifications/NotificationService.swift).
+
+#include "Shared.xcconfig"
+
+CODE_SIGN_ENTITLEMENTS = Config/PortalsNotifications.entitlements
+CODE_SIGN_ENTITLEMENTS[sdk=macosx*] = Config/PortalsNotifications-Mac.entitlements

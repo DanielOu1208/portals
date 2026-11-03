@@ -1,0 +1,18 @@
+{
+ "messages": [
+  {
+   "role": "user",
+   "text": "What colour is this square? Reply with one word.\n@image:image-1.png",
+   "timestamp": 1791801866.71
+  },
+  {
+   "role": "assistant",
+   "text": "Red",
+   "timestamp": 1791801866.716,
+   "turn_usage": {
+    "tokens": 1176
+   }
+  }
+ ],
+ "title": null
+}

@@ -1,0 +1,5 @@
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"replay_epoch":"61921426325c33e8daea3956e1901e42","heartbeat":true,"bridge":{"protocol":1,"features":["folders","model_levels","push_host","desk_sessions"]}}}}}
+{"dir":"out","frame":{"id":"r1","jsonrpc":"2.0","method":"client.capabilities","params":{"server_requests":true}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"r1","result":{"server_requests":["approval","clarify"]}}}
+{"dir":"out","frame":{"id":"r2","jsonrpc":"2.0","method":"session.adopt","params":{"mode":"continue","profile":"claude","session_id":"875d4f5a-697f-4a50-a249-bfccd78280fb"}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"r2","error":{"code":-32602,"message":"This session is open in a terminal on the Mac. Close it there, or fork it, to continue it here."}}}

@@ -1,0 +1,22 @@
+[
+ {
+  "type": "prompt",
+  "text": "Before anything else, ask me one multiple-choice question with your AskQuestion tool: which language I prefer, with the options Python and Swift. Then reply with one short sentence that names my answer. Make no plan, run no commands and edit no files."
+ },
+ {
+  "type": "title",
+  "title": "Language Preference"
+ },
+ {
+  "type": "reasoning",
+  "text": "I will ask a multiple-choice question about Python versus Swift.\n\nI don't have an AskQuestion tool available.\n\nI'll ask the question inline instead."
+ },
+ {
+  "type": "text",
+  "text": "Which language do you prefer?\n\n**A)** Python  \n**B)** Swift"
+ },
+ {
+  "type": "turn.end",
+  "status": "complete"
+ }
+]

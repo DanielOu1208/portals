@@ -1,0 +1,21 @@
+{
+  // Type checking only: Node runs the .ts files directly by stripping their types, so
+  // the code uses only syntax that can be erased (no enums, namespaces or parameter
+  // properties) and imports local files by their .ts name.
+  "compilerOptions": {
+    "target": "es2024",
+    "lib": ["es2024"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["node"],
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "strict": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true
+  },
+  "include": ["src", "scripts", "test"]
+}

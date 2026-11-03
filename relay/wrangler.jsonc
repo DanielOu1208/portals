@@ -1,0 +1,32 @@
+// The relay as a Cloudflare Worker; relay/README.md says how to deploy it. The APNs key,
+// its id, the team id and the relay's signing secret are Worker secrets, never here.
+{
+  "name": "portals-relay",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-09-01",
+  // Served at https://portals-relay.danielou1208.workers.dev only: no preview address per version.
+  "workers_dev": true,
+  "preview_urls": false,
+  "vars": {
+    // The apps the relay sends for, comma-separated: their bundle IDs are the APNs topics.
+    "BUNDLE_IDS": "com.danielou.portals"
+  },
+  "ratelimits": [
+    // Registrations per caller's address, and notifications per relay token. A
+    // namespace_id is any number unique within the account.
+    { "name": "DEVICE_LIMIT", "namespace_id": "1801", "simple": { "limit": 20, "period": 60 } },
+    { "name": "NOTIFY_LIMIT", "namespace_id": "1802", "simple": { "limit": 60, "period": 60 } },
+    // Tunnel connections per Mac's relay id: its standby socket, the devices and its legs.
+    { "name": "TUNNEL_LIMIT", "namespace_id": "1803", "simple": { "limit": 60, "period": 60 } }
+  ],
+  // The tunnel: one Durable Object per Mac (src/worker.ts, MacTunnel), named by its relay id.
+  "durable_objects": {
+    "bindings": [{ "name": "MAC_TUNNEL", "class_name": "MacTunnel" }]
+  },
+  // SQLite-backed, which the free plan runs. A class once deployed is never renamed or
+  // removed without a migration of its own.
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["MacTunnel"] }],
+  // Cloudflare's request logs would keep each request's details; the relay logs only
+  // what it decided.
+  "observability": { "enabled": false }
+}

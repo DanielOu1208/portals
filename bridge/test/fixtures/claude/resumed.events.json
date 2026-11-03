@@ -1,0 +1,55 @@
+[
+ {
+  "type": "tool.start",
+  "id": "toolu_01DkcMQwuEWBWAwVSfHbJJ2A",
+  "name": "terminal",
+  "args": {
+   "command": "sleep 600"
+  }
+ },
+ {
+  "type": "tool.end",
+  "id": "toolu_01DkcMQwuEWBWAwVSfHbJJ2A",
+  "name": "terminal",
+  "args": {
+   "command": "sleep 600"
+  },
+  "result": {
+   "output": "Command running in background with ID: bntpx7oa2. Output is being written to: /private/tmp/claude-501/-private-tmp-portals-night-scratch-bugs-record-claude-resumed/3920dcb7-c712-4c67-9980-9e3016dce200/tasks/bntpx7oa2.output. You will be notified when it completes. To check interim output, use Read on that file path.",
+   "exit_code": 0
+  },
+  "durationSeconds": 0
+ },
+ {
+  "type": "text",
+  "text": "Started `sleep 600` in the background (task `bntpx7oa2`); I'll be notified when it finishes.",
+  "pieces": 7
+ },
+ {
+  "type": "turn.end",
+  "status": "complete",
+  "usage": {
+   "used": 27452,
+   "max": 1000000
+  },
+  "spent": {
+   "tokens": 52929
+  }
+ },
+ {
+  "type": "text",
+  "text": "No, it isn't running anymore: the notification reports it as stopped when the previous session ended, so I can't confirm whether it finished the full 600 seconds.",
+  "pieces": 11
+ },
+ {
+  "type": "turn.end",
+  "status": "complete",
+  "usage": {
+   "used": 28483,
+   "max": 1000000
+  },
+  "spent": {
+   "tokens": 28483
+  }
+ }
+]

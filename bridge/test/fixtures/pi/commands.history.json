@@ -1,0 +1,31 @@
+{
+ "messages": [
+  {
+   "role": "user",
+   "text": "/skill:greet Ada",
+   "timestamp": 1791802116.418
+  },
+  {
+   "role": "assistant",
+   "text": "Hello, Ada!",
+   "timestamp": 1791802116.423,
+   "turn_usage": {
+    "tokens": 1393
+   }
+  },
+  {
+   "role": "user",
+   "text": "Reply with only this word in capital letters and nothing else: kiwi",
+   "timestamp": 1791802118.196
+  },
+  {
+   "role": "assistant",
+   "text": "KIWI",
+   "timestamp": 1791802118.197,
+   "turn_usage": {
+    "tokens": 1418
+   }
+  }
+ ],
+ "title": null
+}

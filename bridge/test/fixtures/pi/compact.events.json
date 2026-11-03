@@ -1,0 +1,95 @@
+[
+ {
+  "type": "text",
+  "text": "The sea keeps secrets in its blue,  \nAnd hums beneath the moonlit foam;  \nEach wave returns, then slips from view,  \nAs tides carry the wide world home.",
+  "pieces": 37
+ },
+ {
+  "type": "turn.end",
+  "status": "complete",
+  "spent": {
+   "tokens": 1216
+  }
+ },
+ {
+  "type": "text",
+  "text": "hello",
+  "pieces": 1
+ },
+ {
+  "type": "turn.end",
+  "status": "complete",
+  "spent": {
+   "tokens": 1245
+  }
+ },
+ {
+  "type": "usage",
+  "usage": {
+   "used": 1245,
+   "max": 272000
+  }
+ },
+ {
+  "type": "status",
+  "text": "Compacting the conversation…"
+ },
+ {
+  "type": "status",
+  "text": ""
+ },
+ {
+  "type": "compacted",
+  "trigger": "manual",
+  "tokensBefore": 1245
+ },
+ {
+  "type": "turn.end",
+  "status": "complete",
+  "usage": {
+   "used": 1245,
+   "max": 272000
+  }
+ },
+ {
+  "type": "status",
+  "text": "Compacting the conversation…"
+ },
+ {
+  "type": "status",
+  "text": ""
+ },
+ {
+  "type": "turn.end",
+  "status": "error",
+  "error": "Already compacted",
+  "retryable": true,
+  "usage": {
+   "used": 1245,
+   "max": 272000
+  }
+ },
+ {
+  "type": "text",
+  "text": "bye",
+  "pieces": 1
+ },
+ {
+  "type": "turn.end",
+  "status": "complete",
+  "usage": {
+   "used": 1245,
+   "max": 272000
+  },
+  "spent": {
+   "tokens": 1375
+  }
+ },
+ {
+  "type": "usage",
+  "usage": {
+   "used": 1375,
+   "max": 272000
+  }
+ }
+]

@@ -1,0 +1,27 @@
+[
+ {
+  "type": "text",
+  "text": "The moon lays silver on the tide,  \nWhile quiet waves roll in and glide.  \nSalt winds sing beneath the sky,  \nThe sea keeps secrets passing by.",
+  "pieces": 33
+ },
+ {
+  "type": "status",
+  "text": "Compacting the conversation…"
+ },
+ {
+  "type": "status",
+  "text": ""
+ },
+ {
+  "type": "compacted",
+  "trigger": "auto",
+  "tokensBefore": 1213
+ },
+ {
+  "type": "turn.end",
+  "status": "complete",
+  "spent": {
+   "tokens": 1213
+  }
+ }
+]

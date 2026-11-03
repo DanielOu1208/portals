@@ -1,0 +1,18 @@
+{
+ "messages": [
+  {
+   "role": "user",
+   "text": "In two short sentences, say what a JSON line is. Do not use any tools.",
+   "timestamp": 1791801781.743
+  },
+  {
+   "role": "assistant",
+   "text": "A JSON line is a single line of text containing one valid JSON value. It’s commonly used in newline-delimited JSON files, where each line is a separate record.",
+   "timestamp": 1791801782.938,
+   "turn_usage": {
+    "tokens": 1214
+   }
+  }
+ ],
+ "title": null
+}

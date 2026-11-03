@@ -1,0 +1,50 @@
+{
+ "messages": [
+  {
+   "role": "user",
+   "text": "Reply with a four-line poem about the sea. Do not use any tools.",
+   "timestamp": 1791801875.127
+  },
+  {
+   "role": "assistant",
+   "text": "The sea keeps secrets in its blue,  \nAnd hums beneath the moonlit foam;  \nEach wave returns, then slips from view,  \nAs tides carry the wide world home.",
+   "timestamp": 1791801875.132,
+   "turn_usage": {
+    "tokens": 1216
+   }
+  },
+  {
+   "role": "user",
+   "text": "Thank you. Now reply with the single word hello and nothing else at all, please.",
+   "timestamp": 1791801878.144
+  },
+  {
+   "role": "assistant",
+   "text": "hello",
+   "timestamp": 1791801878.146
+  },
+  {
+   "role": "compaction",
+   "trigger": "auto",
+   "timestamp": 1791801884.36,
+   "tokens_before": 1245,
+   "turn_usage": {
+    "tokens": 1245
+   }
+  },
+  {
+   "role": "user",
+   "text": "Reply with the single word bye.",
+   "timestamp": 1791801884.365
+  },
+  {
+   "role": "assistant",
+   "text": "bye",
+   "timestamp": 1791801884.369,
+   "turn_usage": {
+    "tokens": 1375
+   }
+  }
+ ],
+ "title": null
+}

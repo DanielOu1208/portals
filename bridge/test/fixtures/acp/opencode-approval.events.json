@@ -1,0 +1,70 @@
+[
+ {
+  "type": "reasoning",
+  "text": "Simple task."
+ },
+ {
+  "type": "tool.start",
+  "id": "call_00_3ib0pwiutm1ihvcvant1nfga",
+  "name": "write_file",
+  "args": {
+   "path": "/private/tmp/portals-acp/work/hello.txt",
+   "content": "hi"
+  }
+ },
+ {
+  "type": "approval",
+  "command": "Edit /private/tmp/portals-acp/work/hello.txt\n--- a/hello.txt\n+++ b/hello.txt\n@@ -0,0 +1 @@\n+hi\n"
+ },
+ {
+  "type": "tool.end",
+  "id": "call_00_3ib0pwiutm1ihvcvant1nfga",
+  "name": "write_file",
+  "args": {
+   "path": "/private/tmp/portals-acp/work/hello.txt",
+   "content": "hi"
+  },
+  "result": {
+   "diff": "--- a/hello.txt\n+++ b/hello.txt\n@@ -0,0 +1 @@\n+hi\n"
+  }
+ },
+ {
+  "type": "tool.start",
+  "id": "call_00_xo1q5kbyua1byzyfhzhz2z84",
+  "name": "terminal",
+  "args": {
+   "command": "cat hello.txt"
+  }
+ },
+ {
+  "type": "approval",
+  "command": "cat hello.txt"
+ },
+ {
+  "type": "tool.end",
+  "id": "call_00_xo1q5kbyua1byzyfhzhz2z84",
+  "name": "terminal",
+  "args": {
+   "command": "cat hello.txt"
+  },
+  "result": {
+   "output": "hi",
+   "exit_code": 0
+  }
+ },
+ {
+  "type": "text",
+  "text": "`hi`"
+ },
+ {
+  "type": "usage",
+  "usage": {
+   "used": 53502,
+   "max": 200000
+  }
+ },
+ {
+  "type": "turn.end",
+  "status": "complete"
+ }
+]

@@ -1,0 +1,40 @@
+[
+ {
+  "type": "text",
+  "text": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25",
+  "pieces": 7
+ },
+ {
+  "type": "commentary",
+  "text": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25",
+  "alreadyStreamed": true
+ },
+ {
+  "type": "usage",
+  "usage": {
+   "used": 27213,
+   "max": 1000000
+  }
+ },
+ {
+  "type": "reasoning",
+  "text": "Those system messages are just tool notices, not an actual request. I already did the counting, so now I just need to say banana as asked.\n\n",
+  "pieces": 13
+ },
+ {
+  "type": "text",
+  "text": "banana",
+  "pieces": 2
+ },
+ {
+  "type": "turn.end",
+  "status": "complete",
+  "usage": {
+   "used": 27293,
+   "max": 1000000
+  },
+  "spent": {
+   "tokens": 52685
+  }
+ }
+]

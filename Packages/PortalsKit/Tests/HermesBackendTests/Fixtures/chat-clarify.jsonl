@@ -1,0 +1,88 @@
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"skin":{"name":"default"},"change_events":true,"heartbeat":true,"replay_epoch":"8a9e048c70014c77aef21efa5a9a90ee"}}}}
+{"dir":"out","frame":{"id":"r1","jsonrpc":"2.0","method":"client.capabilities","params":{"server_requests":true}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"r1","result":{"server_requests":["approval","clarify","display.install.sudo","preview.act","preview.read","secret","sudo","terminal.read","tour","vault.code","vault.save_login","vault.unlock_prompt","window.read"],"declines_not_shown":true}}}
+{"dir":"out","frame":{"id":"r2","jsonrpc":"2.0","method":"session.create","params":{"cwd":"/tmp/aeriportal-cwd","model":"zai-org/GLM-5.3-Flash","provider":"gmi","source":"tui","title":"aeriportal-probe"}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"r2","result":{"session_id":"8ed7b082","stored_session_id":"20261004_223552_8eb043","message_count":0,"messages":[],"info":{"model":"zai-org/GLM-5.3-Flash","provider":"gmi","tools":{},"skills":{},"cwd":"/tmp/aeriportal-cwd","branch":"","project":null,"lazy":true,"desktop_contract":8,"profile_name":"default"}}}}
+{"dir":"out","frame":{"id":"r3","jsonrpc":"2.0","method":"prompt.submit","params":{"session_id":"8ed7b082","text":"Use the clarify tool to ask me exactly one question: Which language should I use? Offer the choices Python and Swift. After I answer, reply with one short sentence naming my choice. Do not use any other tools."}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"r3","result":{"status":"streaming","user_row_id":31}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"session.info","session_id":"8ed7b082","payload":{"model":"zai-org/GLM-5.3-Flash","provider":"gmi","reasoning_effort":"","reasoning_effort_wire":"","service_tier":"","fast":false,"yolo":false,"approval_mode":"smart","tools":{},"skills":{},"cwd":"/tmp/aeriportal-cwd","branch":"","project":null,"terminal_backend":"local","personality":"","running":true,"turn_started_at":1791178552.3874428,"title":"aeriportal-probe","stored_session_id":"20261004_223552_8eb043","desktop_contract":8,"version":"0.21.5","release_date":"2026.9.24","update_behind":1719,"update_command":"hermes update","usage":{"model":"zai-org/GLM-5.3-Flash","input":0,"output":0,"reasoning":0,"prompt":0,"completion":0,"total":0,"calls":0,"compressions":0,"active_subagents":0},"profile_name":"default","mcp_servers":[],"system_prompt":null},"seq":1}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.start","session_id":"8ed7b082","seq":2}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"thinking.delta","session_id":"8ed7b082","payload":{"text":"(¬_¬) brainstorming..."},"seq":3}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"sessions.changed","session_id":"","payload":{}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"session.reclaimed","session_id":"","payload":{"session_id":"88c6c47a","stored_session_id":"20261004_223533_dc0526","reason":"ws_orphan_reap"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"sessions.changed","session_id":"","payload":{}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"session.title","session_id":"8ed7b082","payload":{"session_id":"20261004_223552_8eb043","title":"Choose between Python and Swift"},"seq":4}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"session.reclaimed","session_id":"","payload":{"session_id":"468da1f2","stored_session_id":"20261004_223535_9923e7","reason":"ws_orphan_reap"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"sessions.changed","session_id":"","payload":{}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"thinking.delta","session_id":"8ed7b082","payload":{"text":""},"seq":5}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":"The"},"seq":6}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" user"},"seq":7}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" wants"},"seq":8}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" me"},"seq":9}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" to"},"seq":10}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" use"},"seq":11}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" the"},"seq":12}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" clarify"},"seq":13}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" tool"},"seq":14}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" to"},"seq":15}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" ask"},"seq":16}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" exactly"},"seq":17}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" one"},"seq":18}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" question"},"seq":19}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" about"},"seq":20}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" language"},"seq":21}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" choice"},"seq":22}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" ("},"seq":23}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":"Python"},"seq":24}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" vs"},"seq":25}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" Swift"},"seq":26}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":"),"},"seq":27}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" then"},"seq":28}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" reply"},"seq":29}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" with"},"seq":30}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" one"},"seq":31}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" short"},"seq":32}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" sentence"},"seq":33}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" naming"},"seq":34}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" their"},"seq":35}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" choice"},"seq":36}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":"."},"seq":37}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" No"},"seq":38}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" other"},"seq":39}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" tools"},"seq":40}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":"."},"seq":41}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"tool.generating","session_id":"8ed7b082","payload":{"name":"clarify"},"seq":42}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"thinking.delta","session_id":"8ed7b082","payload":{"text":""},"seq":43}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"tool.start","session_id":"8ed7b082","payload":{"tool_id":"call_1c553f1bf6574fdbb51a234f","name":"clarify","context":"Which language should I use?","args":{"questions":[{"choices":["Python","Swift"],"question":"Which language should I use?"}]}},"seq":44}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"srq-b050e16811aa","method":"clarify","params":{"session_id":"8ed7b082","questions":[{"qid":"q0","question":"Which language should I use?","choices":["Python (Recommended)","Swift"],"multi_select":false}]}}}
+{"dir":"out","frame":{"id":"srq-b050e16811aa","jsonrpc":"2.0","result":{"answers":{"q0":"Swift"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"tool.complete","session_id":"8ed7b082","payload":{"tool_id":"call_1c553f1bf6574fdbb51a234f","name":"clarify","args":{"questions":[{"choices":["Python","Swift"],"question":"Which language should I use?"}]},"duration_s":0.0033059120178222656,"result":{"responses":[{"question":"Which language should I use?","choices_offered":["Python","Swift"],"status":"answered","user_response":"Swift"}],"outcome":"submitted"}},"seq":45}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"thinking.delta","session_id":"8ed7b082","payload":{"text":"( ˘⌣˘)♡ deliberating..."},"seq":46}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"session.usage","session_id":"8ed7b082","payload":{"usage":{"model":"zai-org/GLM-5.3-Flash","input":14334,"output":68,"reasoning":36,"prompt":14334,"completion":68,"total":14402,"calls":1,"context_used":14334,"context_max":1048576,"context_percent":1,"context_source":"provider_usage","context_estimated":false,"compressions":0,"avg_latency_s":11.1,"avg_tps":6.2,"active_subagents":0}},"seq":47}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"sessions.changed","session_id":"","payload":{}}}}
+{"dir":"out","frame":{"id":"heartbeat-1","jsonrpc":"2.0","method":"gateway.ping","params":{}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","result":{"ok":true},"id":"heartbeat-1"}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"thinking.delta","session_id":"8ed7b082","payload":{"text":""},"seq":48}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":"The"},"seq":49}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" user"},"seq":50}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" chose"},"seq":51}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" Swift"},"seq":52}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":"."},"seq":53}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" Reply"},"seq":54}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" with"},"seq":55}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" one"},"seq":56}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" short"},"seq":57}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" sentence"},"seq":58}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" naming"},"seq":59}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" their"},"seq":60}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" choice"},"seq":61}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":","},"seq":62}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" no"},"seq":63}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" other"},"seq":64}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":" tools"},"seq":65}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.delta","session_id":"8ed7b082","payload":{"text":"."},"seq":66}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"8ed7b082","payload":{"text":"\n\nYou"},"seq":67}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"8ed7b082","payload":{"text":" chose Swift."},"seq":68}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"thinking.delta","session_id":"8ed7b082","payload":{"text":""},"seq":69}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.available","session_id":"8ed7b082","payload":{"text":"You chose Swift."},"seq":70}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.complete","session_id":"8ed7b082","payload":{"text":"You chose Swift.","usage":{"model":"zai-org/GLM-5.3-Flash","input":20492,"output":92,"reasoning":54,"prompt":28748,"completion":92,"total":28840,"calls":2,"context_used":14414,"context_max":1048576,"context_percent":1,"context_source":"provider_usage","context_estimated":false,"compressions":0,"cache_hit_pct":29,"avg_latency_s":9.6,"avg_tps":4.8,"active_subagents":0},"status":"complete","persisted_turn":{"row_ids":[31,32,33,34],"complete":true,"user_row_id":31,"final_assistant_row_id":34},"reasoning":"The user chose Swift. Reply with one short sentence naming their choice, no other tools."},"seq":71}}}

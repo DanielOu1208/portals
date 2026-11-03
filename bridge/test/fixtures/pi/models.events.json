@@ -1,0 +1,20 @@
+[
+ {
+  "type": "title",
+  "title": "Recorded for the bridge"
+ },
+ {
+  "type": "status",
+  "text": "Compacting the conversation…"
+ },
+ {
+  "type": "status",
+  "text": ""
+ },
+ {
+  "type": "turn.end",
+  "status": "error",
+  "error": "Nothing to compact (session too small)",
+  "retryable": true
+ }
+]

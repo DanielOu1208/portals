@@ -1,0 +1,12 @@
+// The JavaScript the published package runs (dist/): Node strips types only outside
+// node_modules, so an installed package cannot run the .ts files. `npm run build`.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "rootDir": "src",
+    "outDir": "dist",
+    "rewriteRelativeImportExtensions": true
+  },
+  "include": ["src"]
+}

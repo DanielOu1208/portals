@@ -1,0 +1,114 @@
+[
+ {
+  "type": "text",
+  "text": "I’ll patch `hello.txt`, then check its byte count.",
+  "pieces": 13
+ },
+ {
+  "type": "commentary",
+  "text": "I’ll patch `hello.txt`, then check its byte count.",
+  "alreadyStreamed": true
+ },
+ {
+  "type": "tool.start",
+  "id": "exec-46420591-87d1-40d3-8263-aaf60064bfde",
+  "name": "terminal",
+  "args": {
+   "command": "cat hello.txt"
+  }
+ },
+ {
+  "type": "tool.end",
+  "id": "exec-46420591-87d1-40d3-8263-aaf60064bfde",
+  "name": "terminal",
+  "args": {
+   "command": "cat hello.txt"
+  },
+  "result": {
+   "output": "hi\n",
+   "exit_code": 0
+  },
+  "durationSeconds": 0
+ },
+ {
+  "type": "usage",
+  "usage": {
+   "used": 23766,
+   "max": 475000
+  }
+ },
+ {
+  "type": "tool.start",
+  "id": "exec-1ffa67cc-2790-40a8-b8aa-2b40ed44892d",
+  "name": "patch",
+  "args": {
+   "path": "/tmp/aeriportal-cwd/hello.txt"
+  }
+ },
+ {
+  "type": "tool.end",
+  "id": "exec-1ffa67cc-2790-40a8-b8aa-2b40ed44892d",
+  "name": "patch",
+  "args": {
+   "path": "/tmp/aeriportal-cwd/hello.txt"
+  },
+  "result": {
+   "success": true,
+   "diff": "--- a/hello.txt\n+++ b/hello.txt\n@@ -1 +1 @@\n-hi\n+hello\n"
+  },
+  "durationSeconds": 0
+ },
+ {
+  "type": "tool.start",
+  "id": "exec-1f09d9ae-17ad-4cd2-8c94-11c5326f38e2",
+  "name": "terminal",
+  "args": {
+   "command": "wc -c hello.txt"
+  }
+ },
+ {
+  "type": "tool.end",
+  "id": "exec-1f09d9ae-17ad-4cd2-8c94-11c5326f38e2",
+  "name": "terminal",
+  "args": {
+   "command": "wc -c hello.txt"
+  },
+  "result": {
+   "output": "       6 hello.txt\n",
+   "exit_code": 0
+  },
+  "durationSeconds": 0
+ },
+ {
+  "type": "usage",
+  "usage": {
+   "used": 23901,
+   "max": 475000
+  }
+ },
+ {
+  "type": "text",
+  "text": "Patched `hi` to `hello`; `wc -c hello.txt` reports 6 bytes.",
+  "pieces": 21
+ },
+ {
+  "type": "usage",
+  "usage": {
+   "used": 23989,
+   "max": 475000
+  }
+ },
+ {
+  "type": "turn.end",
+  "status": "complete",
+  "usage": {
+   "used": 23989,
+   "max": 475000
+  },
+  "spent": {
+   "tokens": 71656,
+   "seconds": 10.364
+  },
+  "agentTurn": "01a13a21-5ffe-7d82-890f-8dde0461db2f"
+ }
+]

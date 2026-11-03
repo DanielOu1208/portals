@@ -1,0 +1,21 @@
+[
+ {
+  "type": "text",
+  "text": "A JSON line is a single line of text containing one valid JSON value. It’s commonly used in newline-delimited JSON files, where each line is a separate record.",
+  "pieces": 34
+ },
+ {
+  "type": "turn.end",
+  "status": "complete",
+  "spent": {
+   "tokens": 1214
+  }
+ },
+ {
+  "type": "usage",
+  "usage": {
+   "used": 1214,
+   "max": 272000
+  }
+ }
+]

@@ -1,0 +1,14 @@
+[
+ {
+  "type": "text",
+  "text": "1\n",
+  "pieces": 2
+ },
+ {
+  "type": "turn.end",
+  "status": "interrupted",
+  "spent": {
+   "seconds": 3.482
+  }
+ }
+]

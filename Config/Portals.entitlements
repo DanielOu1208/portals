@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Set in Portals.xcconfig: builds installed from Xcode get notifications through
+	     Apple's sandbox servers. -->
+	<key>aps-environment</key>
+	<string>$(PORTALS_APS_ENVIRONMENT)</string>
+	<!-- Set in Shared.xcconfig: where the app leaves the agents' avatars for the
+	     notification extension, and the Keychain group of the keys hosts seal
+	     notifications to, which the extension opens them with. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>$(PORTALS_APP_GROUP)</string>
+	</array>
+	<!-- Notifications from an agent show as messages from it, with its avatar. -->
+	<key>com.apple.developer.usernotifications.communication</key>
+	<true/>
+</dict>
+</plist>

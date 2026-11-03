@@ -1,0 +1,109 @@
+[
+ {
+  "type": "text",
+  "text": "Confirmed",
+  "pieces": 1
+ },
+ {
+  "type": "turn.end",
+  "status": "complete"
+ },
+ {
+  "type": "text",
+  "text": "Not confirmed",
+  "pieces": 1
+ },
+ {
+  "type": "turn.end",
+  "status": "complete"
+ },
+ {
+  "type": "text",
+  "text": "Picked Banana",
+  "pieces": 1
+ },
+ {
+  "type": "turn.end",
+  "status": "complete"
+ },
+ {
+  "type": "text",
+  "text": "Name: Ada",
+  "pieces": 1
+ },
+ {
+  "type": "turn.end",
+  "status": "complete"
+ },
+ {
+  "type": "text",
+  "text": "Note has 3 lines",
+  "pieces": 1
+ },
+ {
+  "type": "turn.end",
+  "status": "complete"
+ },
+ {
+  "type": "text",
+  "text": "No answer in time",
+  "pieces": 1
+ },
+ {
+  "type": "turn.end",
+  "status": "complete"
+ },
+ {
+  "type": "tool.start",
+  "id": "call_CfcO5eVMed9EqwZAwkn1EYJS|fc_0a1317b6a91829f0016accba28fd1c87d0a4ba5ef428fe2fb8",
+  "name": "terminal",
+  "args": {
+   "command": "echo first"
+  }
+ },
+ {
+  "type": "tool.start",
+  "id": "call_ArOPSbG58aH3lTJaPotAfpbY|fc_0a1317b6a91829f0016accba28fd3087d087bd0e56d3d6a69a",
+  "name": "terminal",
+  "args": {
+   "command": "echo second"
+  }
+ },
+ {
+  "type": "tool.end",
+  "id": "call_ArOPSbG58aH3lTJaPotAfpbY|fc_0a1317b6a91829f0016accba28fd3087d087bd0e56d3d6a69a",
+  "name": "terminal",
+  "args": {
+   "command": "echo second"
+  },
+  "result": {
+   "status": "blocked",
+   "error": "Blocked by the user"
+  }
+ },
+ {
+  "type": "tool.end",
+  "id": "call_CfcO5eVMed9EqwZAwkn1EYJS|fc_0a1317b6a91829f0016accba28fd1c87d0a4ba5ef428fe2fb8",
+  "name": "terminal",
+  "args": {
+   "command": "echo first"
+  },
+  "result": {
+   "output": "first\n",
+   "exit_code": 0
+  },
+  "durationSeconds": 0.009
+ },
+ {
+  "type": "text",
+  "text": "`echo first` ran; `echo second` was blocked by the user.",
+  "pieces": 16
+ },
+ {
+  "type": "turn.end",
+  "status": "complete",
+  "spent": {
+   "tokens": 2818
+  }
+ }
+]

@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Which of Apple's notification servers this build's device address belongs
+	     to; the same build setting fills in the aps-environment entitlement. -->
+	<key>PortalsPushEnvironment</key>
+	<string>$(PORTALS_APS_ENVIRONMENT)</string>
+	<!-- The app group the notification extension reads the agents' avatars from; the
+	     same build setting fills in the entitlement. -->
+	<key>PortalsAppGroup</key>
+	<string>$(PORTALS_APP_GROUP)</string>
+	<!-- The Portals relay the device registers with, for bridges without an APNs key of
+	     their own (docs/pairing-and-relay.md); set in Portals.xcconfig. Empty: none. -->
+	<key>PortalsRelayURL</key>
+	<string>$(PORTALS_RELAY_URL)</string>
+	<!-- Save Image on an image an agent showed in a reply, from its menu or the share
+	     sheet (ReplyImageViews.swift): the system asks once, and refusing costs nothing else. -->
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Portals saves an image an agent showed you to your photo library when you ask it to.</string>
+	<!-- Notifications from an agent are messages from it (communication notifications). -->
+	<key>NSUserActivityTypes</key>
+	<array>
+		<string>INSendMessageIntent</string>
+	</array>
+	<!-- Export compliance, asked at each TestFlight upload: the app uses HTTPS and
+	     Apple's own CryptoKit, nothing of its own, which is exempt. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<!-- A row of the sidebar while it is dragged to another place in the list: the
+	     app's own type, which nothing outside the app is given. -->
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.danielou.portals.sidebar-row</string>
+			<key>UTTypeDescription</key>
+			<string>A row of the Portals sidebar</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+		</dict>
+	</array>
+	<!-- portals://pair links: the QR code the bridge's setup shows opens the app at
+	     the sheet for adding that Mac (docs/pairing-and-relay.md). -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>$(PRODUCT_BUNDLE_IDENTIFIER).pair</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>portals</string>
+			</array>
+		</dict>
+	</array>
+	<!-- One window, on the iPad and the Mac too: the app shows one thread at a time,
+	     and every window would show the same one. -->
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+		<key>UISceneConfigurations</key>
+		<dict/>
+	</dict>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<!-- Plain http/ws to a Hermes backend on this machine (the simulator's loopback). -->
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+</dict>
+</plist>

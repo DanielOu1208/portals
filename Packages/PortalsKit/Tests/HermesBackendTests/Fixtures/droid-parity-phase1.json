@@ -1,0 +1,17 @@
+{
+  "mode": "default",
+  "mode_default": "medium",
+  "mode_options": [
+    {"id": "ask", "label": "Off", "description": "Asks before changes and commands that Droid's rules do not already allow."},
+    {"id": "edits", "label": "Low", "description": "File edits and low-risk commands can run without asking."},
+    {"id": "medium", "label": "Medium", "description": "Reversible development actions can run without asking. Droid can still ask for approval."},
+    {"id": "full", "label": "High", "description": "High-risk actions can run without asking, subject to Droid's safety rules. This is not unsafe permission bypass."},
+    {"id": "plan", "label": "Spec", "description": "Plans first and waits for your approval before implementation."},
+    {"id": "default", "label": "Default", "description": "Inherits your Droid CLI settings."}
+  ],
+  "requires_all_answers": true,
+  "questions": [
+    {"qid": "0", "question": "Which tests?", "choices": ["Unit", "UI"], "multi_select": true},
+    {"qid": "1", "question": "Which target?", "choices": ["Phone", "Mac"], "multi_select": false}
+  ]
+}

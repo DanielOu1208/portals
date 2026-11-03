@@ -1,0 +1,18 @@
+[
+ {
+  "type": "text",
+  "text": "1",
+  "pieces": 1
+ },
+ {
+  "type": "turn.end",
+  "status": "interrupted",
+  "usage": {
+   "used": 25351,
+   "max": 1000000
+  },
+  "spent": {
+   "tokens": 25351
+  }
+ }
+]

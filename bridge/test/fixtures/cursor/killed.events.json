@@ -1,0 +1,45 @@
+[
+ {
+  "type": "prompt",
+  "text": "Run the command `sleep 47`, then reply with the single word done."
+ },
+ {
+  "type": "title",
+  "title": "Sleep Command Done"
+ },
+ {
+  "type": "reasoning",
+  "text": "Running `sleep 47` and replying with \"done\"."
+ },
+ {
+  "type": "text",
+  "text": "I'll run `sleep 47` and wait for it to finish."
+ },
+ {
+  "type": "tool.start",
+  "id": "call-0c67ff4f-c310-46e5-ae45-ee13f407a5dc-0\nfc_b19ab47d-486e-94b7-9905-3c2a645fd6af_0",
+  "name": "terminal",
+  "args": {
+   "command": "sleep 47"
+  }
+ },
+ {
+  "type": "process ended"
+ },
+ {
+  "type": "tool.end",
+  "id": "call-0c67ff4f-c310-46e5-ae45-ee13f407a5dc-0\nfc_b19ab47d-486e-94b7-9905-3c2a645fd6af_0",
+  "name": "terminal",
+  "args": {
+   "command": "sleep 47"
+  },
+  "result": {
+   "status": "error",
+   "error": "Stopped. The command may still be running on the Mac: Cursor does not say whether it ended."
+  }
+ },
+ {
+  "type": "turn.end",
+  "status": "error"
+ }
+]

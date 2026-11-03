@@ -1,0 +1,51 @@
+name: Bug report
+description: Report a reproducible Portals problem
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Never include passwords, pairing links or QR codes, API keys, or the contents of your threads.
+  - type: input
+    id: app-version
+    attributes:
+      label: App version and device
+      placeholder: 0.1.1 on iPhone, iOS 26.1
+    validations:
+      required: true
+  - type: input
+    id: host-version
+    attributes:
+      label: Host version and OS
+      description: "`npx portals-host status` shows the version."
+      placeholder: portals-host 0.3.1 on macOS 26.1
+    validations:
+      required: true
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Agent
+      options:
+        - Claude Code
+        - Codex
+        - Cursor
+        - Droid
+        - Pi
+        - Hermes
+        - Not specific to an agent
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened
+    validations:
+      required: true

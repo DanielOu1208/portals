@@ -1,0 +1,18 @@
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"replay_epoch":"ca4a3cb1079e6d8958fc0de46e801677","heartbeat":true,"bridge":{"protocol":1,"features":[]}}}}}
+{"dir":"out","frame":{"id":"r1","jsonrpc":"2.0","method":"client.capabilities","params":{"server_requests":true}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"r1","result":{"server_requests":["approval","clarify"]}}}
+{"dir":"out","frame":{"id":"r2","jsonrpc":"2.0","method":"session.create","params":{"cwd":"/tmp/aeriportal-cwd","source":"tui","title":"aeriportal-probe"}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"r2","result":{"session_id":"ef14fcd5-2951-4b14-9a95-03e273da6ff6","stored_session_id":"ef14fcd5-2951-4b14-9a95-03e273da6ff6","info":{"model":"fake-1","provider":"fake","reasoning_effort":"medium","cwd":"/tmp/aeriportal-cwd","running":false,"profile_name":"fake","title":"aeriportal-probe"}}}}
+{"dir":"out","frame":{"id":"r3","jsonrpc":"2.0","method":"prompt.submit","params":{"session_id":"ef14fcd5-2951-4b14-9a95-03e273da6ff6","text":"Write slowly."}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"r3","result":{"status":"streaming"}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.start","session_id":"ef14fcd5-2951-4b14-9a95-03e273da6ff6","seq":1}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"ef14fcd5-2951-4b14-9a95-03e273da6ff6","seq":2,"payload":{"text":"This "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"ef14fcd5-2951-4b14-9a95-03e273da6ff6","seq":3,"payload":{"text":"is "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"ef14fcd5-2951-4b14-9a95-03e273da6ff6","seq":4,"payload":{"text":"a "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"ef14fcd5-2951-4b14-9a95-03e273da6ff6","seq":5,"payload":{"text":"long "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"ef14fcd5-2951-4b14-9a95-03e273da6ff6","seq":6,"payload":{"text":"reply "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"ef14fcd5-2951-4b14-9a95-03e273da6ff6","seq":7,"payload":{"text":"from "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"ef14fcd5-2951-4b14-9a95-03e273da6ff6","seq":8,"payload":{"text":"the "}}}}
+{"dir":"out","frame":{"id":"r4","jsonrpc":"2.0","method":"session.interrupt","params":{"session_id":"ef14fcd5-2951-4b14-9a95-03e273da6ff6"}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"r4","result":{"status":"interrupted"}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.complete","session_id":"ef14fcd5-2951-4b14-9a95-03e273da6ff6","seq":9,"payload":{"status":"interrupted"}}}}

@@ -1,0 +1,30 @@
+[
+ {
+  "type": "tool.start",
+  "id": "call_lkODYhwTdRE1dLkhYxmzYrUF|fc_05c32b1fe0b173d3016accbafc6a4c87d0b07d00b6ccfe333f",
+  "name": "terminal",
+  "args": {
+   "command": "sleep 30"
+  }
+ },
+ {
+  "type": "tool.end",
+  "id": "call_lkODYhwTdRE1dLkhYxmzYrUF|fc_05c32b1fe0b173d3016accbafc6a4c87d0b07d00b6ccfe333f",
+  "name": "terminal",
+  "args": {
+   "command": "sleep 30"
+  },
+  "result": {
+   "status": "error",
+   "error": "Stopped before it finished."
+  },
+  "durationSeconds": 0.002
+ },
+ {
+  "type": "turn.end",
+  "status": "interrupted",
+  "spent": {
+   "tokens": 1201
+  }
+ }
+]

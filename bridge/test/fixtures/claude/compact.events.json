@@ -1,0 +1,52 @@
+[
+ {
+  "type": "turn.end",
+  "status": "error",
+  "error": "No messages to compact.",
+  "retryable": false
+ },
+ {
+  "type": "text",
+  "text": "hello",
+  "pieces": 1
+ },
+ {
+  "type": "turn.end",
+  "status": "complete",
+  "usage": {
+   "used": 25473,
+   "max": 1000000
+  },
+  "spent": {
+   "tokens": 25473
+  }
+ },
+ {
+  "type": "status",
+  "text": "Compacting the conversation…"
+ },
+ {
+  "type": "status",
+  "text": ""
+ },
+ {
+  "type": "compacted",
+  "trigger": "manual",
+  "tokensBefore": 25473
+ },
+ {
+  "type": "usage",
+  "usage": {
+   "used": 2807,
+   "max": 1000000
+  }
+ },
+ {
+  "type": "turn.end",
+  "status": "complete",
+  "usage": {
+   "used": 2807,
+   "max": 1000000
+  }
+ }
+]

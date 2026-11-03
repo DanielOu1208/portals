@@ -1,0 +1,535 @@
+{
+ "_comment": "Every key AeriPortal can send, and every event and server request it reads. Checked against a Hermes host's gateway-contract.openrpc.json by scripts/check-contract.sh, and against the Swift param types by ContractSubsetTests.",
+ "methods": {
+  "client.capabilities": [
+   "server_requests"
+  ],
+  "profiles.list": [],
+  "session.create": [
+   "profile",
+   "source",
+   "title",
+   "cwd",
+   "model",
+   "provider",
+   "reasoning_effort"
+  ],
+  "session.resume": [
+   "session_id",
+   "profile",
+   "inline_images"
+  ],
+  "session.events.since": [
+   "session_id",
+   "last_seen",
+   "profile"
+  ],
+  "session.interrupt": [
+   "session_id",
+   "profile"
+  ],
+  "image.attach_bytes": [
+   "session_id",
+   "content_base64",
+   "filename",
+   "profile"
+  ],
+  "prompt.submit": [
+   "session_id",
+   "text",
+   "profile"
+  ],
+  "model.options": [
+   "profile"
+  ],
+  "config.get": [
+   "key",
+   "profile"
+  ],
+  "config.set": [
+   "key",
+   "value",
+   "session_id",
+   "profile",
+   "confirm_expensive_model"
+  ],
+  "commands.catalog": [
+   "profile"
+  ],
+  "slash.exec": [
+   "session_id",
+   "command",
+   "profile"
+  ],
+  "command.dispatch": [
+   "name",
+   "arg",
+   "session_id",
+   "profile"
+  ],
+  "subagent.list": [
+   "session_id",
+   "profile"
+  ]
+ },
+ "events": [
+  "gateway.ready",
+  "message.start",
+  "message.delta",
+  "message.interim",
+  "message.complete",
+  "reasoning.delta",
+  "thinking.delta",
+  "status.update",
+  "tool.start",
+  "tool.complete",
+  "session.title",
+  "session.usage",
+  "request.cancel",
+  "error",
+  "subagent.start",
+  "subagent.tool",
+  "subagent.thinking",
+  "subagent.progress",
+  "subagent.complete"
+ ],
+ "server_requests": [
+  "approval",
+  "clarify"
+ ],
+ "bridge": {
+  "_comment": "Extensions used only with a host whose gateway.ready lists the feature in bridge.features (docs/gateway-protocol.md, section 11): methods never sent to Hermes, events read only from a bridge. scripts/check-contract.sh checks them against a contract that lists x-bridge-features, and skips them for Hermes.",
+  "features": [
+   "folders",
+   "model_levels",
+   "push_host",
+   "desk_sessions",
+   "model_names",
+   "compaction",
+   "rename",
+   "activity",
+   "model_default_levels",
+   "question_details",
+   "modes",
+   "push_relay",
+   "push_sealed",
+   "push_muting",
+   "folders_add",
+   "machine",
+   "thread_sync",
+   "agent_kinds",
+   "queue",
+   "files",
+   "agent_looks",
+   "sidebar_order",
+   "machine_order",
+   "approval_notes",
+   "thread_branch",
+   "subagents",
+   "turn_messages",
+   "subagents_clear",
+   "subagent_names",
+   "subagent_calls",
+   "status_headline",
+   "poll_now",
+   "resume_replay",
+   "agent_threads",
+   "recent_threads",
+   "turn_usage",
+   "session_leave",
+   "worktrees",
+   "turn_diff",
+   "file_read",
+   "session_resync",
+   "message_reconciliation",
+   "push_watcher",
+   "message_ids",
+   "senders",
+   "async_questions",
+   "background_commands",
+   "lean_deltas",
+   "thread_search",
+   "file_search",
+   "file_mentions",
+   "folder_search",
+   "answer_owner",
+   "net_rename",
+   "net_rename_devices",
+   "bot_chat",
+   "history_pages",
+   "update_notice",
+   "mcp_auth",
+   "model_levels_none",
+   "git_status",
+   "usage_read",
+   "open_on_host"
+  ],
+  "events": {
+   "mcp.auth": {
+    "feature": "mcp_auth"
+   },
+   "tool.progress": {},
+   "message.usage": {
+    "feature": "turn_usage"
+   },
+   "session.compacted": {
+    "feature": "compaction"
+   },
+   "session.mode": {
+    "feature": "modes"
+   },
+   "queue.changed": {
+    "feature": "queue"
+   },
+   "message.steered": {
+    "feature": "turn_messages"
+   },
+   "message.taken": {
+    "feature": "message_reconciliation"
+   },
+   "subagent.cleared": {
+    "feature": "subagents_clear"
+   },
+   "poll.now": {
+    "feature": "poll_now"
+   },
+   "session.invalidated": {
+    "feature": "session_resync"
+   },
+   "status.headline": {
+    "feature": "status_headline"
+   }
+  },
+  "methods": {
+   "mcp.auth": {
+    "feature": "mcp_auth",
+    "params": [
+     "session_id",
+     "profile",
+     "action",
+     "server_name",
+     "auth_id",
+     "code"
+    ]
+   },
+   "commands.catalog": {
+    "params": [
+     "profile",
+     "session_id"
+    ]
+   },
+   "folders.list": {
+    "feature": "folders",
+    "params": [
+     "profile"
+    ]
+   },
+   "folders.add": {
+    "feature": "folders_add",
+    "params": [
+     "path"
+    ]
+   },
+   "folders.remove": {
+    "feature": "folders_add",
+    "params": [
+     "path"
+    ]
+   },
+   "desk.list": {
+    "feature": "desk_sessions",
+    "params": [
+     "profile",
+     "limit"
+    ]
+   },
+   "session.adopt": {
+    "feature": "desk_sessions",
+    "params": [
+     "profile",
+     "session_id",
+     "mode"
+    ]
+   },
+   "file.read": {
+    "feature": "file_read",
+    "params": [
+     "session_id",
+     "path",
+     "purpose",
+     "unless"
+    ]
+   },
+   "git.status": {
+    "feature": "git_status",
+    "params": [
+     "session_id"
+    ]
+   },
+   "git.diff": {
+    "feature": "git_status",
+    "params": [
+     "session_id"
+    ]
+   },
+   "usage.read": {
+    "feature": "usage_read",
+    "params": [
+     "session_id"
+    ]
+   },
+   "host.apps": {
+    "feature": "open_on_host",
+    "params": []
+   },
+   "folder.open": {
+    "feature": "open_on_host",
+    "params": [
+     "session_id",
+     "app"
+    ]
+   },
+   "folders.search": {
+    "feature": "folder_search",
+    "params": [
+     "query",
+     "limit",
+     "profile"
+    ]
+   },
+   "files.search": {
+    "feature": "file_search",
+    "params": [
+     "session_id",
+     "folder",
+     "query",
+     "limit",
+     "profile"
+    ]
+   },
+   "session.leave": {
+    "feature": "session_leave",
+    "params": [
+     "session_id",
+     "profile"
+    ]
+   },
+   "session.rename": {
+    "feature": "rename",
+    "params": [
+     "session_id",
+     "title",
+     "profile"
+    ]
+   },
+   "sessions.activity": {
+    "feature": "activity",
+    "params": []
+   },
+   "session.set_mode": {
+    "feature": "modes",
+    "params": [
+     "session_id",
+     "mode",
+     "profile"
+    ]
+   },
+   "threads.changes": {
+    "feature": "thread_sync",
+    "params": [
+     "list",
+     "since"
+    ]
+   },
+   "thread.mark": {
+    "feature": "thread_sync",
+    "params": [
+     "thread",
+     "pinned",
+     "archived",
+     "unseen",
+     "revision",
+     "list",
+     "turn",
+     "preview",
+     "shared",
+     "recent"
+    ]
+   },
+   "thread.delete": {
+    "feature": "thread_sync",
+    "params": [
+     "thread"
+    ]
+   },
+   "prompt.submit": {
+    "feature": "queue",
+    "params": [
+     "session_id",
+     "text",
+     "profile",
+     "when_busy",
+     "message_id",
+     "mentions"
+    ]
+   },
+   "prompt.queue.remove": {
+    "feature": "queue",
+    "params": [
+     "session_id",
+     "queue_id",
+     "profile"
+    ]
+   },
+   "prompt.queue.steer": {
+    "feature": "queue",
+    "params": [
+     "session_id",
+     "queue_id",
+     "profile"
+    ]
+   },
+   "prompt.queue.place": {
+    "feature": "queue",
+    "params": [
+     "session_id",
+     "queue_id",
+     "placement",
+     "profile"
+    ]
+   },
+   "subagent.stop": {
+    "feature": "subagents",
+    "params": [
+     "session_id",
+     "subagent_id",
+     "profile"
+    ]
+   },
+   "session.interrupt": {
+    "feature": "subagents",
+    "params": [
+     "session_id",
+     "profile",
+     "keep_background"
+    ]
+   },
+   "client.capabilities": {
+    "feature": "subagents",
+    "params": [
+     "server_requests",
+     "subagent_requests",
+     "poll_now",
+     "session_resync",
+     "message_reconciliation",
+     "async_questions",
+     "lean_deltas",
+     "device"
+    ]
+   },
+   "file.attach_bytes": {
+    "feature": "files",
+    "params": [
+     "session_id",
+     "content_base64",
+     "filename",
+     "id",
+     "profile"
+    ]
+   },
+   "looks.list": {
+    "feature": "agent_looks",
+    "params": []
+   },
+   "look.set": {
+    "feature": "agent_looks",
+    "params": [
+     "profile",
+     "shape",
+     "face",
+     "tint",
+     "shows_logo",
+     "origin",
+     "unless"
+    ]
+   },
+   "order.list": {
+    "feature": "sidebar_order",
+    "params": []
+   },
+   "order.set": {
+    "feature": "sidebar_order",
+    "params": [
+     "agents",
+     "folders",
+     "machines",
+     "machines_at"
+    ]
+   },
+   "net.list": {
+    "feature": "net",
+    "params": []
+   },
+   "net.invite": {
+    "feature": "net",
+    "params": []
+   },
+   "net.remove": {
+    "feature": "net",
+    "params": [
+     "member",
+     "net"
+    ]
+   },
+   "net.join_with": {
+    "feature": "net",
+    "params": [
+     "link"
+    ]
+   },
+   "net.rename": {
+    "feature": "net_rename",
+    "params": [
+     "member",
+     "name",
+     "after",
+     "net"
+    ]
+   },
+   "session.resume": {
+    "feature": "resume_replay",
+    "params": [
+     "session_id",
+     "profile",
+     "inline_images",
+     "since",
+     "replay_epoch",
+     "replay_base",
+     "limit"
+    ]
+   },
+   "session.history": {
+    "feature": "history_pages",
+    "params": [
+     "session_id",
+     "profile",
+     "before",
+     "limit",
+     "replay_epoch",
+     "replay_base"
+    ]
+   },
+   "thread.search": {
+    "feature": "thread_search",
+    "params": [
+     "query",
+     "limit",
+     "hits",
+     "cursor",
+     "agent",
+     "folder"
+    ]
+   }
+  }
+ }
+}

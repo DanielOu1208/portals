@@ -1,0 +1,14 @@
+[
+ {
+  "type": "text",
+  "text": "Red",
+  "pieces": 1
+ },
+ {
+  "type": "turn.end",
+  "status": "complete",
+  "spent": {
+   "tokens": 1176
+  }
+ }
+]

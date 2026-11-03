@@ -1,0 +1,5 @@
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"replay_epoch":"f91043d38f35aa33803aaaa64c5ca85e","heartbeat":true,"bridge":{"protocol":1,"features":[]}}}}}
+{"dir":"out","frame":{"id":"r1","jsonrpc":"2.0","method":"client.capabilities","params":{"server_requests":true}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"r1","result":{"server_requests":["approval","clarify"]}}}
+{"dir":"out","frame":{"id":"r2","jsonrpc":"2.0","method":"profiles.list","params":{}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"r2","result":{"profiles":[{"name":"codex","display_name":"Codex","description":"Codex on this Mac, with your own settings and sign-in.","model":"gpt-6.1-sol","provider":"openai","is_default":true}]}}}

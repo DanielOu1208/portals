@@ -1,0 +1,130 @@
+[
+ {
+  "type": "tool.start",
+  "id": "call_4HvkTb0S1NfE3Dh2lqJv5KM6|fc_0db87a87e4460e13016accb9cee22887d0bf657a4a67439060",
+  "name": "read_file",
+  "args": {
+   "path": "hello.txt"
+  }
+ },
+ {
+  "type": "tool.end",
+  "id": "call_4HvkTb0S1NfE3Dh2lqJv5KM6|fc_0db87a87e4460e13016accb9cee22887d0bf657a4a67439060",
+  "name": "read_file",
+  "args": {
+   "path": "hello.txt"
+  },
+  "result": {
+   "content": "hi\n"
+  },
+  "durationSeconds": 0.003
+ },
+ {
+  "type": "tool.start",
+  "id": "call_Np1v99UAdgNS9eGPfJnsrYf3|fc_0db87a87e4460e13016accb9d0d21c87d0a5b3383e30bbe0d8",
+  "name": "terminal",
+  "args": {
+   "command": "wc -c hello.txt"
+  }
+ },
+ {
+  "type": "tool.end",
+  "id": "call_Np1v99UAdgNS9eGPfJnsrYf3|fc_0db87a87e4460e13016accb9d0d21c87d0a5b3383e30bbe0d8",
+  "name": "terminal",
+  "args": {
+   "command": "wc -c hello.txt"
+  },
+  "result": {
+   "output": "       3 hello.txt\n",
+   "exit_code": 0
+  },
+  "durationSeconds": 0.016
+ },
+ {
+  "type": "tool.start",
+  "id": "call_ufilMcOgnmUFcMX3Tbwn59Pw|fc_0db87a87e4460e13016accb9d2c5b887d0ab84949bedeaae90",
+  "name": "patch",
+  "args": {
+   "path": "hello.txt",
+   "old_string": "hi",
+   "new_string": "hello"
+  }
+ },
+ {
+  "type": "tool.end",
+  "id": "call_ufilMcOgnmUFcMX3Tbwn59Pw|fc_0db87a87e4460e13016accb9d2c5b887d0ab84949bedeaae90",
+  "name": "patch",
+  "args": {
+   "path": "hello.txt",
+   "old_string": "hi",
+   "new_string": "hello"
+  },
+  "result": {
+   "success": true,
+   "diff": "--- a/hello.txt\n+++ b/hello.txt\n@@ -1,1 +1,1 @@\n-hi\n+hello\n"
+  },
+  "durationSeconds": 0.006
+ },
+ {
+  "type": "tool.start",
+  "id": "call_WHytzVLF7eouIVBLaXlR3JXC|fc_0db87a87e4460e13016accb9d4be8c87d085a8e08f2e5a88f3",
+  "name": "terminal",
+  "args": {
+   "command": "ls no-such-file.txt"
+  }
+ },
+ {
+  "type": "tool.end",
+  "id": "call_WHytzVLF7eouIVBLaXlR3JXC|fc_0db87a87e4460e13016accb9d4be8c87d085a8e08f2e5a88f3",
+  "name": "terminal",
+  "args": {
+   "command": "ls no-such-file.txt"
+  },
+  "result": {
+   "output": "ls: no-such-file.txt: No such file or directory\n",
+   "exit_code": 1
+  },
+  "durationSeconds": 0.011
+ },
+ {
+  "type": "tool.start",
+  "id": "call_b8Zs1XEKJU1p8xlzgXKiUPeY|fc_0db87a87e4460e13016accb9d7954c87d09e0408e45ca13713",
+  "name": "write_file",
+  "args": {
+   "path": "done.txt",
+   "content": "done"
+  }
+ },
+ {
+  "type": "tool.end",
+  "id": "call_b8Zs1XEKJU1p8xlzgXKiUPeY|fc_0db87a87e4460e13016accb9d7954c87d09e0408e45ca13713",
+  "name": "write_file",
+  "args": {
+   "path": "done.txt",
+   "content": "done"
+  },
+  "result": {
+   "diff": "--- a/done.txt\n+++ b/done.txt\n+done\n"
+  },
+  "durationSeconds": 0.003
+ },
+ {
+  "type": "text",
+  "text": "Completed the five steps in order; `ls no-such-file.txt` failed as expected.",
+  "pieces": 19
+ },
+ {
+  "type": "turn.end",
+  "status": "complete",
+  "spent": {
+   "tokens": 8388
+  }
+ },
+ {
+  "type": "usage",
+  "usage": {
+   "used": 1512,
+   "max": 272000
+  }
+ }
+]

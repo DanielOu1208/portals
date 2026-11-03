@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- The app on a Mac (Mac Catalyst): what Portals.entitlements gives the iPhone
+	     and iPad app, under the names macOS has for it, and the sandbox the Mac App Store
+	     and TestFlight require. -->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<!-- Reaching the hosts, and the Portals relay. -->
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<!-- The Mac's folder dialog, for choosing where a new thread works when the bridge
+	     is on this Mac. Only the folder's path is used: the bridge's agents work there,
+	     not the app. It has to be read-write all the same: with read-only, the dialog
+	     opens and the folder chosen in it never reaches the app (the log says "Failed to
+	     create an FPSandboxingURLWrapper", and nothing else happens). -->
+	<key>com.apple.security.files.user-selected.read-write</key>
+	<true/>
+	<!-- Set in Portals.xcconfig, as on the iPhone. -->
+	<key>com.apple.developer.aps-environment</key>
+	<string>$(PORTALS_APS_ENVIRONMENT)</string>
+	<!-- Set in Shared.xcconfig: where the app leaves the agents' avatars for the
+	     notification extension, and the Keychain group of the keys hosts seal
+	     notifications to, which the extension opens them with. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>$(PORTALS_APP_GROUP)</string>
+	</array>
+	<!-- Notifications from an agent show as messages from it, with its avatar. -->
+	<key>com.apple.developer.usernotifications.communication</key>
+	<true/>
+</dict>
+</plist>

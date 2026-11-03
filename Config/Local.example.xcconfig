@@ -1,0 +1,4 @@
+// Copy to Local.xcconfig (gitignored) and fill in.
+
+// Your Apple developer team id, needed to run on a real device.
+DEVELOPMENT_TEAM = YOUR_TEAM_ID

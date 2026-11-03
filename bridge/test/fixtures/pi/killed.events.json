@@ -1,0 +1,13 @@
+[
+ {
+  "type": "text",
+  "text": "1",
+  "pieces": 1
+ },
+ {
+  "type": "turn.end",
+  "status": "error",
+  "error": "Pi stopped unexpectedly.",
+  "retryable": true
+ }
+]

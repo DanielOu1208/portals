@@ -1,0 +1,465 @@
+{
+ "categories": [
+  {
+   "name": "Session",
+   "pairs": [
+    [
+     "/new",
+     "Start a new session (fresh session ID + history) (usage: /new [name])"
+    ],
+    [
+     "/clear",
+     "Clear screen and start a new session"
+    ],
+    [
+     "/retry",
+     "Retry the last message (resend to agent)"
+    ],
+    [
+     "/undo",
+     "Back up N user turns and re-prompt (default 1) (usage: /undo [N])"
+    ],
+    [
+     "/title",
+     "Set a title for the current session (usage: /title [name])"
+    ],
+    [
+     "/compress",
+     "Compress conversation context (add 'here [N]' to keep recent N turns; --preview shows what would happen) (usage: /compress [here [N] | focus topic | --preview|--dry-run])"
+    ],
+    [
+     "/stop",
+     "Kill all running background processes"
+    ],
+    [
+     "/btw",
+     "Ask a side question about the current conversation without interrupting it (usage: /btw <question>)"
+    ],
+    [
+     "/queue",
+     "Queue a prompt for the next turn, or list/edit/rm/move/clear queued prompts (usage: /queue [<prompt>|list|edit N <prompt>|rm N|move A B|clear])"
+    ],
+    [
+     "/plan",
+     "Write a markdown implementation plan to .hermes/plans/ without executing anything (usage: /plan [task])"
+    ],
+    [
+     "/status",
+     "Show session, model, token, and context info"
+    ]
+   ]
+  },
+  {
+   "name": "Configuration",
+   "pairs": [
+    [
+     "/config",
+     "Show current configuration"
+    ],
+    [
+     "/model",
+     "Switch model (session-scoped; --global to persist) (usage: /model [model] [--provider name] [--reasoning level] [--global|--session] [--refresh])"
+    ],
+    [
+     "/yolo",
+     "Toggle YOLO mode (skip all dangerous command approvals)"
+    ],
+    [
+     "/approvals",
+     "Show or set the persistent dangerous-command approval mode (usage: /approvals [manual|smart|off])"
+    ],
+    [
+     "/reasoning",
+     "Manage reasoning effort and display (usage: /reasoning [level|show|hide|full|clamp] [--global])"
+    ],
+    [
+     "/voice",
+     "Toggle voice mode (usage: /voice [on|off|tts|status])"
+    ]
+   ]
+  },
+  {
+   "name": "Info",
+   "pairs": [
+    [
+     "/help",
+     "Show available commands (/help skills lists skill commands, /help <text> filters) (usage: /help [skills|<filter>])"
+    ],
+    [
+     "/usage",
+     "Show token usage and rate limits; `reset` redeems a banked Codex limit reset (usage: /usage [reset [--force]])"
+    ],
+    [
+     "/login",
+     "Sign in with a Nous account (keeps your connectors)"
+    ],
+    [
+     "/version",
+     "Show Hermes Agent version"
+    ]
+   ]
+  },
+  {
+   "name": "Tools & Skills",
+   "pairs": [
+    [
+     "/tools",
+     "Manage tools: /tools [list|disable|enable] [name...] (usage: /tools [list|disable|enable] [name...])"
+    ],
+    [
+     "/skills",
+     "Search, install, inspect, or manage skills"
+    ],
+    [
+     "/kanban",
+     "Multi-profile collaboration board (tasks, links, comments) (usage: /kanban [subcommand])"
+    ]
+   ]
+  },
+  {
+   "name": "Exit",
+   "pairs": [
+    [
+     "/quit",
+     "Exit the CLI (use --delete to also remove session history) (usage: /quit [--delete])"
+    ]
+   ]
+  },
+  {
+   "name": "TUI",
+   "pairs": [
+    [
+     "/density",
+     "Toggle compact display mode"
+    ],
+    [
+     "/mouse",
+     "Set mouse tracking preset [on|off|toggle|wheel|buttons|all]"
+    ]
+   ]
+  }
+ ],
+ "pairs": [
+  [
+   "/new",
+   "Start a new session (fresh session ID + history) (usage: /new [name])"
+  ],
+  [
+   "/clear",
+   "Clear screen and start a new session"
+  ],
+  [
+   "/retry",
+   "Retry the last message (resend to agent)"
+  ],
+  [
+   "/undo",
+   "Back up N user turns and re-prompt (default 1) (usage: /undo [N])"
+  ],
+  [
+   "/title",
+   "Set a title for the current session (usage: /title [name])"
+  ],
+  [
+   "/compress",
+   "Compress conversation context (add 'here [N]' to keep recent N turns; --preview shows what would happen) (usage: /compress [here [N] | focus topic | --preview|--dry-run])"
+  ],
+  [
+   "/stop",
+   "Kill all running background processes"
+  ],
+  [
+   "/btw",
+   "Ask a side question about the current conversation without interrupting it (usage: /btw <question>)"
+  ],
+  [
+   "/queue",
+   "Queue a prompt for the next turn, or list/edit/rm/move/clear queued prompts (usage: /queue [<prompt>|list|edit N <prompt>|rm N|move A B|clear])"
+  ],
+  [
+   "/plan",
+   "Write a markdown implementation plan to .hermes/plans/ without executing anything (usage: /plan [task])"
+  ],
+  [
+   "/status",
+   "Show session, model, token, and context info"
+  ],
+  [
+   "/config",
+   "Show current configuration"
+  ],
+  [
+   "/model",
+   "Switch model (session-scoped; --global to persist) (usage: /model [model] [--provider name] [--reasoning level] [--global|--session] [--refresh])"
+  ],
+  [
+   "/yolo",
+   "Toggle YOLO mode (skip all dangerous command approvals)"
+  ],
+  [
+   "/approvals",
+   "Show or set the persistent dangerous-command approval mode (usage: /approvals [manual|smart|off])"
+  ],
+  [
+   "/reasoning",
+   "Manage reasoning effort and display (usage: /reasoning [level|show|hide|full|clamp] [--global])"
+  ],
+  [
+   "/voice",
+   "Toggle voice mode (usage: /voice [on|off|tts|status])"
+  ],
+  [
+   "/tools",
+   "Manage tools: /tools [list|disable|enable] [name...] (usage: /tools [list|disable|enable] [name...])"
+  ],
+  [
+   "/skills",
+   "Search, install, inspect, or manage skills"
+  ],
+  [
+   "/kanban",
+   "Multi-profile collaboration board (tasks, links, comments) (usage: /kanban [subcommand])"
+  ],
+  [
+   "/help",
+   "Show available commands (/help skills lists skill commands, /help <text> filters) (usage: /help [skills|<filter>])"
+  ],
+  [
+   "/usage",
+   "Show token usage and rate limits; `reset` redeems a banked Codex limit reset (usage: /usage [reset [--force]])"
+  ],
+  [
+   "/login",
+   "Sign in with a Nous account (keeps your connectors)"
+  ],
+  [
+   "/version",
+   "Show Hermes Agent version"
+  ],
+  [
+   "/quit",
+   "Exit the CLI (use --delete to also remove session history) (usage: /quit [--delete])"
+  ],
+  [
+   "/density",
+   "Toggle compact display mode"
+  ],
+  [
+   "/mouse",
+   "Set mouse tracking preset [on|off|toggle|wheel|buttons|all]"
+  ],
+  [
+   "/apple-notes",
+   "Manage Apple Notes via memo CLI: create, search, edit."
+  ],
+  [
+   "/arxiv",
+   "Search arXiv papers by keyword, author, category, or ID."
+  ],
+  [
+   "/codebase-inspection",
+   "Inspect codebases w/ pygount: LOC, languages, ratios."
+  ]
+ ],
+ "canon": {
+  "/approvals": "/approvals",
+  "/btw": "/btw",
+  "/clear": "/clear",
+  "/compact": "/compress",
+  "/compress": "/compress",
+  "/config": "/config",
+  "/density": "/density",
+  "/exit": "/quit",
+  "/help": "/help",
+  "/kanban": "/kanban",
+  "/login": "/login",
+  "/model": "/model",
+  "/mouse": "/mouse",
+  "/new": "/new",
+  "/plan": "/plan",
+  "/q": "/queue",
+  "/queue": "/queue",
+  "/quit": "/quit",
+  "/reasoning": "/reasoning",
+  "/reset": "/new",
+  "/retry": "/retry",
+  "/skills": "/skills",
+  "/status": "/status",
+  "/stop": "/stop",
+  "/title": "/title",
+  "/tools": "/tools",
+  "/undo": "/undo",
+  "/usage": "/usage",
+  "/version": "/version",
+  "/voice": "/voice",
+  "/yolo": "/yolo"
+ },
+ "commands": {
+  "/approvals": {
+   "argument_mode": "options",
+   "desktop": null
+  },
+  "/approve": {
+   "argument_mode": "text",
+   "desktop": "messaging"
+  },
+  "/btw": {
+   "argument_mode": "text",
+   "desktop": null
+  },
+  "/clear": {
+   "argument_mode": null,
+   "desktop": "terminal"
+  },
+  "/compact": {
+   "argument_mode": "text",
+   "desktop": null
+  },
+  "/compress": {
+   "argument_mode": "text",
+   "desktop": null
+  },
+  "/config": {
+   "argument_mode": null,
+   "desktop": "terminal"
+  },
+  "/deny": {
+   "argument_mode": "text",
+   "desktop": "messaging"
+  },
+  "/exit": {
+   "argument_mode": "text",
+   "desktop": "terminal"
+  },
+  "/help": {
+   "argument_mode": "text",
+   "desktop": null
+  },
+  "/kanban": {
+   "argument_mode": "options",
+   "desktop": "advanced"
+  },
+  "/login": {
+   "argument_mode": null,
+   "desktop": "settings"
+  },
+  "/model": {
+   "argument_mode": "text",
+   "desktop": "hidden"
+  },
+  "/new": {
+   "argument_mode": "text",
+   "desktop": null
+  },
+  "/plan": {
+   "argument_mode": "text",
+   "desktop": null
+  },
+  "/q": {
+   "argument_mode": "mixed",
+   "desktop": null
+  },
+  "/queue": {
+   "argument_mode": "mixed",
+   "desktop": null
+  },
+  "/quit": {
+   "argument_mode": "text",
+   "desktop": "terminal"
+  },
+  "/reasoning": {
+   "argument_mode": "options",
+   "desktop": null
+  },
+  "/reset": {
+   "argument_mode": "text",
+   "desktop": null
+  },
+  "/retry": {
+   "argument_mode": null,
+   "desktop": null
+  },
+  "/skills": {
+   "argument_mode": "options",
+   "desktop": null,
+   "desktop_subcommands": [
+    "pending",
+    "approve",
+    "reject",
+    "diff",
+    "approval"
+   ]
+  },
+  "/status": {
+   "argument_mode": null,
+   "desktop": null
+  },
+  "/stop": {
+   "argument_mode": null,
+   "desktop": null
+  },
+  "/title": {
+   "argument_mode": "text",
+   "desktop": null
+  },
+  "/tools": {
+   "argument_mode": "options",
+   "desktop": null
+  },
+  "/undo": {
+   "argument_mode": "text",
+   "desktop": null
+  },
+  "/usage": {
+   "argument_mode": "text",
+   "desktop": null
+  },
+  "/version": {
+   "argument_mode": null,
+   "desktop": null
+  },
+  "/voice": {
+   "argument_mode": "options",
+   "desktop": "composer-voice"
+  },
+  "/yolo": {
+   "argument_mode": null,
+   "desktop": null
+  }
+ },
+ "skills": {
+  "/arxiv": {
+   "origin": "bundled",
+   "usage": 3
+  },
+  "/apple-notes": {
+   "origin": "bundled",
+   "usage": 1
+  },
+  "/codebase-inspection": {
+   "origin": "bundled",
+   "usage": 0
+  }
+ },
+ "sub": {
+  "/approvals": [
+   "manual",
+   "smart",
+   "off"
+  ],
+  "/skills": [
+   "search",
+   "browse",
+   "inspect",
+   "install",
+   "audit",
+   "pending",
+   "approve",
+   "reject",
+   "diff",
+   "approval"
+  ]
+ },
+ "skill_count": 3,
+ "warning": ""
+}

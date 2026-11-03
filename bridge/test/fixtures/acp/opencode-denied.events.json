@@ -1,0 +1,42 @@
+[
+ {
+  "type": "reasoning",
+  "text": "Let me just run it."
+ },
+ {
+  "type": "tool.start",
+  "id": "call_00_86mwzywopctxxaiu17htdawr",
+  "name": "terminal",
+  "args": {
+   "command": "echo spike-deny-test"
+  }
+ },
+ {
+  "type": "approval",
+  "command": "echo spike-deny-test"
+ },
+ {
+  "type": "tool.end",
+  "id": "call_00_86mwzywopctxxaiu17htdawr",
+  "name": "terminal",
+  "args": {
+   "command": "echo spike-deny-test"
+  },
+  "result": {
+   "status": "blocked",
+   "error": "The user rejected permission to use this specific tool call.",
+   "user_summary": "You denied this command — it did not run."
+  }
+ },
+ {
+  "type": "usage",
+  "usage": {
+   "used": 53304,
+   "max": 200000
+  }
+ },
+ {
+  "type": "turn.end",
+  "status": "complete"
+ }
+]

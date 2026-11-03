@@ -1,0 +1,26 @@
+.DS_Store
+
+# Swift / Xcode build output
+.build/
+.swiftpm/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+
+# Local signing and secrets
+Config/Local.xcconfig
+Config/Secrets.xcconfig
+*.p8
+
+# Python
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+
+# Local files that must never be committed
+.claude/
+.env
+*.mobileprovision
+*.p12

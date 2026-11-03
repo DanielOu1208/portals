@@ -1,0 +1,55 @@
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"replay_epoch":"f91043d38f35aa33803aaaa64c5ca85e","heartbeat":true,"bridge":{"protocol":1,"features":[]}}}}}
+{"dir":"out","frame":{"id":"r1","jsonrpc":"2.0","method":"client.capabilities","params":{"server_requests":true}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"r1","result":{"server_requests":["approval","clarify"]}}}
+{"dir":"out","frame":{"id":"r2","jsonrpc":"2.0","method":"session.create","params":{"cwd":"/tmp/aeriportal-cwd","profile":"codex","source":"tui","title":"aeriportal-probe"}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"r2","result":{"session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","stored_session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","info":{"model":"gpt-6.1-sol","provider":"openai","reasoning_effort":"high","cwd":"/tmp/aeriportal-cwd","running":false,"profile_name":"codex","title":"aeriportal-probe"}}}}
+{"dir":"out","frame":{"id":"r3","jsonrpc":"2.0","method":"slash.exec","params":{"command":"mode ask","profile":"codex","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8"}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"r3","result":{"type":"exec","output":"This thread now asks before editing files or running commands."}}}
+{"dir":"out","frame":{"id":"r4","jsonrpc":"2.0","method":"prompt.submit","params":{"profile":"codex","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","text":"Do not run any commands. Create note.txt containing the single word note, with a patch. If that is not allowed, do not retry it: create other.txt containing the word other instead, with a patch. Finish with one short sentence saying what happened."}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"r4","result":{"status":"streaming"}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.start","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":1}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":2,"payload":{"text":"I"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":3,"payload":{"text":"’ll"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":4,"payload":{"text":" create"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":5,"payload":{"text":" `"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":6,"payload":{"text":"note"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":7,"payload":{"text":".txt"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":8,"payload":{"text":"`"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":9,"payload":{"text":" with"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":10,"payload":{"text":" a"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":11,"payload":{"text":" patch"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":12,"payload":{"text":".\n"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.interim","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":13,"payload":{"text":"I’ll create `note.txt` with a patch.\n","already_streamed":true}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"tool.start","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":14,"payload":{"tool_id":"exec-77f6c37a-7ca3-4d82-be81-ed93d5b8a989","name":"write_file","args":{"path":"/tmp/aeriportal-cwd/note.txt","content":"note\n"}}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"srq-dddc46a47d5f","method":"approval","params":{"session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","command":"Edit /tmp/aeriportal-cwd/note.txt\n--- /dev/null\n+++ b/note.txt\n@@ -0,0 +1 @@\n+note\n","choices":["once","session","deny"],"description":"Codex wants to change a file"}}}
+{"dir":"out","frame":{"id":"srq-dddc46a47d5f","jsonrpc":"2.0","result":{"choice":"deny"}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"tool.complete","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":16,"payload":{"tool_id":"exec-77f6c37a-7ca3-4d82-be81-ed93d5b8a989","name":"write_file","args":{"path":"/tmp/aeriportal-cwd/note.txt","content":"note\n"},"result":{"status":"blocked","error":"Declined.","user_summary":"You denied this change — it was not made."},"duration_s":0.012}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"session.usage","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":17,"payload":{"usage":{"context_used":24382,"context_max":258400}}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"tool.start","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":18,"payload":{"tool_id":"exec-8dd27da9-2125-4724-9a3d-6286cb205d56","name":"write_file","args":{"path":"/tmp/aeriportal-cwd/other.txt","content":"other\n"}}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"srq-e1fe5483a55d","method":"approval","params":{"session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","command":"Edit /tmp/aeriportal-cwd/other.txt\n--- /dev/null\n+++ b/other.txt\n@@ -0,0 +1 @@\n+other\n","choices":["once","session","deny"],"description":"Codex wants to change a file"}}}
+{"dir":"out","frame":{"id":"srq-e1fe5483a55d","jsonrpc":"2.0","result":{"choice":"once"}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"tool.complete","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":20,"payload":{"tool_id":"exec-8dd27da9-2125-4724-9a3d-6286cb205d56","name":"write_file","args":{"path":"/tmp/aeriportal-cwd/other.txt","content":"other\n"},"result":{"diff":"--- /dev/null\n+++ b/other.txt\n@@ -0,0 +1 @@\n+other\n"},"duration_s":0.044}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"session.usage","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":21,"payload":{"usage":{"context_used":24461,"context_max":258400}}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":22,"payload":{"text":"The"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":23,"payload":{"text":" patch"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":24,"payload":{"text":" for"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":25,"payload":{"text":" `"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":26,"payload":{"text":"note"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":27,"payload":{"text":".txt"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":28,"payload":{"text":"`"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":29,"payload":{"text":" was"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":30,"payload":{"text":" rejected"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":31,"payload":{"text":","}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":32,"payload":{"text":" so"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":33,"payload":{"text":" I"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":34,"payload":{"text":" created"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":35,"payload":{"text":" `"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":36,"payload":{"text":"other"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":37,"payload":{"text":".txt"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":38,"payload":{"text":"`"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":39,"payload":{"text":" containing"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":40,"payload":{"text":" `"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":41,"payload":{"text":"other"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":42,"payload":{"text":"`."}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"session.usage","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":43,"payload":{"usage":{"context_used":24510,"context_max":258400}}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.complete","session_id":"01a11418-163b-7fe2-9f37-faa5aae722c8","seq":44,"payload":{"status":"complete","text":"The patch for `note.txt` was rejected, so I created `other.txt` containing `other`.","usage":{"context_used":24510,"context_max":258400}}}}}

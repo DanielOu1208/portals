@@ -1,0 +1,2055 @@
+{
+  "openrpc": "1.3.2",
+  "info": {
+    "title": "portals-bridge gateway",
+    "version": "0.3.2",
+    "description": "The part of the Hermes gateway protocol Portals uses, as portals-bridge serves it. Params not listed are ignored."
+  },
+  "methods": [
+    {
+      "name": "client.capabilities",
+      "summary": "Says whether the client answers approval and clarify requests, keeps subagent requests after the turn (subagent_requests), keeps questions asked without waiting after the turn (async_questions), receives poll hints (poll_now), rebuilds invalidated sessions without reconnecting (session_resync), reconciles exact failed requests (message_reconciliation), takes compact live text/reasoning frames (lean_deltas), and the id it gave itself, which request.cancel names as answered_by (device, feature answer_owner).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "server_requests": {
+                "type": "boolean"
+              },
+              "subagent_requests": {
+                "type": "boolean"
+              },
+              "async_questions": {
+                "type": "boolean"
+              },
+              "poll_now": {
+                "type": "boolean"
+              },
+              "session_resync": {
+                "type": "boolean"
+              },
+              "message_reconciliation": {
+                "type": "boolean"
+              },
+              "lean_deltas": {
+                "type": "boolean"
+              },
+              "device": {
+                "type": "string"
+              }
+            },
+            "required": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "gateway.ping",
+      "summary": "Heartbeat; answered at once.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "profiles.list",
+      "summary": "The agents this bridge runs.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "session.create",
+      "summary": "Starts a thread and follows it on this connection; for an agent that keeps one ongoing conversation (feature bot_chat), follows that one, ongoing: true, which may hold what was said before (a resume gives it).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "profile": {
+                "type": "string"
+              },
+              "source": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "cwd": {
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "reasoning_effort": {
+                "type": "string"
+              }
+            },
+            "required": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "session.resume",
+      "summary": "Follows a thread by its stored id and returns it as it is now; for a device that holds it up to event since of this run (replay_epoch), taken where its replay began at replay_base, with the events after it in place of the conversation where the log has them (replayed, feature resume_replay), and to one that names this run, where the replay of what it now holds begins (replay_base).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "session_id": {
+                "type": "string"
+              },
+              "profile": {
+                "type": "string"
+              },
+              "inline_images": {
+                "type": "boolean"
+              },
+              "since": {
+                "type": "integer"
+              },
+              "replay_epoch": {
+                "type": "string"
+              },
+              "replay_base": {
+                "type": "integer"
+              },
+              "limit": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "session_id"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "session.history",
+      "summary": "The limit turns (30 when not said) of a followed thread's conversation before message before, for a device that took it from there by session.resume with limit in this run (replay_epoch), where its replay began at replay_base (feature history_pages): messages, start (where they begin) and has_earlier; moved: true when that is not the conversation now, which the device then takes again.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "session_id": {
+                "type": "string"
+              },
+              "before": {
+                "type": "integer"
+              },
+              "limit": {
+                "type": "integer"
+              },
+              "replay_epoch": {
+                "type": "string"
+              },
+              "replay_base": {
+                "type": "integer"
+              },
+              "profile": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_id",
+              "before",
+              "replay_epoch",
+              "replay_base"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "session.leave",
+      "summary": "Stops following a thread on this connection (feature session_leave): none of its events or questions come here any more. The thread runs on; a resume follows it again. {} also for a thread not followed or not loaded.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "session_id": {
+                "type": "string"
+              },
+              "profile": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_id"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "session.events.since",
+      "summary": "The events after last_seen, and the open requests.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "session_id": {
+                "type": "string"
+              },
+              "last_seen": {
+                "type": "integer"
+              },
+              "profile": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_id",
+              "last_seen"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "prompt.submit",
+      "summary": "Sends the user's message; the turn arrives as events.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "session_id": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "profile": {
+                "type": "string"
+              },
+              "when_busy": {
+                "type": "string"
+              },
+              "message_id": {
+                "type": "string"
+              },
+              "mentions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "session_id",
+              "text"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "prompt.queue.remove",
+      "summary": "Takes a message waiting for the running turn to end off the thread's list: it is never sent (feature queue).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "session_id": {
+                "type": "string"
+              },
+              "queue_id": {
+                "type": "string"
+              },
+              "profile": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_id",
+              "queue_id"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "prompt.queue.steer",
+      "summary": "Hands a message waiting for the running turn to end to that turn now (feature queue).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "session_id": {
+                "type": "string"
+              },
+              "queue_id": {
+                "type": "string"
+              },
+              "profile": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_id",
+              "queue_id"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "prompt.queue.place",
+      "summary": "Moves a pending message between steering and the bridge's durable queue (feature queue).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "session_id": {
+                "type": "string"
+              },
+              "queue_id": {
+                "type": "string"
+              },
+              "placement": {
+                "type": "string"
+              },
+              "profile": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_id",
+              "queue_id",
+              "placement"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "file.attach_bytes",
+      "summary": "Saves a file of any kind in the thread's folder for this connection's next message, which names its path (feature files).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "session_id": {
+                "type": "string"
+              },
+              "content_base64": {
+                "type": "string"
+              },
+              "filename": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "profile": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_id",
+              "content_base64"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "file.read",
+      "summary": "A file anywhere on this Mac for a device to show (feature file_read): an image a reply names (purpose image), or a file to read (purpose text, the default); answered with its bytes (data, base64) or text, unchanged when it is the one the device holds (unless), or refused with why. The thread need not be followed.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "session_id": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "purpose": {
+                "type": "string"
+              },
+              "unless": {
+                "type": "string"
+              },
+              "profile": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_id",
+              "path"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "git.status",
+      "summary": "What is not committed in the repository the thread's folder is in (feature git_status): repo false outside one; with no git that runs without asking to install anything, git false and the branch alone; else the repository's top (root), branch, commit, the branch it follows (upstream) and how far ahead and behind, and each file that differs from HEAD, staged or not or untracked, with the lines it adds and removes (null for a binary one), at most 300 of total, and the lines in all.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "session_id": {
+                "type": "string"
+              },
+              "profile": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_id"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "git.diff",
+      "summary": "Everything not committed in the repository the thread's folder is in, against HEAD, as one diff (feature git_status): root, total (how many files differ in all, more than files holds when it was cut short), and files, each as git.status lists it (path, status, added, removed) with its unified diff, staged and not together, a file git does not track yet as all added; a file's diff that does not fit in 512 KB of diffs in all, or that git could not give, is left out (cut true, diff empty), and those after it that fit still come.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "session_id": {
+                "type": "string"
+              },
+              "profile": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_id"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "usage.read",
+      "summary": "How much of the user's plan the thread's agent has used, as the agent tells it (feature usage_read), what /usage says: available false for an agent that cannot say; else its plan, the plan as people name it (title: \"Claude Max\", \"Codex Pro 100\"), each window (name, percent used, resets_at in Unix seconds, reached, window_seconds, how long it is, where known, and heard_at, in milliseconds since 1970, for a window kept from an earlier answer because this one did not say it, or that a turn has reported since this answer), heard_at for limits not asked of it just now, as last heard, and a note. An agent is asked at most once a minute, whoever asks, and an answer it could not give stands for that minute as a good one does. Claude Code with none running is started to ask at most every ten minutes while it reads the limits (its last answer stands between, with heard_at, and what a turn has reported since is over it); after an answer without them, a minute later, then after 2, 4, 8 and 10.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "session_id": {
+                "type": "string"
+              },
+              "profile": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_id"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "host.apps",
+      "summary": "The apps on this computer a thread's folder opens in (feature open_on_host): the Finder, the editors and terminals installed, each an id, a name, its kind (files, editor, terminal) and its icon, a 64-pixel PNG in base64, where one could be drawn.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "folder.open",
+      "summary": "Opens the thread's folder on this computer's own screen, in one of host.apps (feature open_on_host); refused with why when it cannot be.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "session_id": {
+                "type": "string"
+              },
+              "app": {
+                "type": "string"
+              },
+              "profile": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_id",
+              "app"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "thread.search",
+      "summary": "Finds words in the user's messages and the agent's replies of every thread the bridge lists, every agent's, without loading them: the threads with hits, newest first, each with its newest hits as snippets with the matches marked, and a cursor for more (feature thread_search). Case and accents are ignored, a word matches where a word of the text begins, a quoted phrase is matched as it stands, and a message must hold every word; a hit from before a compaction the thread no longer shows is marked. With linked, the Macs this one is linked to are searched too (feature fleet).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "query": {
+                "type": "string"
+              },
+              "limit": {
+                "type": "integer"
+              },
+              "hits": {
+                "type": "integer"
+              },
+              "cursor": {
+                "type": "string"
+              },
+              "agent": {
+                "type": "string"
+              },
+              "folder": {
+                "type": "string"
+              },
+              "linked": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "query"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "files.search",
+      "summary": "The files and folders of a thread's folder (session_id; the thread need not be followed) or of a folder new threads may start in (folder: General, one on the list, or a git worktree of one), ranked against a fuzzy query as an editor's quick-open does, for an @-mention (feature file_search): git's files where the folder is in a repository (tracked, and untracked ones not ignored), else a walk that skips node_modules, .git, DerivedData and the like. Each hit: path (relative, with /), name, kind (file or folder), score and the ranges of path the query matched ([start, end) in UTF-16 code units). An empty query lists the shallowest entries. At most limit hits (50; 200 at most). A file hit has its size in bytes; mention_limit, for an agent that reads a mentioned file in itself (Claude Code: the thread's, or with folder the profile's), says how large a file it reads in.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "session_id": {
+                "type": "string"
+              },
+              "folder": {
+                "type": "string"
+              },
+              "query": {
+                "type": "string"
+              },
+              "limit": {
+                "type": "integer"
+              },
+              "profile": {
+                "type": "string"
+              }
+            },
+            "required": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "image.attach_bytes",
+      "summary": "Queues an image for the next message.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "session_id": {
+                "type": "string"
+              },
+              "content_base64": {
+                "type": "string"
+              },
+              "filename": {
+                "type": "string"
+              },
+              "profile": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_id",
+              "content_base64"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "session.interrupt",
+      "summary": "Stops the running turn, and the subagents and workflows running in the background unless keep_background (feature subagents: the app stops each by itself).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "session_id": {
+                "type": "string"
+              },
+              "profile": {
+                "type": "string"
+              },
+              "keep_background": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "session_id"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "session.set_mode",
+      "summary": "Changes how much a thread asks before acting, as /mode does (feature modes).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "session_id": {
+                "type": "string"
+              },
+              "mode": {
+                "type": "string"
+              },
+              "profile": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_id",
+              "mode"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "sessions.activity",
+      "summary": "The bridge's threads that are running or waiting on an answer now, followed here or not (feature activity), the id and revision of its list of threads (feature thread_sync), of its agents' looks (feature agent_looks) and of the sidebar's order (feature sidebar_order), and `latest`, a later portals-host that is out, only when there is one (feature update_notice).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "session.rename",
+      "summary": "Gives a thread a title of the user's, which the agent keeps as its own name for it (feature rename).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "session_id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "profile": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_id",
+              "title"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "model.options",
+      "summary": "The models an agent can use, its default, the thinking levels each model takes (model_levels) and what to call each (model_names).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "profile": {
+                "type": "string"
+              }
+            },
+            "required": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "folders.list",
+      "summary": "The folders a new thread can run in: General, then the ones the agents worked in lately (feature folders).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "profile": {
+                "type": "string"
+              },
+              "machine": {
+                "type": "string"
+              }
+            },
+            "required": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "folders.search",
+      "summary": "Every folder under the home folder a new thread could start in (once folders.add takes it), ranked against a fuzzy query, git repositories and the folders folders.list lists first; or, for a query with a / or starting with ~, a path completed a level at a time as in a terminal, each part fuzzy, a trailing / listing what the folder holds (feature folder_search). Each hit: path (real), name, relative (under home), the ranges of relative the query matched, score, and git, last_used, added, repo where they apply. With machine, the folders of a linked Mac (feature fleet). At most limit hits (30; 100 at most).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "query": {
+                "type": "string"
+              },
+              "limit": {
+                "type": "integer"
+              },
+              "machine": {
+                "type": "string"
+              },
+              "profile": {
+                "type": "string"
+              }
+            },
+            "required": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "folders.add",
+      "summary": "Puts a folder the user chose on this Mac on the list for new threads, and answers with it as listed (feature folders_add).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "folders.remove",
+      "summary": "Takes a folder the user added off the list again; one that was never added is left as it is (feature folders_add).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "desk.list",
+      "summary": "Sessions started in a terminal at the desk that are not threads here yet, and the agent's threads taken off the list (feature thread_sync), newest first (feature desk_sessions).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "profile": {
+                "type": "string"
+              },
+              "limit": {
+                "type": "integer"
+              }
+            },
+            "required": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "session.adopt",
+      "summary": "Makes a session from desk.list a thread and follows it on this connection: continued, forked or only read (feature desk_sessions); a thread taken off the list goes back on it.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "profile": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "mode": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_id",
+              "mode"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "config.get",
+      "summary": "An agent's default thinking level (key reasoning).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "profile": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "key"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "config.set",
+      "summary": "Changes one thread's model or thinking level.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "profile": {
+                "type": "string"
+              },
+              "confirm_expensive_model": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "key",
+              "value",
+              "session_id"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "session.set_spec_model",
+      "summary": "Kept for older apps, which offered a Spec model while session info had spec_model (no longer sent): changes nothing, since Droid's Spec mode plans with the thread's own model and thinking level. Answers that it follows them.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "session_id": {
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "reasoning_effort": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_id",
+              "model"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "commands.catalog",
+      "summary": "The slash commands offered: the bridge's own and the agent's. Optional session_id scopes project commands to a followed thread; without it, Droid lists personal commands only.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "profile": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              }
+            },
+            "required": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "slash.exec",
+      "summary": "Runs one of the bridge's own commands (/status, /mode); 4018 for anything else.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "session_id": {
+                "type": "string"
+              },
+              "command": {
+                "type": "string"
+              },
+              "profile": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_id",
+              "command"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "command.dispatch",
+      "summary": "What a command that slash.exec does not run stands for: an agent's own command is sent as a message.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "arg": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "profile": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "session_id"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "mcp.auth",
+      "summary": "Lists live MCP sign-in cards, starts sign-in, submits a code or cancels it. Authentication data is never conversation history.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "session_id": {
+                "type": "string"
+              },
+              "profile": {
+                "type": "string"
+              },
+              "action": {
+                "type": "string"
+              },
+              "server_name": {
+                "type": "string"
+              },
+              "auth_id": {
+                "type": "string"
+              },
+              "code": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_id",
+              "action"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "subagent.list",
+      "summary": "The subagents and workflows a thread's agent started, running or ended, oldest first (the bridge's keys with feature subagents).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "session_id": {
+                "type": "string"
+              },
+              "profile": {
+                "type": "string"
+              }
+            },
+            "required": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "subagent.stop",
+      "summary": "Stops one subagent or workflow, leaving the turn and the others running; status stopped, or not_running (feature subagents).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "session_id": {
+                "type": "string"
+              },
+              "subagent_id": {
+                "type": "string"
+              },
+              "profile": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_id",
+              "subagent_id"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "threads.list",
+      "summary": "Every thread the bridge knows and what it is doing now, newest first, with those of the Macs it is linked to unless local (feature fleet).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "state": {
+                "type": "string"
+              },
+              "profile": {
+                "type": "string"
+              },
+              "local": {
+                "type": "boolean"
+              }
+            },
+            "required": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "threads.delta",
+      "summary": "Opt-in local-only bridge-to-bridge fleet changes with absolute registry positions, removals, complete live-state overlay and order digest since an epoch/list/revision cursor; full after a restart or invalid cursor, with positions implied by array order (features fleet_delta, fleet_delta_positions).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "epoch": {
+                "type": "string"
+              },
+              "list": {
+                "type": "string"
+              },
+              "since": {
+                "type": "integer"
+              }
+            },
+            "required": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "threads.page",
+      "summary": "Opt-in local-only frozen fleet snapshot page, bounded to 32 KiB, with absolute positions and no historical active overlay; a fresh delta must seal the complete base (feature fleet_pages).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "snapshot": {
+                "type": "string"
+              },
+              "offset": {
+                "type": "integer"
+              },
+              "epoch": {
+                "type": "string"
+              },
+              "list": {
+                "type": "string"
+              },
+              "since": {
+                "type": "integer"
+              }
+            },
+            "required": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "machines.list",
+      "summary": "The Macs this bridge is linked to, and the agents of those that answer (feature fleet).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "thread.read",
+      "summary": "A thread's last turns, the reply in progress and its open questions (feature fleet).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "thread": {
+                "type": "string"
+              },
+              "last": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "thread"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "thread.send",
+      "summary": "Sends a message into a thread, marked as not the user's; with wait, answers once the thread is at rest or blocked (feature fleet).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "thread": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "from": {
+                "type": "string"
+              },
+              "sender": {
+                "type": "string"
+              },
+              "origin": {
+                "type": "string"
+              },
+              "sent_by": {
+                "type": "object"
+              },
+              "wait": {
+                "type": "boolean"
+              },
+              "timeout_ms": {
+                "type": "integer"
+              },
+              "notice": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "thread",
+              "text"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "thread.report",
+      "summary": "Tells the thread that started the thread from as that one's report of the work it is doing; no notice of that rest follows (feature fleet).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "from": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text",
+              "from"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "thread.wait",
+      "summary": "Answers once a thread is at rest or blocked, with its last reply, or when the time is up; from is the thread waiting, when one is (feature fleet).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "thread": {
+                "type": "string"
+              },
+              "timeout_ms": {
+                "type": "integer"
+              },
+              "from": {
+                "type": "string"
+              },
+              "sender": {
+                "type": "string"
+              },
+              "origin": {
+                "type": "string"
+              },
+              "sent_by": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "thread"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "thread.start",
+      "summary": "Starts a thread, with a first message when given one; with wait, answers once it is at rest or blocked (feature fleet).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "profile": {
+                "type": "string"
+              },
+              "cwd": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "reasoning_effort": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "from": {
+                "type": "string"
+              },
+              "sender": {
+                "type": "string"
+              },
+              "origin": {
+                "type": "string"
+              },
+              "sent_by": {
+                "type": "object"
+              },
+              "machine": {
+                "type": "string"
+              },
+              "wait": {
+                "type": "boolean"
+              },
+              "timeout_ms": {
+                "type": "integer"
+              }
+            },
+            "required": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "thread.stop",
+      "summary": "Stops a thread's running turn (feature fleet).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "thread": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "thread"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "thread.answer",
+      "summary": "Answers a question or an approval open in a thread, for the thread that started it: an approval once, for the session or no, never always, and an allow only from a thread that has the access it gives (feature agent_threads).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "thread": {
+                "type": "string"
+              },
+              "request": {
+                "type": "string"
+              },
+              "choice": {
+                "type": "string"
+              },
+              "note": {
+                "type": "string"
+              },
+              "answers": {
+                "type": "object"
+              },
+              "from": {
+                "type": "string"
+              },
+              "sender": {
+                "type": "string"
+              },
+              "origin": {
+                "type": "string"
+              },
+              "sent_by": {
+                "type": "object"
+              },
+              "caller_mode": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "thread",
+              "request"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "threads.changes",
+      "summary": "The bridge's own threads changed since a revision of its list, with their marks, or every one when the list or revision is not one it can answer from (feature thread_sync).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "list": {
+                "type": "string"
+              },
+              "since": {
+                "type": "integer"
+              }
+            },
+            "required": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "thread.mark",
+      "summary": "Pins, archives, marks one of the bridge's threads unseen or seen, puts it in Recent or takes it out, or shares a thread an agent started, for every device, or gives it a preview it has none of; answers with the thread as listed (feature thread_sync; shared, agent_threads; recent, recent_threads).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "thread": {
+                "type": "string"
+              },
+              "pinned": {
+                "type": "boolean"
+              },
+              "archived": {
+                "type": "boolean"
+              },
+              "unseen": {
+                "type": "boolean"
+              },
+              "shared": {
+                "type": "boolean"
+              },
+              "recent": {
+                "type": "boolean"
+              },
+              "revision": {
+                "type": "integer"
+              },
+              "list": {
+                "type": "string"
+              },
+              "turn": {
+                "type": "integer"
+              },
+              "preview": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "thread"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "thread.delete",
+      "summary": "Takes one of the bridge's threads off the list every device shows, keeping the agent's session to take up again from the desk; refused for a thread at work (feature thread_sync).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "thread": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "thread"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "looks.list",
+      "summary": "How the bridge's agents look on every device, those that were given a look, with the id and revision of that list (feature agent_looks).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "look.set",
+      "summary": "Gives one of the bridge's agents a look for every device, unless it has one the call says to leave; answers with the look the agent has now (feature agent_looks).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "profile": {
+                "type": "string"
+              },
+              "shape": {
+                "type": "integer"
+              },
+              "face": {
+                "type": "integer"
+              },
+              "tint": {
+                "type": "integer"
+              },
+              "shows_logo": {
+                "type": "boolean"
+              },
+              "origin": {
+                "type": "string"
+              },
+              "unless": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "profile",
+              "shape",
+              "face",
+              "tint"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "order.list",
+      "summary": "The order the user gave the bridge's agents and folders in the sidebar, and their Macs (feature machine_order), with its id and revision (feature sidebar_order).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "order.set",
+      "summary": "Puts the bridge's agents or its folders in an order for every device, each list whole, or the user's Macs with the moment they were arranged (feature machine_order), kept unless the bridge has an order arranged later; answers with the lists as they are now (feature sidebar_order).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "agents": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "folders": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "machines": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "machines_at": {
+                "type": "integer"
+              }
+            },
+            "required": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "net.list",
+      "summary": "The net this Mac is in: its id, this Mac's id, the caller's member id, the list's revision and every member, without their tokens' hashes (feature net).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "net.invite",
+      "summary": "A join code for another device or Mac, one use, ten minutes, and the portals://join link that carries it (feature net).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "net.remove",
+      "summary": "Takes a member out of the net, on every Mac, closing its connections; not this Mac itself (net.leave). With `net`, only while this Mac is in that net (feature net).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "member": {
+                "type": "string"
+              },
+              "net": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "member"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "net.rename",
+      "summary": "Names a member of the net for every Mac and device, the latest rename winning: member its id (this Mac when not given; a device's too with feature net_rename_devices), name at most 80 characters, after the stamp of the name the caller holds for it; with `net`, only while this Mac is in that net (feature net_rename).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "member": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "after": {
+                "type": "integer"
+              },
+              "net": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "net.join_with",
+      "summary": "This Mac joins the net of a portals://join link, bringing its devices; refused while it is in a net with other Macs (feature net).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "link": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "link"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "net.leave",
+      "summary": "This Mac leaves its net and is a net of its own (feature net).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "threads.held",
+      "summary": "Another Mac of the net says which of this bridge's threads its threads keep at work now, the whole set each time, holding a few minutes unless said again (feature held_elsewhere).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "threads": {
+                "type": "array"
+              }
+            },
+            "required": [
+              "threads"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "net.sync",
+      "summary": "Another Mac of the net gives its copy of the list and is answered with this one's, merged (feature net).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "net": {
+                "type": "string"
+              },
+              "members": {
+                "type": "array"
+              }
+            },
+            "required": [
+              "net",
+              "members"
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "x-notifications": [
+    {
+      "name": "gateway.ready",
+      "summary": "First frame on every connection: replay_epoch, heartbeat, bridge {protocol, features, machine, net {id, revision} (feature net), relay_problem: in_use, only while another bridge holds this Mac's relay id, latest: a later portals-host that is out, only while there is one (feature update_notice)}."
+    },
+    {
+      "name": "message.start",
+      "summary": "A turn started; queue_id: the waiting message that opened it (feature queue); text, sender, message_id: that message (feature turn_messages)."
+    },
+    {
+      "name": "message.steered",
+      "summary": "A message was handed to the running turn: text, sender, message_id (feature turn_messages)."
+    },
+    {
+      "name": "message.taken",
+      "summary": "Remove only the failed turn named by request_id, before its message.steered arrives; replay_base: new replay base; removed_start, removed_count: deleted stored-message range in the previous history, for paging cursors (feature message_reconciliation)."
+    },
+    {
+      "name": "message.delta",
+      "summary": "A piece of the reply."
+    },
+    {
+      "name": "message.usage",
+      "summary": "Live turn usage: turn_usage {tokens}, cumulative within the turn."
+    },
+    {
+      "name": "message.interim",
+      "summary": "A closed piece of text written beside tool calls."
+    },
+    {
+      "name": "message.complete",
+      "summary": "The turn ended: complete, interrupted or error; turn: which turn it was, as threads list it."
+    },
+    {
+      "name": "reasoning.delta",
+      "summary": "A piece of the model's reasoning."
+    },
+    {
+      "name": "thinking.delta",
+      "summary": "A passing status line; empty clears it."
+    },
+    {
+      "name": "status.headline",
+      "summary": "What the agent says it is working on: text, tool_ids (the calls it sums up), until a newer one or the agent says something (feature status_headline)."
+    },
+    {
+      "name": "status.update",
+      "summary": "A warning or error worth keeping in the thread; kind process: why the agent began a turn by itself."
+    },
+    {
+      "name": "tool.start",
+      "summary": "A tool call started."
+    },
+    {
+      "name": "tool.progress",
+      "summary": "A tool's cumulative live output or status: tool_id, output, progress, output_truncated. Replaces prior output rather than appending."
+    },
+    {
+      "name": "tool.complete",
+      "summary": "A tool call finished, with its result and diff."
+    },
+    {
+      "name": "session.title",
+      "summary": "The thread's title changed."
+    },
+    {
+      "name": "session.usage",
+      "summary": "How full the context window is: usage {context_used, context_max, context_estimated?}. Absent context_estimated means exact."
+    },
+    {
+      "name": "session.compacted",
+      "summary": "The conversation was summarised to free the context: trigger, tokens_before (feature compaction)."
+    },
+    {
+      "name": "session.mode",
+      "summary": "How much the thread asks before acting changed: mode, mode_default, optional mode_options [{id, label, description}] (feature modes)."
+    },
+    {
+      "name": "session.invalidated",
+      "summary": "Take a full session.resume snapshot: replay_base changed after authoritative correction (feature session_resync)."
+    },
+    {
+      "name": "queue.changed",
+      "summary": "The pending messages changed: queued [{id, text, fleet?, placement?, message_id?}], can_steer, steered: the one consumed by the running turn (feature queue)."
+    },
+    {
+      "name": "subagent.start",
+      "summary": "A subagent or workflow the agent started: subagent_id, kind, goal, name, status, started_at, background, can_stop (feature subagents)."
+    },
+    {
+      "name": "subagent.progress",
+      "summary": "What a subagent or workflow is doing now: summary, tool_name, tokens, tool_uses, a workflow's phases and agents (feature subagents)."
+    },
+    {
+      "name": "subagent.complete",
+      "summary": "A subagent or workflow ended: status completed, failed or stopped, ended_at, result (feature subagents)."
+    },
+    {
+      "name": "subagent.cleared",
+      "summary": "Ended subagents and workflows left the line as a message went to the agent: subagent_ids (feature subagents_clear)."
+    },
+    {
+      "name": "request.cancel",
+      "summary": "A question was answered elsewhere, withdrawn or interrupted."
+    },
+    {
+      "name": "mcp.auth",
+      "summary": "Live MCP sign-in cards changed (feature mcp_auth). Empty payload only; fetch current cards with mcp.auth list. Never carries authentication data."
+    },
+    {
+      "name": "error",
+      "summary": "The agent failed apart from any one turn (its process stopped)."
+    },
+    {
+      "name": "poll.now",
+      "summary": "No session: something the client's poll reads moved, saved; thread_list {id, revision}, net {id, revision} (feature net). Sent only to a connection that asked with client.capabilities poll_now (feature poll_now)."
+    },
+    {
+      "name": "subagent.tool",
+      "summary": "Read by the app; not sent by this bridge yet.",
+      "x-sent": false
+    },
+    {
+      "name": "subagent.thinking",
+      "summary": "Read by the app; not sent by this bridge yet.",
+      "x-sent": false
+    }
+  ],
+  "x-server-requests": [
+    {
+      "name": "approval",
+      "summary": "May the agent do this? Optional options, plan_content and safe details. Answered with {choice,note?} or {option,edited_plan?,note?}, never both choice and option."
+    },
+    {
+      "name": "clarify",
+      "summary": "The agent's questions, optionally requires_all_answers. Answered with {answers}, or {} to cancel."
+    }
+  ],
+  "x-bridge-features": [
+    "mcp_auth",
+    "folders",
+    "model_levels",
+    "push_host",
+    "desk_sessions",
+    "model_names",
+    "compaction",
+    "rename",
+    "activity",
+    "model_default_levels",
+    "question_details",
+    "modes",
+    "push_relay",
+    "push_sealed",
+    "push_muting",
+    "folders_add",
+    "machine",
+    "fleet",
+    "fleet_delta",
+    "fleet_delta_positions",
+    "fleet_pages",
+    "thread_sync",
+    "agent_kinds",
+    "queue",
+    "files",
+    "agent_looks",
+    "sidebar_order",
+    "machine_order",
+    "approval_notes",
+    "thread_branch",
+    "subagents",
+    "turn_messages",
+    "subagents_clear",
+    "subagent_names",
+    "subagent_calls",
+    "status_headline",
+    "poll_now",
+    "resume_replay",
+    "agent_threads",
+    "recent_threads",
+    "held_elsewhere",
+    "turn_usage",
+    "session_leave",
+    "worktrees",
+    "turn_diff",
+    "file_read",
+    "session_resync",
+    "message_reconciliation",
+    "push_watcher",
+    "message_ids",
+    "senders",
+    "async_questions",
+    "background_commands",
+    "net",
+    "net_rename",
+    "net_rename_devices",
+    "lean_deltas",
+    "thread_search",
+    "file_search",
+    "file_mentions",
+    "folder_search",
+    "answer_owner",
+    "bot_chat",
+    "history_pages",
+    "tell_starters",
+    "update_notice",
+    "model_levels_none",
+    "git_status",
+    "usage_read",
+    "open_on_host"
+  ],
+  "x-lean-deltas": {
+    "capability": "lean_deltas",
+    "frames": {
+      "d": "message.delta",
+      "t": "reasoning.delta"
+    },
+    "tuple": [
+      "session_id",
+      "seq",
+      "text"
+    ],
+    "description": "Only after client.capabilities acknowledges lean_deltas:true. Separate non-JSON-RPC live frames, each with exactly one key d or t. Replay result events remain canonical. Other events and payloads with extra fields keep their JSON-RPC envelope."
+  },
+  "components": {
+    "schemas": {}
+  }
+}

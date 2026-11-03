@@ -1,0 +1,24 @@
+{
+ "messages": [
+  {
+   "role": "user",
+   "text": "Reply with a four-line poem about the sea. Do not use any tools.",
+   "timestamp": 1791802249.962
+  },
+  {
+   "role": "assistant",
+   "text": "The moon lays silver on the tide,  \nWhile quiet waves roll in and glide.  \nSalt winds sing beneath the sky,  \nThe sea keeps secrets passing by.",
+   "timestamp": 1791802249.968
+  },
+  {
+   "role": "compaction",
+   "trigger": "auto",
+   "timestamp": 1791802255.876,
+   "tokens_before": 1213,
+   "turn_usage": {
+    "tokens": 1213
+   }
+  }
+ ],
+ "title": null
+}

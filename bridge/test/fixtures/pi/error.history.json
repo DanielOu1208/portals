@@ -1,0 +1,16 @@
+{
+ "messages": [
+  {
+   "role": "user",
+   "text": "Reply with the single word hello.",
+   "timestamp": 1791802128.668
+  },
+  {
+   "role": "assistant",
+   "text": "OpenAI API error (401): Incorrect API key provided: not-a-re**-key. You can find your API key at https://platform.openai.com/account/api-keys.",
+   "timestamp": 1791802128.673,
+   "display_kind": "failed_turn"
+  }
+ ],
+ "title": null
+}

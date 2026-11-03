@@ -1,0 +1,110 @@
+[
+ {
+  "type": "prompt",
+  "text": "Plan how to add a file notes.txt that holds the word hello, in two short steps. Present the plan with your create-plan tool. Do not ask me any questions."
+ },
+ {
+  "type": "title",
+  "title": "File Creation Plan"
+ },
+ {
+  "type": "reasoning",
+  "text": "I will outline a two-step plan to create notes.txt containing the word hello."
+ },
+ {
+  "type": "text",
+  "text": "Creating a short two-step plan to add `notes.txt` with the word `hello`."
+ },
+ {
+  "type": "tool.start",
+  "id": "plan-1",
+  "name": "todo",
+  "args": {
+   "todos": [
+    {
+     "content": "Create notes.txt at workspace root",
+     "status": "pending"
+    },
+    {
+     "content": "Write the word hello into notes.txt",
+     "status": "pending"
+    }
+   ]
+  },
+  "context": "0 of 2 done"
+ },
+ {
+  "type": "tool.end",
+  "id": "plan-1",
+  "name": "todo",
+  "args": {
+   "todos": [
+    {
+     "content": "Create notes.txt at workspace root",
+     "status": "pending"
+    },
+    {
+     "content": "Write the word hello into notes.txt",
+     "status": "pending"
+    }
+   ]
+  },
+  "result": {
+   "output": "○ Create notes.txt at workspace root\n○ Write the word hello into notes.txt"
+  },
+  "context": "0 of 2 done"
+ },
+ {
+  "type": "plan card",
+  "command": "Add notes.txt\n\nAdd a new notes.txt file in the workspace root containing the single word hello.\n\n# Add notes.txt with hello\n\n## Steps\n\n1. Create [`notes.txt`](/tmp/portals-cwd/notes.txt) at the workspace root.\n2. Write the contents as exactly `hello` (no extra lines or punctuation).",
+  "answered": "rejected: Make it one step, not two."
+ },
+ {
+  "type": "reasoning",
+  "text": "The user wants a single-step plan instead of two."
+ },
+ {
+  "type": "text",
+  "text": "Updating the plan to a single step."
+ },
+ {
+  "type": "tool.start",
+  "id": "plan-2",
+  "name": "todo",
+  "args": {
+   "todos": [
+    {
+     "content": "Create notes.txt at workspace root with the word hello",
+     "status": "pending"
+    }
+   ]
+  },
+  "context": "0 of 1 done"
+ },
+ {
+  "type": "tool.end",
+  "id": "plan-2",
+  "name": "todo",
+  "args": {
+   "todos": [
+    {
+     "content": "Create notes.txt at workspace root with the word hello",
+     "status": "pending"
+    }
+   ]
+  },
+  "result": {
+   "output": "○ Create notes.txt at workspace root with the word hello"
+  },
+  "context": "0 of 1 done"
+ },
+ {
+  "type": "plan card",
+  "command": "Add notes.txt\n\nAdd a new notes.txt file in the workspace root containing the single word hello.\n\n# Add notes.txt with hello\n\n## Steps\n\n1. Create [`notes.txt`](/tmp/portals-cwd/notes.txt) at the workspace root with the exact contents `hello`.",
+  "answered": "accepted"
+ },
+ {
+  "type": "turn.end",
+  "status": "complete"
+ }
+]

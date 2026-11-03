@@ -1,0 +1,65 @@
+[
+ {
+  "type": "text",
+  "text": "I’ll list this folder and check whether 221 is prime.",
+  "pieces": 13
+ },
+ {
+  "type": "commentary",
+  "text": "I’ll list this folder and check whether 221 is prime.",
+  "alreadyStreamed": true
+ },
+ {
+  "type": "tool.start",
+  "id": "exec-bb47c8a3-363b-45e1-baf0-ee887a2f3630",
+  "name": "terminal",
+  "args": {
+   "command": "ls"
+  }
+ },
+ {
+  "type": "tool.end",
+  "id": "exec-bb47c8a3-363b-45e1-baf0-ee887a2f3630",
+  "name": "terminal",
+  "args": {
+   "command": "ls"
+  },
+  "result": {
+   "output": "hello.txt\n",
+   "exit_code": 0
+  },
+  "durationSeconds": 0
+ },
+ {
+  "type": "usage",
+  "usage": {
+   "used": 24792,
+   "max": 258400
+  }
+ },
+ {
+  "type": "text",
+  "text": "I saw `hello.txt`; 221 is not prime because 221 = 13 × 17.",
+  "pieces": 21
+ },
+ {
+  "type": "usage",
+  "usage": {
+   "used": 24843,
+   "max": 258400
+  }
+ },
+ {
+  "type": "turn.end",
+  "status": "complete",
+  "usage": {
+   "used": 24843,
+   "max": 258400
+  },
+  "spent": {
+   "tokens": 49635,
+   "seconds": 6.234
+  },
+  "agentTurn": "01a13a1f-4c5a-7443-94b3-016867640993"
+ }
+]

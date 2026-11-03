@@ -1,0 +1,121 @@
+[
+ {
+  "type": "prompt",
+  "text": "Do these steps in order, and do not retry a step that fails. 1. Read hello.txt with your read tool. 2. Edit hello.txt so that it says hello instead of hi. 3. Run `wc -c hello.txt`. 4. Run `ls no-such-file.txt`. Finish with one short sentence that gives the exit code of the last command."
+ },
+ {
+  "type": "title",
+  "title": "Sequential Execution Agent"
+ },
+ {
+  "type": "reasoning",
+  "text": "I will follow the four steps in order and not retry any failed step."
+ },
+ {
+  "type": "text",
+  "text": "I'll follow those steps in order, starting by reading `hello.txt`."
+ },
+ {
+  "type": "tool.start",
+  "id": "call-a7cf6b67-7c0d-47f5-a267-229a524a339a-0\nfc_802b0987-2656-9b8d-bb63-9c2b3571916e_0",
+  "name": "read_file",
+  "args": {
+   "path": "/tmp/portals-cwd/hello.txt"
+  }
+ },
+ {
+  "type": "tool.end",
+  "id": "call-a7cf6b67-7c0d-47f5-a267-229a524a339a-0\nfc_802b0987-2656-9b8d-bb63-9c2b3571916e_0",
+  "name": "read_file",
+  "args": {
+   "path": "/tmp/portals-cwd/hello.txt"
+  },
+  "result": {
+   "content": "hi\n"
+  }
+ },
+ {
+  "type": "reasoning",
+  "text": "Step 1 is complete. Now editing hello.txt to replace \"hi\" with \"hello\"."
+ },
+ {
+  "type": "tool.start",
+  "id": "call-61bcd2b4-2332-448c-a5b7-d2a51361837b-1\nfc_f8a78337-8086-91bb-8765-ed1575652c51_0",
+  "name": "patch",
+  "args": {
+   "path": "/tmp/portals-cwd/hello.txt"
+  }
+ },
+ {
+  "type": "tool.end",
+  "id": "call-61bcd2b4-2332-448c-a5b7-d2a51361837b-1\nfc_f8a78337-8086-91bb-8765-ed1575652c51_0",
+  "name": "patch",
+  "args": {
+   "path": "/tmp/portals-cwd/hello.txt"
+  },
+  "result": {
+   "success": true,
+   "diff": "--- a/hello.txt\n+++ b/hello.txt\n@@ -1 +1 @@\n-hi\n+hello\n"
+  }
+ },
+ {
+  "type": "reasoning",
+  "text": "Step 2 is complete. Now running `wc -c hello.txt`."
+ },
+ {
+  "type": "tool.start",
+  "id": "call-2c298ebb-31b8-4c46-91aa-0139e92b2d62-2\nfc_cdc4d207-1d0c-9ffb-b987-b94abe6a45ef_0",
+  "name": "terminal",
+  "args": {
+   "command": "wc -c hello.txt"
+  }
+ },
+ {
+  "type": "tool.end",
+  "id": "call-2c298ebb-31b8-4c46-91aa-0139e92b2d62-2\nfc_cdc4d207-1d0c-9ffb-b987-b94abe6a45ef_0",
+  "name": "terminal",
+  "args": {
+   "command": "wc -c hello.txt"
+  },
+  "result": {
+   "output": "       6 hello.txt\n",
+   "exit_code": 0
+  }
+ },
+ {
+  "type": "reasoning",
+  "text": "Step 3 is complete. Now running `ls no-such-file.txt`."
+ },
+ {
+  "type": "tool.start",
+  "id": "call-9b25ccc0-fab0-45b6-81b6-6d3616f89ccf-3\nfc_0903d644-5e70-9de1-bf82-9c784b5e361a_0",
+  "name": "terminal",
+  "args": {
+   "command": "ls no-such-file.txt"
+  }
+ },
+ {
+  "type": "tool.end",
+  "id": "call-9b25ccc0-fab0-45b6-81b6-6d3616f89ccf-3\nfc_0903d644-5e70-9de1-bf82-9c784b5e361a_0",
+  "name": "terminal",
+  "args": {
+   "command": "ls no-such-file.txt"
+  },
+  "result": {
+   "output": "ls: no-such-file.txt: No such file or directory\n",
+   "exit_code": 1
+  }
+ },
+ {
+  "type": "reasoning",
+  "text": "The last command returned exit code 1."
+ },
+ {
+  "type": "text",
+  "text": "The last command exited with code 1."
+ },
+ {
+  "type": "turn.end",
+  "status": "complete"
+ }
+]

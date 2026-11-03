@@ -1,0 +1,126 @@
+[
+ {
+  "type": "text",
+  "text": "I’ll run the three steps in order and skip any step that is not allowed.\n",
+  "pieces": 17
+ },
+ {
+  "type": "commentary",
+  "text": "I’ll run the three steps in order and skip any step that is not allowed.\n",
+  "alreadyStreamed": true
+ },
+ {
+  "type": "tool.start",
+  "id": "exec-b59394f6-b725-41a2-8653-538b50bfd8ad",
+  "name": "write_file",
+  "args": {
+   "path": "/tmp/aeriportal-cwd/note.txt",
+   "content": "note\n"
+  }
+ },
+ {
+  "type": "tool.end",
+  "id": "exec-b59394f6-b725-41a2-8653-538b50bfd8ad",
+  "name": "write_file",
+  "args": {
+   "path": "/tmp/aeriportal-cwd/note.txt",
+   "content": "note\n"
+  },
+  "result": {
+   "status": "blocked",
+   "error": "Declined.",
+   "user_summary": "You denied this change — it was not made."
+  },
+  "durationSeconds": 0
+ },
+ {
+  "type": "usage",
+  "usage": {
+   "used": 23831,
+   "max": 475000
+  }
+ },
+ {
+  "type": "tool.start",
+  "id": "exec-c0ec9e5b-ca7e-4c41-8956-d915766cf7f3",
+  "name": "terminal",
+  "args": {
+   "command": "touch done.txt"
+  }
+ },
+ {
+  "type": "tool.end",
+  "id": "exec-c0ec9e5b-ca7e-4c41-8956-d915766cf7f3",
+  "name": "terminal",
+  "args": {
+   "command": "touch done.txt"
+  },
+  "result": {
+   "status": "blocked",
+   "error": "Declined.",
+   "user_summary": "You denied this command — it did not run."
+  },
+  "durationSeconds": 0
+ },
+ {
+  "type": "usage",
+  "usage": {
+   "used": 23890,
+   "max": 475000
+  }
+ },
+ {
+  "type": "tool.start",
+  "id": "exec-84553b5d-16de-462a-b735-828bead19b17",
+  "name": "write_file",
+  "args": {
+   "path": "/tmp/aeriportal-cwd/other.txt",
+   "content": "other\n"
+  }
+ },
+ {
+  "type": "tool.end",
+  "id": "exec-84553b5d-16de-462a-b735-828bead19b17",
+  "name": "write_file",
+  "args": {
+   "path": "/tmp/aeriportal-cwd/other.txt",
+   "content": "other\n"
+  },
+  "result": {
+   "diff": "--- /dev/null\n+++ b/other.txt\n@@ -0,0 +1 @@\n+other\n"
+  },
+  "durationSeconds": 0
+ },
+ {
+  "type": "usage",
+  "usage": {
+   "used": 23987,
+   "max": 475000
+  }
+ },
+ {
+  "type": "text",
+  "text": "The note.txt patch and `touch done.txt` were rejected; other.txt was created containing `other`.",
+  "pieces": 21
+ },
+ {
+  "type": "usage",
+  "usage": {
+   "used": 24036,
+   "max": 475000
+  }
+ },
+ {
+  "type": "turn.end",
+  "status": "complete",
+  "usage": {
+   "used": 24036,
+   "max": 475000
+  },
+  "spent": {
+   "tokens": 95744,
+   "seconds": 11.146
+  },
+  "agentTurn": "01a13a21-a1f9-7f22-a8c6-54874bc2b065"
+ }
+]

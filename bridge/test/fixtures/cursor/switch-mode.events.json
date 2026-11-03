@@ -1,0 +1,51 @@
+[
+ {
+  "type": "prompt",
+  "text": "Switch this session to plan mode with your switch-mode tool, then reply with the single word done. Do nothing else."
+ },
+ {
+  "type": "title",
+  "title": "Plan Mode Switch"
+ },
+ {
+  "type": "reasoning",
+  "text": "Switching to plan mode and replying with done."
+ },
+ {
+  "type": "text",
+  "text": "I'll switch this session to plan mode now."
+ },
+ {
+  "type": "tool.start",
+  "id": "call-d72dd165-f26c-40d1-a57f-a0ecf2aae543-0\nfc_f1899489-03cd-9a85-84de-e0a1d834fff8_0",
+  "name": "switch_mode",
+  "args": {
+   "mode": "plan",
+   "explanation": "User asked to switch this session to plan mode."
+  },
+  "context": "Switch Mode: plan"
+ },
+ {
+  "type": "tool.end",
+  "id": "call-d72dd165-f26c-40d1-a57f-a0ecf2aae543-0\nfc_f1899489-03cd-9a85-84de-e0a1d834fff8_0",
+  "name": "switch_mode",
+  "args": {
+   "mode": "plan",
+   "explanation": "User asked to switch this session to plan mode."
+  },
+  "result": {},
+  "context": "Switch Mode: plan"
+ },
+ {
+  "type": "reasoning",
+  "text": "Switching to plan mode. Will reply with \"done\"."
+ },
+ {
+  "type": "text",
+  "text": "done"
+ },
+ {
+  "type": "turn.end",
+  "status": "complete"
+ }
+]

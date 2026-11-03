@@ -1,0 +1,34 @@
+[
+ {
+  "type": "reasoning",
+  "text": "Just run the command."
+ },
+ {
+  "type": "tool.start",
+  "id": "call_00_t4q8s619c3ipnkc7bbcub3j7",
+  "name": "terminal",
+  "args": {
+   "command": "echo spike-hold-test"
+  }
+ },
+ {
+  "type": "approval",
+  "command": "echo spike-hold-test"
+ },
+ {
+  "type": "tool.end",
+  "id": "call_00_t4q8s619c3ipnkc7bbcub3j7",
+  "name": "terminal",
+  "args": {
+   "command": "echo spike-hold-test"
+  },
+  "result": {
+   "output": "Tool execution aborted",
+   "exit_code": 1
+  }
+ },
+ {
+  "type": "turn.end",
+  "status": "interrupted"
+ }
+]

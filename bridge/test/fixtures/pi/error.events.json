@@ -1,0 +1,8 @@
+[
+ {
+  "type": "turn.end",
+  "status": "error",
+  "error": "OpenAI API error (401): Incorrect API key provided: not-a-re**-key. You can find your API key at https://platform.openai.com/account/api-keys.",
+  "retryable": true
+ }
+]

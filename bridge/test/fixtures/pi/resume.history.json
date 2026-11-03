@@ -1,0 +1,31 @@
+{
+ "messages": [
+  {
+   "role": "user",
+   "text": "Remember the word kiwi. Reply with only: ok",
+   "timestamp": 1791801855.606
+  },
+  {
+   "role": "assistant",
+   "text": "ok",
+   "timestamp": 1791801855.611,
+   "turn_usage": {
+    "tokens": 1174
+   }
+  },
+  {
+   "role": "user",
+   "text": "Which word did I ask you to remember? Reply with only that word.",
+   "timestamp": 1791801857.354
+  },
+  {
+   "role": "assistant",
+   "text": "kiwi",
+   "timestamp": 1791801857.359,
+   "turn_usage": {
+    "tokens": 1201
+   }
+  }
+ ],
+ "title": null
+}

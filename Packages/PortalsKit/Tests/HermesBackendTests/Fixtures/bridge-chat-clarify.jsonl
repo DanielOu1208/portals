@@ -1,0 +1,30 @@
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"replay_epoch":"ca4a3cb1079e6d8958fc0de46e801677","heartbeat":true,"bridge":{"protocol":1,"features":[]}}}}}
+{"dir":"out","frame":{"id":"r1","jsonrpc":"2.0","method":"client.capabilities","params":{"server_requests":true}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"r1","result":{"server_requests":["approval","clarify"]}}}
+{"dir":"out","frame":{"id":"r2","jsonrpc":"2.0","method":"session.create","params":{"cwd":"/tmp/aeriportal-cwd","source":"tui","title":"aeriportal-probe"}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"r2","result":{"session_id":"7b2f3285-301d-435e-a0ff-35fe91d170f2","stored_session_id":"7b2f3285-301d-435e-a0ff-35fe91d170f2","info":{"model":"fake-1","provider":"fake","reasoning_effort":"medium","cwd":"/tmp/aeriportal-cwd","running":false,"profile_name":"fake","title":"aeriportal-probe"}}}}
+{"dir":"out","frame":{"id":"r3","jsonrpc":"2.0","method":"prompt.submit","params":{"session_id":"7b2f3285-301d-435e-a0ff-35fe91d170f2","text":"Ask me which language to use."}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"r3","result":{"status":"streaming"}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.start","session_id":"7b2f3285-301d-435e-a0ff-35fe91d170f2","seq":1}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"tool.start","session_id":"7b2f3285-301d-435e-a0ff-35fe91d170f2","seq":2,"payload":{"tool_id":"fake-tool-1","name":"clarify","args":{"questions":[{"question":"Which language should I use?","choices":["Python","Swift"]}]}}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"srq-f01f0a370cd6","method":"clarify","params":{"session_id":"7b2f3285-301d-435e-a0ff-35fe91d170f2","questions":[{"qid":"q0","question":"Which language should I use?","choices":["Python","Swift"],"multi_select":false}]}}}
+{"dir":"out","frame":{"id":"srq-f01f0a370cd6","jsonrpc":"2.0","result":{"answers":{"q0":"Swift"}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"tool.complete","session_id":"7b2f3285-301d-435e-a0ff-35fe91d170f2","seq":4,"payload":{"tool_id":"fake-tool-1","name":"clarify","args":{"questions":[{"question":"Which language should I use?","choices":["Python","Swift"]}]},"result":{"responses":[{"question":"Which language should I use?","user_response":"Swift"}]}}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"7b2f3285-301d-435e-a0ff-35fe91d170f2","seq":5,"payload":{"text":"You "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"7b2f3285-301d-435e-a0ff-35fe91d170f2","seq":6,"payload":{"text":"chose "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"7b2f3285-301d-435e-a0ff-35fe91d170f2","seq":7,"payload":{"text":"Swift. "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"7b2f3285-301d-435e-a0ff-35fe91d170f2","seq":8,"payload":{"text":"Hello "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"7b2f3285-301d-435e-a0ff-35fe91d170f2","seq":9,"payload":{"text":"from "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"7b2f3285-301d-435e-a0ff-35fe91d170f2","seq":10,"payload":{"text":"the "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"7b2f3285-301d-435e-a0ff-35fe91d170f2","seq":11,"payload":{"text":"fake "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"7b2f3285-301d-435e-a0ff-35fe91d170f2","seq":12,"payload":{"text":"agent. "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"7b2f3285-301d-435e-a0ff-35fe91d170f2","seq":13,"payload":{"text":"You "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"7b2f3285-301d-435e-a0ff-35fe91d170f2","seq":14,"payload":{"text":"said: "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"7b2f3285-301d-435e-a0ff-35fe91d170f2","seq":15,"payload":{"text":"Ask "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"7b2f3285-301d-435e-a0ff-35fe91d170f2","seq":16,"payload":{"text":"me "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"7b2f3285-301d-435e-a0ff-35fe91d170f2","seq":17,"payload":{"text":"which "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"7b2f3285-301d-435e-a0ff-35fe91d170f2","seq":18,"payload":{"text":"language "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"7b2f3285-301d-435e-a0ff-35fe91d170f2","seq":19,"payload":{"text":"to "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"7b2f3285-301d-435e-a0ff-35fe91d170f2","seq":20,"payload":{"text":"use."}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"session.title","session_id":"7b2f3285-301d-435e-a0ff-35fe91d170f2","seq":21,"payload":{"title":"Fake: Ask me which language to use."}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.complete","session_id":"7b2f3285-301d-435e-a0ff-35fe91d170f2","seq":22,"payload":{"status":"complete","text":"You chose Swift. Hello from the fake agent. You said: Ask me which language to use.","usage":{"context_used":1094,"context_max":200000}}}}}

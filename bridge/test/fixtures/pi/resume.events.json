@@ -1,0 +1,37 @@
+[
+ {
+  "type": "text",
+  "text": "ok",
+  "pieces": 1
+ },
+ {
+  "type": "turn.end",
+  "status": "complete",
+  "spent": {
+   "tokens": 1174
+  }
+ },
+ {
+  "type": "usage",
+  "usage": {
+   "used": 1174,
+   "max": 272000
+  }
+ },
+ {
+  "type": "text",
+  "text": "kiwi",
+  "pieces": 2
+ },
+ {
+  "type": "turn.end",
+  "status": "complete",
+  "usage": {
+   "used": 1174,
+   "max": 272000
+  },
+  "spent": {
+   "tokens": 1201
+  }
+ }
+]

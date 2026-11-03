@@ -1,0 +1,8 @@
+[
+ {
+  "type": "turn.end",
+  "status": "error",
+  "error": "No messages to compact.",
+  "retryable": false
+ }
+]

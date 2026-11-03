@@ -1,0 +1,63 @@
+{
+  "about": "Test vectors for the Portals tunnel's handshake and sealing (docs/pairing-and-relay.md, The tunnel). Bytes are hex; plaintext is UTF-8. Made by bridge/scripts/tunnel-vectors.ts.",
+  "mac_static": {
+    "private": "705519776ccb2c8cfc33b078d26c4c0ac0e53fd05520484f0555c94185744343",
+    "public": "4386668b9cae08aee6a553f089c9e425748dac3f74a68951afb6bfff1c3c1b2c",
+    "public_base64url": "Q4Zmi5yuCK7mpVPwicnkJXSNrD90polRr7a__xw8Gyw"
+  },
+  "device_ephemeral": {
+    "private": "006748c46fc508d86006865389299c2cf3efe444e10418d2ad6fbadf70477324",
+    "public": "7eb7c9d58d8bd7c8a724358d1ebeff05ae80330ccb85d80d93cb30117d8ff943"
+  },
+  "mac_ephemeral": {
+    "private": "231a75be6e3d80b2c54132852c4997808df1da10e75f379ee96855d1eb9a45f9",
+    "public": "f2cb9d2dd5af5639b3c406f66dff86a64f65fc22bc8cfee15edaab4fd5559f08"
+  },
+  "shared_ephemeral": "5401406e00c8f16bab9ecb8376b66aea057745b54b8b8818770d2c977147c36a",
+  "shared_static": "4848df709e048329637aad3bc19ee5c298e4386aaa02fac974a68ccddb847d5f",
+  "ikm": "5401406e00c8f16bab9ecb8376b66aea057745b54b8b8818770d2c977147c36a4848df709e048329637aad3bc19ee5c298e4386aaa02fac974a68ccddb847d5f",
+  "salt": "8f49d7c1d8202cf66ecfc470ff8b349a4332c0a850072c98f8240085934dd45c",
+  "info": "keys",
+  "k_dm": "81c3369de0d785b51cc599c8980633bc7424ec618ab161ed4bfd89d87972905b",
+  "k_md": "eb62b7dff3623c3bdbe354549a0b37be09469609ea2dec984b2304c28a4a1605",
+  "device_to_mac": [
+    {
+      "counter": 0,
+      "plaintext": "{\"token\":\"0hms2SgZeRgP6EeVaZQ1wvAGmNVSlkXl72zwq9PVJpM\"}",
+      "nonce": "000000000000000000000000",
+      "sealed": "054f371c479e6494b67fd155578ce45c5d7eba5093f0f733e20d9f62762050b22f6cc357ba540b23f2bc4436e542038d9070ebd1d0285bfd7bc1901981c5e1b31032ee09ae703a"
+    },
+    {
+      "counter": 1,
+      "plaintext": "{\"jsonrpc\":\"2.0\",\"id\":\"r1\",\"method\":\"threads.list\",\"params\":{}}",
+      "nonce": "000000000000000000000001",
+      "sealed": "00bd834fd5a5bb3e3935c0c3774f584158c9a2a5619ad135d09564a24bbaa3ae4632ab6d28bd8b3bcb4cd5d8bce8b24c48f2796c777635102fe59d4378b571b1db9330049b5c6db66643638a04f152"
+    },
+    {
+      "counter": 2,
+      "plaintext": "",
+      "nonce": "000000000000000000000002",
+      "sealed": "e22b7efb24f93d06861917dff28f7752"
+    }
+  ],
+  "mac_to_device": [
+    {
+      "counter": 0,
+      "plaintext": "{\"jsonrpc\":\"2.0\",\"method\":\"event\",\"params\":{\"type\":\"gateway.ready\",\"payload\":{\"heartbeat\":true}}}",
+      "nonce": "000000000000000000000000",
+      "sealed": "5d5d6de2f9f440a6b9137f3a3462fc0816dc8e2578cd3ce319e56965dd6ec67c539526cfb3ea9382889ee9a9dce53e83b7d1270a8fcf5d482a102c262b103fedd2e627171547e00be0df40c1b4a073083a96da04ab78bb4fb430d42c96e33e9243e86a25725163510ad0d808cab4e12d04"
+    },
+    {
+      "counter": 1,
+      "plaintext": "{\"jsonrpc\":\"2.0\",\"id\":\"r1\",\"result\":{\"threads\":[],\"machines\":[]}}",
+      "nonce": "000000000000000000000001",
+      "sealed": "4a2b43a3380d7bdfab46932b839a8b51ff73a93e724113585b6c7f5320cd57c1032d141b788ef73415f7ec3bfbcc5cadc551a63013eb16ba27ad606abbcd303f1eb3dff5f52f417097a811465c3b478b18"
+    },
+    {
+      "counter": 2,
+      "plaintext": "é ✓ 𝄞",
+      "nonce": "000000000000000000000002",
+      "sealed": "0e5a95acf1a4e66e01532b908223b451969cfb1cd9f7d7da803d06"
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+[
+ {
+  "type": "prompt",
+  "text": "Remember the word kumquat. Reply with OK only."
+ },
+ {
+  "type": "title",
+  "title": "Kumquat Memory Bot"
+ },
+ {
+  "type": "reasoning",
+  "text": "I will remember the word \"kumquat\" and reply with \"OK\"."
+ },
+ {
+  "type": "text",
+  "text": "OK"
+ },
+ {
+  "type": "turn.end",
+  "status": "complete"
+ },
+ {
+  "type": "prompt",
+  "text": "What word did I ask you to remember? Answer with the word only."
+ },
+ {
+  "type": "reasoning",
+  "text": "The word is \"kumquat\"."
+ },
+ {
+  "type": "text",
+  "text": "kumquat"
+ },
+ {
+  "type": "turn.end",
+  "status": "complete"
+ }
+]

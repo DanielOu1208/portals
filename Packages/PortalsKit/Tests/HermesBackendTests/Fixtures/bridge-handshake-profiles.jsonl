@@ -1,0 +1,5 @@
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"replay_epoch":"ca4a3cb1079e6d8958fc0de46e801677","heartbeat":true,"bridge":{"protocol":1,"features":[]}}}}}
+{"dir":"out","frame":{"id":"r1","jsonrpc":"2.0","method":"client.capabilities","params":{"server_requests":true}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"r1","result":{"server_requests":["approval","clarify"]}}}
+{"dir":"out","frame":{"id":"r2","jsonrpc":"2.0","method":"profiles.list","params":{}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"r2","result":{"profiles":[{"name":"fake","display_name":"Fake agent","description":"A scripted agent for testing the bridge. It runs nothing and changes no files.","model":"fake-1","provider":"fake","is_default":true}]}}}

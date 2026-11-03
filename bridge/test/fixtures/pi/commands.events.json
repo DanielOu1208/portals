@@ -1,0 +1,26 @@
+[
+ {
+  "type": "text",
+  "text": "Hello, Ada!",
+  "pieces": 4
+ },
+ {
+  "type": "turn.end",
+  "status": "complete",
+  "spent": {
+   "tokens": 1393
+  }
+ },
+ {
+  "type": "text",
+  "text": "KIWI",
+  "pieces": 2
+ },
+ {
+  "type": "turn.end",
+  "status": "complete",
+  "spent": {
+   "tokens": 1418
+  }
+ }
+]

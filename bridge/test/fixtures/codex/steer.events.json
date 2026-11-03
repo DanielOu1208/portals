@@ -1,0 +1,44 @@
+[
+ {
+  "type": "text",
+  "text": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12",
+  "pieces": 23
+ },
+ {
+  "type": "usage",
+  "usage": {
+   "used": 24738,
+   "max": 258400
+  }
+ },
+ {
+  "type": "commentary",
+  "text": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12",
+  "alreadyStreamed": true
+ },
+ {
+  "type": "text",
+  "text": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\nbanana",
+  "pieces": 81
+ },
+ {
+  "type": "usage",
+  "usage": {
+   "used": 24813,
+   "max": 258400
+  }
+ },
+ {
+  "type": "turn.end",
+  "status": "complete",
+  "usage": {
+   "used": 24813,
+   "max": 258400
+  },
+  "spent": {
+   "tokens": 49551,
+   "seconds": 5.781
+  },
+  "agentTurn": "01a13a20-1ea2-7e80-8422-c59c7cdfcdd2"
+ }
+]

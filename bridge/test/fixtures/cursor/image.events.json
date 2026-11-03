@@ -1,0 +1,47 @@
+[
+ {
+  "type": "prompt",
+  "text": "What colour is this square? Answer with one word. [image]"
+ },
+ {
+  "type": "title",
+  "title": "Color Question"
+ },
+ {
+  "type": "reasoning",
+  "text": "The user is asking about the color of a square in an image."
+ },
+ {
+  "type": "text",
+  "text": "I'll check the image and answer with one word."
+ },
+ {
+  "type": "tool.start",
+  "id": "call-59e1c17c-2e60-4d50-9b22-bc45f788dc68-0\nfc_2f80dc46-df20-913e-8d5f-ec57def0c89f_0",
+  "name": "read_file",
+  "args": {
+   "path": "/home/dev/.cursor/projects/private-tmp-portals-cursor-record-image/assets/30e1f713-2845-47aa-8cde-6e7e3e04aca5.png"
+  }
+ },
+ {
+  "type": "tool.end",
+  "id": "call-59e1c17c-2e60-4d50-9b22-bc45f788dc68-0\nfc_2f80dc46-df20-913e-8d5f-ec57def0c89f_0",
+  "name": "read_file",
+  "args": {
+   "path": "/home/dev/.cursor/projects/private-tmp-portals-cursor-record-image/assets/30e1f713-2845-47aa-8cde-6e7e3e04aca5.png"
+  },
+  "result": {}
+ },
+ {
+  "type": "reasoning",
+  "text": "The square is red."
+ },
+ {
+  "type": "text",
+  "text": "Red"
+ },
+ {
+  "type": "turn.end",
+  "status": "complete"
+ }
+]

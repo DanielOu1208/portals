@@ -1,0 +1,64 @@
+[
+ {
+  "type": "tool.start",
+  "id": "toolu_01TmSDfyH97nwLmkAZZFetua",
+  "name": "clarify",
+  "args": {
+   "questions": [
+    {
+     "question": "Which language do you prefer?",
+     "choices": [
+      "Python",
+      "Swift"
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "type": "tool.end",
+  "id": "toolu_01TmSDfyH97nwLmkAZZFetua",
+  "name": "clarify",
+  "args": {
+   "questions": [
+    {
+     "question": "Which language do you prefer?",
+     "choices": [
+      "Python",
+      "Swift"
+     ]
+    }
+   ]
+  },
+  "result": {
+   "responses": [
+    {
+     "question": "Which language do you prefer?",
+     "user_response": "Swift"
+    }
+   ]
+  },
+  "durationSeconds": 0
+ },
+ {
+  "type": "reasoning",
+  "text": "I have the tool result now, so I'll just give the one-sentence answer as instructed, without using any other tools.\n\n",
+  "pieces": 10
+ },
+ {
+  "type": "text",
+  "text": "You prefer Swift.",
+  "pieces": 2
+ },
+ {
+  "type": "turn.end",
+  "status": "complete",
+  "usage": {
+   "used": 27454,
+   "max": 1000000
+  },
+  "spent": {
+   "tokens": 52975
+  }
+ }
+]

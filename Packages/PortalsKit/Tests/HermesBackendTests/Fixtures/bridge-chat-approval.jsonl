@@ -1,0 +1,31 @@
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"replay_epoch":"ca4a3cb1079e6d8958fc0de46e801677","heartbeat":true,"bridge":{"protocol":1,"features":[]}}}}}
+{"dir":"out","frame":{"id":"r1","jsonrpc":"2.0","method":"client.capabilities","params":{"server_requests":true}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"r1","result":{"server_requests":["approval","clarify"]}}}
+{"dir":"out","frame":{"id":"r2","jsonrpc":"2.0","method":"session.create","params":{"cwd":"/tmp/aeriportal-cwd","source":"tui","title":"aeriportal-probe"}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"r2","result":{"session_id":"4a9868c9-59bc-45b6-af00-f6be0762d751","stored_session_id":"4a9868c9-59bc-45b6-af00-f6be0762d751","info":{"model":"fake-1","provider":"fake","reasoning_effort":"medium","cwd":"/tmp/aeriportal-cwd","running":false,"profile_name":"fake","title":"aeriportal-probe"}}}}
+{"dir":"out","frame":{"id":"r3","jsonrpc":"2.0","method":"prompt.submit","params":{"session_id":"4a9868c9-59bc-45b6-af00-f6be0762d751","text":"Please approve a command."}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"r3","result":{"status":"streaming"}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.start","session_id":"4a9868c9-59bc-45b6-af00-f6be0762d751","seq":1}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"tool.start","session_id":"4a9868c9-59bc-45b6-af00-f6be0762d751","seq":2,"payload":{"tool_id":"fake-tool-1","name":"terminal","args":{"command":"rm -rf ./fake-build"}}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"srq-ceaa422761d7","method":"approval","params":{"session_id":"4a9868c9-59bc-45b6-af00-f6be0762d751","command":"rm -rf ./fake-build","choices":["once","session","always","deny"],"description":"delete a folder (the fake agent only pretends)"}}}
+{"dir":"out","frame":{"id":"srq-ceaa422761d7","jsonrpc":"2.0","result":{"choice":"deny"}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"tool.complete","session_id":"4a9868c9-59bc-45b6-af00-f6be0762d751","seq":4,"payload":{"tool_id":"fake-tool-1","name":"terminal","args":{"command":"rm -rf ./fake-build"},"result":{"status":"blocked","error":"Denied by the user.","user_summary":"You denied this command — it did not run."}}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"4a9868c9-59bc-45b6-af00-f6be0762d751","seq":5,"payload":{"text":"You "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"4a9868c9-59bc-45b6-af00-f6be0762d751","seq":6,"payload":{"text":"said "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"4a9868c9-59bc-45b6-af00-f6be0762d751","seq":7,"payload":{"text":"no, "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"4a9868c9-59bc-45b6-af00-f6be0762d751","seq":8,"payload":{"text":"so "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"4a9868c9-59bc-45b6-af00-f6be0762d751","seq":9,"payload":{"text":"nothing "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"4a9868c9-59bc-45b6-af00-f6be0762d751","seq":10,"payload":{"text":"ran. "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"4a9868c9-59bc-45b6-af00-f6be0762d751","seq":11,"payload":{"text":"Hello "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"4a9868c9-59bc-45b6-af00-f6be0762d751","seq":12,"payload":{"text":"from "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"4a9868c9-59bc-45b6-af00-f6be0762d751","seq":13,"payload":{"text":"the "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"4a9868c9-59bc-45b6-af00-f6be0762d751","seq":14,"payload":{"text":"fake "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"4a9868c9-59bc-45b6-af00-f6be0762d751","seq":15,"payload":{"text":"agent. "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"4a9868c9-59bc-45b6-af00-f6be0762d751","seq":16,"payload":{"text":"You "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"4a9868c9-59bc-45b6-af00-f6be0762d751","seq":17,"payload":{"text":"said: "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"4a9868c9-59bc-45b6-af00-f6be0762d751","seq":18,"payload":{"text":"Please "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"4a9868c9-59bc-45b6-af00-f6be0762d751","seq":19,"payload":{"text":"approve "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"4a9868c9-59bc-45b6-af00-f6be0762d751","seq":20,"payload":{"text":"a "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"4a9868c9-59bc-45b6-af00-f6be0762d751","seq":21,"payload":{"text":"command."}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"session.title","session_id":"4a9868c9-59bc-45b6-af00-f6be0762d751","seq":22,"payload":{"title":"Fake: Please approve a command."}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.complete","session_id":"4a9868c9-59bc-45b6-af00-f6be0762d751","seq":23,"payload":{"status":"complete","text":"You said no, so nothing ran. Hello from the fake agent. You said: Please approve a command.","usage":{"context_used":1086,"context_max":200000}}}}}

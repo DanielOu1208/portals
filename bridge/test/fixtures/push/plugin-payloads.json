@@ -1,0 +1,361 @@
+{
+ "about": "Inputs to compose() and the payload the Hermes plugin gives for each (hermes-plugin/aeriportal-push/core.py), as JSON. The bridge must serialize exactly the same. Without Hermes the plugin redacts nothing, so no case holds a secret. After changing a case, fill in the payloads again with: python3 -I scripts/plugin-payloads.py",
+ "cases": [
+  {
+   "name": "approval: the first line of the command",
+   "kind": "approval",
+   "thread_id": "20261005_000000_root01",
+   "thread": {
+    "agent": "karina",
+    "agent_name": "Karina",
+    "title": "Fix the build"
+   },
+   "text": "rm -rf build\n# cleanup",
+   "payload": "{\"aps\":{\"alert\":{\"title\":\"Karina\",\"body\":\"Wants to run: rm -rf build\",\"subtitle\":\"Fix the build\"},\"sound\":\"default\",\"thread-id\":\"20261005_000000_root01\",\"mutable-content\":1},\"aeriportal\":{\"thread\":\"20261005_000000_root01\",\"kind\":\"approval\",\"agent\":\"karina\"}}"
+  },
+  {
+   "name": "approval: no command",
+   "kind": "approval",
+   "thread_id": "20261005_000000_root01",
+   "thread": {
+    "agent": "karina",
+    "agent_name": "Karina",
+    "title": "Fix the build"
+   },
+   "text": "",
+   "payload": "{\"aps\":{\"alert\":{\"title\":\"Karina\",\"body\":\"Needs your approval\",\"subtitle\":\"Fix the build\"},\"sound\":\"default\",\"thread-id\":\"20261005_000000_root01\",\"mutable-content\":1},\"aeriportal\":{\"thread\":\"20261005_000000_root01\",\"kind\":\"approval\",\"agent\":\"karina\"}}"
+  },
+  {
+   "name": "question",
+   "kind": "question",
+   "thread_id": "20261005_000000_root01",
+   "thread": {
+    "agent": "karina",
+    "agent_name": "Karina",
+    "title": "Fix the build"
+   },
+   "text": "Which language?",
+   "payload": "{\"aps\":{\"alert\":{\"title\":\"Karina\",\"body\":\"Which language?\",\"subtitle\":\"Fix the build\"},\"sound\":\"default\",\"thread-id\":\"20261005_000000_root01\",\"mutable-content\":1},\"aeriportal\":{\"thread\":\"20261005_000000_root01\",\"kind\":\"question\",\"agent\":\"karina\"}}"
+  },
+  {
+   "name": "question: none given",
+   "kind": "question",
+   "thread_id": "20261005_000000_root01",
+   "thread": {
+    "agent": "karina",
+    "agent_name": "Karina",
+    "title": "Fix the build"
+   },
+   "text": "",
+   "payload": "{\"aps\":{\"alert\":{\"title\":\"Karina\",\"body\":\"Has a question for you\",\"subtitle\":\"Fix the build\"},\"sound\":\"default\",\"thread-id\":\"20261005_000000_root01\",\"mutable-content\":1},\"aeriportal\":{\"thread\":\"20261005_000000_root01\",\"kind\":\"question\",\"agent\":\"karina\"}}"
+  },
+  {
+   "name": "finished: the first line of the reply",
+   "kind": "finished",
+   "thread_id": "20261005_000000_root01",
+   "thread": {
+    "agent": "karina",
+    "agent_name": "Karina",
+    "title": "Fix the build"
+   },
+   "text": "All 14 tests pass.\nDetails follow",
+   "payload": "{\"aps\":{\"alert\":{\"title\":\"Karina\",\"body\":\"All 14 tests pass.\",\"subtitle\":\"Fix the build\"},\"sound\":\"default\",\"thread-id\":\"20261005_000000_root01\",\"mutable-content\":1},\"aeriportal\":{\"thread\":\"20261005_000000_root01\",\"kind\":\"finished\",\"agent\":\"karina\"}}"
+  },
+  {
+   "name": "finished: no reply",
+   "kind": "finished",
+   "thread_id": "20261005_000000_root01",
+   "thread": {
+    "agent": "karina",
+    "agent_name": "Karina",
+    "title": "Fix the build"
+   },
+   "text": "",
+   "payload": "{\"aps\":{\"alert\":{\"title\":\"Karina\",\"body\":\"Finished\",\"subtitle\":\"Fix the build\"},\"sound\":\"default\",\"thread-id\":\"20261005_000000_root01\",\"mutable-content\":1},\"aeriportal\":{\"thread\":\"20261005_000000_root01\",\"kind\":\"finished\",\"agent\":\"karina\"}}"
+  },
+  {
+   "name": "failed",
+   "kind": "failed",
+   "thread_id": "20261005_000000_root01",
+   "thread": {
+    "agent": "karina",
+    "agent_name": "Karina",
+    "title": "Fix the build"
+   },
+   "text": "provider did not answer",
+   "payload": "{\"aps\":{\"alert\":{\"title\":\"Karina\",\"body\":\"Stopped with an error: provider did not answer\",\"subtitle\":\"Fix the build\"},\"sound\":\"default\",\"thread-id\":\"20261005_000000_root01\",\"mutable-content\":1},\"aeriportal\":{\"thread\":\"20261005_000000_root01\",\"kind\":\"failed\",\"agent\":\"karina\"}}"
+  },
+  {
+   "name": "failed: no error",
+   "kind": "failed",
+   "thread_id": "20261005_000000_root01",
+   "thread": {
+    "agent": "karina",
+    "agent_name": "Karina",
+    "title": "Fix the build"
+   },
+   "text": "",
+   "payload": "{\"aps\":{\"alert\":{\"title\":\"Karina\",\"body\":\"Stopped with an error\",\"subtitle\":\"Fix the build\"},\"sound\":\"default\",\"thread-id\":\"20261005_000000_root01\",\"mutable-content\":1},\"aeriportal\":{\"thread\":\"20261005_000000_root01\",\"kind\":\"failed\",\"agent\":\"karina\"}}"
+  },
+  {
+   "name": "an unknown kind",
+   "kind": "something else",
+   "thread_id": "20261005_000000_root01",
+   "thread": {
+    "agent": "karina",
+    "agent_name": "Karina",
+    "title": "Fix the build"
+   },
+   "text": "x",
+   "payload": null
+  },
+  {
+   "name": "a thread with neither title nor display name",
+   "kind": "finished",
+   "thread_id": "t1",
+   "thread": {
+    "agent": "aeri"
+   },
+   "text": "Done",
+   "payload": "{\"aps\":{\"alert\":{\"title\":\"aeri\",\"body\":\"Done\"},\"sound\":\"default\",\"thread-id\":\"t1\",\"mutable-content\":1},\"aeriportal\":{\"thread\":\"t1\",\"kind\":\"finished\",\"agent\":\"aeri\"}}"
+  },
+  {
+   "name": "a thread registered without its agent",
+   "kind": "approval",
+   "thread_id": "t1",
+   "thread": {
+    "agent_name": "Karina"
+   },
+   "text": "swift test",
+   "payload": "{\"aps\":{\"alert\":{\"title\":\"Karina\",\"body\":\"Wants to run: swift test\"},\"sound\":\"default\",\"thread-id\":\"t1\",\"mutable-content\":1},\"aeriportal\":{\"thread\":\"t1\",\"kind\":\"approval\"}}"
+  },
+  {
+   "name": "a thread with no names at all",
+   "kind": "finished",
+   "thread_id": "t1",
+   "thread": {
+    "agent": "",
+    "agent_name": "",
+    "title": ""
+   },
+   "text": "Done",
+   "payload": "{\"aps\":{\"alert\":{\"title\":\"Agent\",\"body\":\"Done\"},\"sound\":\"default\",\"thread-id\":\"t1\",\"mutable-content\":1},\"aeriportal\":{\"thread\":\"t1\",\"kind\":\"finished\"}}"
+  },
+  {
+   "name": "blank lines and runs of spaces",
+   "kind": "finished",
+   "thread_id": "20261005_000000_root01",
+   "thread": {
+    "agent": "karina",
+    "agent_name": "Karina",
+    "title": "Fix the build"
+   },
+   "text": "\n\n  Done.   All  good.\nMore",
+   "payload": "{\"aps\":{\"alert\":{\"title\":\"Karina\",\"body\":\"Done. All good.\",\"subtitle\":\"Fix the build\"},\"sound\":\"default\",\"thread-id\":\"20261005_000000_root01\",\"mutable-content\":1},\"aeriportal\":{\"thread\":\"20261005_000000_root01\",\"kind\":\"finished\",\"agent\":\"karina\"}}"
+  },
+  {
+   "name": "tabs",
+   "kind": "finished",
+   "thread_id": "20261005_000000_root01",
+   "thread": {
+    "agent": "karina",
+    "agent_name": "Karina",
+    "title": "Fix the build"
+   },
+   "text": "\tfoo\t\tbar  ",
+   "payload": "{\"aps\":{\"alert\":{\"title\":\"Karina\",\"body\":\"foo bar\",\"subtitle\":\"Fix the build\"},\"sound\":\"default\",\"thread-id\":\"20261005_000000_root01\",\"mutable-content\":1},\"aeriportal\":{\"thread\":\"20261005_000000_root01\",\"kind\":\"finished\",\"agent\":\"karina\"}}"
+  },
+  {
+   "name": "a long line is cut with an ellipsis",
+   "kind": "finished",
+   "thread_id": "20261005_000000_root01",
+   "thread": {
+    "agent": "karina",
+    "agent_name": "Karina",
+    "title": "Fix the build"
+   },
+   "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "payload": "{\"aps\":{\"alert\":{\"title\":\"Karina\",\"body\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\u2026\",\"subtitle\":\"Fix the build\"},\"sound\":\"default\",\"thread-id\":\"20261005_000000_root01\",\"mutable-content\":1},\"aeriportal\":{\"thread\":\"20261005_000000_root01\",\"kind\":\"finished\",\"agent\":\"karina\"}}"
+  },
+  {
+   "name": "exactly the limit",
+   "kind": "finished",
+   "thread_id": "20261005_000000_root01",
+   "thread": {
+    "agent": "karina",
+    "agent_name": "Karina",
+    "title": "Fix the build"
+   },
+   "text": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+   "payload": "{\"aps\":{\"alert\":{\"title\":\"Karina\",\"body\":\"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\",\"subtitle\":\"Fix the build\"},\"sound\":\"default\",\"thread-id\":\"20261005_000000_root01\",\"mutable-content\":1},\"aeriportal\":{\"thread\":\"20261005_000000_root01\",\"kind\":\"finished\",\"agent\":\"karina\"}}"
+  },
+  {
+   "name": "one over the limit",
+   "kind": "finished",
+   "thread_id": "20261005_000000_root01",
+   "thread": {
+    "agent": "karina",
+    "agent_name": "Karina",
+    "title": "Fix the build"
+   },
+   "text": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+   "payload": "{\"aps\":{\"alert\":{\"title\":\"Karina\",\"body\":\"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\u2026\",\"subtitle\":\"Fix the build\"},\"sound\":\"default\",\"thread-id\":\"20261005_000000_root01\",\"mutable-content\":1},\"aeriportal\":{\"thread\":\"20261005_000000_root01\",\"kind\":\"finished\",\"agent\":\"karina\"}}"
+  },
+  {
+   "name": "a cut that lands after a space",
+   "kind": "finished",
+   "thread_id": "20261005_000000_root01",
+   "thread": {
+    "agent": "karina",
+    "agent_name": "Karina",
+    "title": "Fix the build"
+   },
+   "text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bcccccccccccccccccccc",
+   "payload": "{\"aps\":{\"alert\":{\"title\":\"Karina\",\"body\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\u2026\",\"subtitle\":\"Fix the build\"},\"sound\":\"default\",\"thread-id\":\"20261005_000000_root01\",\"mutable-content\":1},\"aeriportal\":{\"thread\":\"20261005_000000_root01\",\"kind\":\"finished\",\"agent\":\"karina\"}}"
+  },
+  {
+   "name": "a long command",
+   "kind": "approval",
+   "thread_id": "20261005_000000_root01",
+   "thread": {
+    "agent": "karina",
+    "agent_name": "Karina",
+    "title": "Fix the build"
+   },
+   "text": "echo word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word ",
+   "payload": "{\"aps\":{\"alert\":{\"title\":\"Karina\",\"body\":\"Wants to run: echo word word word word word word word word word word word word word word word word word word word word word word word\u2026\",\"subtitle\":\"Fix the build\"},\"sound\":\"default\",\"thread-id\":\"20261005_000000_root01\",\"mutable-content\":1},\"aeriportal\":{\"thread\":\"20261005_000000_root01\",\"kind\":\"approval\",\"agent\":\"karina\"}}"
+  },
+  {
+   "name": "characters outside the BMP count once",
+   "kind": "finished",
+   "thread_id": "20261005_000000_root01",
+   "thread": {
+    "agent": "karina",
+    "agent_name": "Karina",
+    "title": "Fix the build"
+   },
+   "text": "\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d",
+   "payload": "{\"aps\":{\"alert\":{\"title\":\"Karina\",\"body\":\"\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\ud83d\udc4d\u2026\",\"subtitle\":\"Fix the build\"},\"sound\":\"default\",\"thread-id\":\"20261005_000000_root01\",\"mutable-content\":1},\"aeriportal\":{\"thread\":\"20261005_000000_root01\",\"kind\":\"finished\",\"agent\":\"karina\"}}"
+  },
+  {
+   "name": "accents",
+   "kind": "finished",
+   "thread_id": "20261005_000000_root01",
+   "thread": {
+    "agent": "karina",
+    "agent_name": "Karina",
+    "title": "Fix the build"
+   },
+   "text": "\u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 ",
+   "payload": "{\"aps\":{\"alert\":{\"title\":\"Karina\",\"body\":\"\u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9 \u00e9t\u00e9\u2026\",\"subtitle\":\"Fix the build\"},\"sound\":\"default\",\"thread-id\":\"20261005_000000_root01\",\"mutable-content\":1},\"aeriportal\":{\"thread\":\"20261005_000000_root01\",\"kind\":\"finished\",\"agent\":\"karina\"}}"
+  },
+  {
+   "name": "Unicode spaces collapse as Python's split does",
+   "kind": "finished",
+   "thread_id": "20261005_000000_root01",
+   "thread": {
+    "agent": "karina",
+    "agent_name": "Karina",
+    "title": "Fix the build"
+   },
+   "text": "a\u00a0b\u2003c\u3000d\u202fe\u001cf\u001fg",
+   "payload": "{\"aps\":{\"alert\":{\"title\":\"Karina\",\"body\":\"a b c d e\",\"subtitle\":\"Fix the build\"},\"sound\":\"default\",\"thread-id\":\"20261005_000000_root01\",\"mutable-content\":1},\"aeriportal\":{\"thread\":\"20261005_000000_root01\",\"kind\":\"finished\",\"agent\":\"karina\"}}"
+  },
+  {
+   "name": "a zero-width no-break space is not a space",
+   "kind": "finished",
+   "thread_id": "20261005_000000_root01",
+   "thread": {
+    "agent": "karina",
+    "agent_name": "Karina",
+    "title": "Fix the build"
+   },
+   "text": "\ufeffhi\u200bthere",
+   "payload": "{\"aps\":{\"alert\":{\"title\":\"Karina\",\"body\":\"\ufeffhi\u200bthere\",\"subtitle\":\"Fix the build\"},\"sound\":\"default\",\"thread-id\":\"20261005_000000_root01\",\"mutable-content\":1},\"aeriportal\":{\"thread\":\"20261005_000000_root01\",\"kind\":\"finished\",\"agent\":\"karina\"}}"
+  },
+  {
+   "name": "Unicode line breaks",
+   "kind": "question",
+   "thread_id": "20261005_000000_root01",
+   "thread": {
+    "agent": "karina",
+    "agent_name": "Karina",
+    "title": "Fix the build"
+   },
+   "text": "\u2028\u2029first\u2028second",
+   "payload": "{\"aps\":{\"alert\":{\"title\":\"Karina\",\"body\":\"first\",\"subtitle\":\"Fix the build\"},\"sound\":\"default\",\"thread-id\":\"20261005_000000_root01\",\"mutable-content\":1},\"aeriportal\":{\"thread\":\"20261005_000000_root01\",\"kind\":\"question\",\"agent\":\"karina\"}}"
+  },
+  {
+   "name": "CRLF and other breaks",
+   "kind": "question",
+   "thread_id": "20261005_000000_root01",
+   "thread": {
+    "agent": "karina",
+    "agent_name": "Karina",
+    "title": "Fix the build"
+   },
+   "text": "\r\n\u0085\u000b\fline one\r\nline two",
+   "payload": "{\"aps\":{\"alert\":{\"title\":\"Karina\",\"body\":\"line one\",\"subtitle\":\"Fix the build\"},\"sound\":\"default\",\"thread-id\":\"20261005_000000_root01\",\"mutable-content\":1},\"aeriportal\":{\"thread\":\"20261005_000000_root01\",\"kind\":\"question\",\"agent\":\"karina\"}}"
+  },
+  {
+   "name": "a long title is cut to 80",
+   "kind": "finished",
+   "thread_id": "20261005_000000_root01",
+   "thread": {
+    "agent": "karina",
+    "agent_name": "Karina",
+    "title": "Title Title Title Title Title Title Title Title Title Title Title Title Title Title Title Title Title Title Title Title Title Title Title Title Title Title Title Title Title Title "
+   },
+   "text": "Done",
+   "payload": "{\"aps\":{\"alert\":{\"title\":\"Karina\",\"body\":\"Done\",\"subtitle\":\"Title Title Title Title Title Title Title Title Title Title Title Title Title T\u2026\"},\"sound\":\"default\",\"thread-id\":\"20261005_000000_root01\",\"mutable-content\":1},\"aeriportal\":{\"thread\":\"20261005_000000_root01\",\"kind\":\"finished\",\"agent\":\"karina\"}}"
+  },
+  {
+   "name": "a title of two lines",
+   "kind": "finished",
+   "thread_id": "20261005_000000_root01",
+   "thread": {
+    "agent": "karina",
+    "agent_name": "Karina",
+    "title": "First line\nsecond line"
+   },
+   "text": "Done",
+   "payload": "{\"aps\":{\"alert\":{\"title\":\"Karina\",\"body\":\"Done\",\"subtitle\":\"First line\"},\"sound\":\"default\",\"thread-id\":\"20261005_000000_root01\",\"mutable-content\":1},\"aeriportal\":{\"thread\":\"20261005_000000_root01\",\"kind\":\"finished\",\"agent\":\"karina\"}}"
+  },
+  {
+   "name": "a title of spaces",
+   "kind": "finished",
+   "thread_id": "20261005_000000_root01",
+   "thread": {
+    "agent": "karina",
+    "agent_name": "Karina",
+    "title": "   "
+   },
+   "text": "Done",
+   "payload": "{\"aps\":{\"alert\":{\"title\":\"Karina\",\"body\":\"Done\",\"subtitle\":\"\"},\"sound\":\"default\",\"thread-id\":\"20261005_000000_root01\",\"mutable-content\":1},\"aeriportal\":{\"thread\":\"20261005_000000_root01\",\"kind\":\"finished\",\"agent\":\"karina\"}}"
+  },
+  {
+   "name": "a Claude thread",
+   "kind": "approval",
+   "thread_id": "6f1c0a6e-1111-4c4c-9999-000000000001",
+   "thread": {
+    "agent": "claude",
+    "agent_name": "Claude Code",
+    "title": "Tidy the README"
+   },
+   "text": "Edit /Users/dev/coding_projects/app/README.md",
+   "payload": "{\"aps\":{\"alert\":{\"title\":\"Claude Code\",\"body\":\"Wants to run: Edit /Users/dev/coding_projects/app/README.md\",\"subtitle\":\"Tidy the README\"},\"sound\":\"default\",\"thread-id\":\"6f1c0a6e-1111-4c4c-9999-000000000001\",\"mutable-content\":1},\"aeriportal\":{\"thread\":\"6f1c0a6e-1111-4c4c-9999-000000000001\",\"kind\":\"approval\",\"agent\":\"claude\"}}"
+  },
+  {
+   "name": "a Codex question",
+   "kind": "question",
+   "thread_id": "019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b",
+   "thread": {
+    "agent": "codex",
+    "agent_name": "Codex",
+    "title": ""
+   },
+   "text": "Which branch should I use?",
+   "payload": "{\"aps\":{\"alert\":{\"title\":\"Codex\",\"body\":\"Which branch should I use?\"},\"sound\":\"default\",\"thread-id\":\"019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b\",\"mutable-content\":1},\"aeriportal\":{\"thread\":\"019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b\",\"kind\":\"question\",\"agent\":\"codex\"}}"
+  }
+ ]
+}

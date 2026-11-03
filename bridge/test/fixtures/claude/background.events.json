@@ -1,0 +1,70 @@
+[
+ {
+  "type": "tool.start",
+  "id": "toolu_01Fz3yCD67r2j9swSASvrS6R",
+  "name": "terminal",
+  "args": {
+   "command": "sleep 3"
+  }
+ },
+ {
+  "type": "tool.end",
+  "id": "toolu_01Fz3yCD67r2j9swSASvrS6R",
+  "name": "terminal",
+  "args": {
+   "command": "sleep 3"
+  },
+  "result": {
+   "output": "Command running in background with ID: bx62fxigm. Output is being written to: /private/tmp/claude-501/-private-tmp-portals-night-scratch-bugs-record-claude-background/0dda0568-f1a2-487d-8d47-2cedadb6a7c6/tasks/bx62fxigm.output. You will be notified when it completes. To check interim output, use Read on that file path.",
+   "exit_code": 0
+  },
+  "durationSeconds": 0
+ },
+ {
+  "type": "text",
+  "text": "The background sleep is running (task bx62fxigm); I'm not waiting on it.",
+  "pieces": 9
+ },
+ {
+  "type": "turn.end",
+  "status": "complete",
+  "usage": {
+   "used": 27438,
+   "max": 1000000
+  },
+  "spent": {
+   "tokens": 52911
+  }
+ },
+ {
+  "type": "turn.begin",
+  "user": "Background command \"Sleep for 3 seconds in background\" completed (exit code 0)",
+  "host": {
+   "kind": "process_complete",
+   "text": "Background command \"Sleep for 3 seconds in background\" completed (exit code 0)"
+  }
+ },
+ {
+  "type": "usage",
+  "usage": {
+   "used": 27829,
+   "max": 1000000
+  }
+ },
+ {
+  "type": "text",
+  "text": "The background `sleep 3` finished with exit code 0.",
+  "pieces": 3
+ },
+ {
+  "type": "turn.end",
+  "status": "complete",
+  "usage": {
+   "used": 27841,
+   "max": 1000000
+  },
+  "spent": {
+   "tokens": 27841
+  }
+ }
+]

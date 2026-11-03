@@ -1,0 +1,51 @@
+{
+ "messages": [
+  {
+   "role": "user",
+   "text": "Run `sleep 4` with bash. Then reply with the single word done.",
+   "timestamp": 1791801839.25
+  },
+  {
+   "role": "tool",
+   "name": "terminal",
+   "args": {
+    "command": "sleep 4"
+   },
+   "content": "{\"output\":\"\",\"exit_code\":0}",
+   "tool_call_id": "call_KYmRqGffukY6GY8D2TRSPw8K|fc_0617c94f095390d2016accb9f0cc3c87d0b6d183c1817efb93",
+   "timestamp": 1791801845.251,
+   "turn_usage": {
+    "tokens": 1201
+   }
+  },
+  {
+   "role": "user",
+   "text": "Also add the word banana to your reply.",
+   "timestamp": 1791801845.251,
+   "display_kind": "steer"
+  },
+  {
+   "role": "assistant",
+   "text": "done",
+   "timestamp": 1791801845.253,
+   "turn_usage": {
+    "tokens": 1233
+   }
+  },
+  {
+   "role": "user",
+   "text": "Now reply with only the word cherry.",
+   "timestamp": 1791801845.253,
+   "display_kind": "steer"
+  },
+  {
+   "role": "assistant",
+   "text": "cherry",
+   "timestamp": 1791801846.85,
+   "turn_usage": {
+    "tokens": 1253
+   }
+  }
+ ],
+ "title": null
+}

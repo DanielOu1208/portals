@@ -1,0 +1,19 @@
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"replay_epoch":"ca4a3cb1079e6d8958fc0de46e801677","heartbeat":true,"bridge":{"protocol":1,"features":[]}}}}}
+{"dir":"out","frame":{"id":"r1","jsonrpc":"2.0","method":"client.capabilities","params":{"server_requests":true}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"r1","result":{"server_requests":["approval","clarify"]}}}
+{"dir":"out","frame":{"id":"r2","jsonrpc":"2.0","method":"session.create","params":{"cwd":"/tmp/aeriportal-cwd","source":"tui","title":"aeriportal-probe"}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"r2","result":{"session_id":"ceb958f7-489e-41ea-8219-b8f9df8be6ad","stored_session_id":"ceb958f7-489e-41ea-8219-b8f9df8be6ad","info":{"model":"fake-1","provider":"fake","reasoning_effort":"medium","cwd":"/tmp/aeriportal-cwd","running":false,"profile_name":"fake","title":"aeriportal-probe"}}}}
+{"dir":"out","frame":{"id":"r3","jsonrpc":"2.0","method":"prompt.submit","params":{"session_id":"ceb958f7-489e-41ea-8219-b8f9df8be6ad","text":"Say hello."}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"r3","result":{"status":"streaming"}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.start","session_id":"ceb958f7-489e-41ea-8219-b8f9df8be6ad","seq":1}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"ceb958f7-489e-41ea-8219-b8f9df8be6ad","seq":2,"payload":{"text":"Hello "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"ceb958f7-489e-41ea-8219-b8f9df8be6ad","seq":3,"payload":{"text":"from "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"ceb958f7-489e-41ea-8219-b8f9df8be6ad","seq":4,"payload":{"text":"the "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"ceb958f7-489e-41ea-8219-b8f9df8be6ad","seq":5,"payload":{"text":"fake "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"ceb958f7-489e-41ea-8219-b8f9df8be6ad","seq":6,"payload":{"text":"agent. "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"ceb958f7-489e-41ea-8219-b8f9df8be6ad","seq":7,"payload":{"text":"You "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"ceb958f7-489e-41ea-8219-b8f9df8be6ad","seq":8,"payload":{"text":"said: "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"ceb958f7-489e-41ea-8219-b8f9df8be6ad","seq":9,"payload":{"text":"Say "}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"ceb958f7-489e-41ea-8219-b8f9df8be6ad","seq":10,"payload":{"text":"hello."}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"session.title","session_id":"ceb958f7-489e-41ea-8219-b8f9df8be6ad","seq":11,"payload":{"title":"Fake: Say hello."}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.complete","session_id":"ceb958f7-489e-41ea-8219-b8f9df8be6ad","seq":12,"payload":{"status":"complete","text":"Hello from the fake agent. You said: Say hello.","usage":{"context_used":1016,"context_max":200000}}}}}

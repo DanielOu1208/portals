@@ -1,0 +1,18 @@
+[
+ {
+  "type": "text",
+  "text": "Hello!",
+  "pieces": 1
+ },
+ {
+  "type": "turn.end",
+  "status": "complete",
+  "usage": {
+   "used": 25215,
+   "max": 1000000
+  },
+  "spent": {
+   "tokens": 25215
+  }
+ }
+]

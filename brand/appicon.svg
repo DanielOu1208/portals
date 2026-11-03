@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>Portals app icon (concept 42, Lit overlap)</title>
+  <defs>
+    <linearGradient id="back" gradientUnits="userSpaceOnUse" x1="0" y1="125" x2="0" y2="763"><stop offset="0" stop-color="#656565"/><stop offset="1" stop-color="#373737"/></linearGradient>
+    <linearGradient id="front" gradientUnits="userSpaceOnUse" x1="0" y1="257" x2="0" y2="895"><stop offset="0" stop-color="#9C9C9C"/><stop offset="1" stop-color="#4A4A4A"/></linearGradient>
+    <radialGradient id="through" gradientUnits="userSpaceOnUse" cx="512" cy="565" r="330"><stop offset="0" stop-color="#FFFFFF"/><stop offset="0.55" stop-color="#EFEFEF"/><stop offset="1" stop-color="#B0B0B0"/></radialGradient>
+    <clipPath id="front-door"><path d="M218.3,895L218.3,477A220,220 0 0 1 658.3,477L658.3,895Z"/></clipPath>
+    <radialGradient id="bloom" gradientUnits="userSpaceOnUse" cx="512" cy="521" r="462"><stop offset="0" stop-color="#FFFFFF" stop-opacity="0.22"/><stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/></radialGradient>
+  </defs>
+  <g id="background">
+    <rect width="1024" height="1024" fill="#000000"/>
+  </g>
+  <g id="foreground">
+    <path d="M974,521L973.01,551.22L970.05,581.3L965.12,611.13L958.26,640.57L949.48,669.51L938.83,697.8L926.36,725.34L912.1,752L896.14,777.67L878.53,802.25L859.35,825.62L838.68,847.68L816.62,868.35L793.25,887.53L768.67,905.14L743,921.1L716.34,935.36L688.8,947.83L660.51,958.48L631.57,967.26L602.13,974.12L572.3,979.05L542.22,982.01L512,983L481.78,982.01L451.7,979.05L421.87,974.12L392.43,967.26L363.49,958.48L335.2,947.83L307.66,935.36L281,921.1L255.33,905.14L230.75,887.53L207.38,868.35L185.32,847.68L164.65,825.62L145.47,802.25L127.86,777.67L111.9,752L97.64,725.34L85.17,697.8L74.52,669.51L65.74,640.57L58.88,611.13L53.95,581.3L50.99,551.22L50,521L50.99,490.78L53.95,460.7L58.88,430.87L65.74,401.43L74.52,372.49L85.17,344.2L97.64,316.66L111.9,290L127.86,264.33L145.47,239.75L164.65,216.38L185.32,194.32L207.38,173.65L230.75,154.47L255.33,136.86L281,120.9L307.66,106.64L335.2,94.17L363.49,83.52L392.43,74.74L421.87,67.88L451.7,62.95L481.78,59.99L512,59L542.22,59.99L572.3,62.95L602.13,67.88L631.57,74.74L660.51,83.52L688.8,94.17L716.34,106.64L743,120.9L768.67,136.86L793.25,154.47L816.62,173.65L838.68,194.32L859.35,216.38L878.53,239.75L896.14,264.33L912.1,290L926.36,316.66L938.83,344.2L949.48,372.49L958.26,401.43L965.12,430.87L970.05,460.7L973.01,490.78Z" fill="url(#bloom)"/>
+    <path d="M365.7,763L365.7,345A220,220 0 0 1 805.7,345L805.7,763Z" fill="url(#back)"/>
+    <path d="M218.3,895L218.3,477A220,220 0 0 1 658.3,477L658.3,895Z" fill="url(#front)"/>
+    <path d="M365.7,763L365.7,345A220,220 0 0 1 805.7,345L805.7,763Z" fill="url(#through)" clip-path="url(#front-door)"/>
+  </g>
+</svg>

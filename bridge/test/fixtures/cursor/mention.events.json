@@ -1,0 +1,22 @@
+[
+ {
+  "type": "prompt",
+  "text": "What is the word of the day in the file I mention? Answer with the word only. [resource_link]"
+ },
+ {
+  "type": "title",
+  "title": "Word Of Day"
+ },
+ {
+  "type": "reasoning",
+  "text": "The word of the day is quince."
+ },
+ {
+  "type": "text",
+  "text": "quince"
+ },
+ {
+  "type": "turn.end",
+  "status": "complete"
+ }
+]

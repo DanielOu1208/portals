@@ -1,0 +1,22 @@
+[
+ {
+  "type": "prompt",
+  "text": "What is 17 times 3? Answer in one short sentence."
+ },
+ {
+  "type": "title",
+  "title": "Math Problem Solver"
+ },
+ {
+  "type": "reasoning",
+  "text": "The user wants the product of 17 and 3 in one short sentence."
+ },
+ {
+  "type": "text",
+  "text": "17 times 3 is 51."
+ },
+ {
+  "type": "turn.end",
+  "status": "complete"
+ }
+]

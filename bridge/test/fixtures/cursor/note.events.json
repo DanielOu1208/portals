@@ -1,0 +1,22 @@
+[
+ {
+  "type": "prompt",
+  "text": "What is the word of the day? Answer with that one word. [resource]"
+ },
+ {
+  "type": "title",
+  "title": "Word Of Day"
+ },
+ {
+  "type": "reasoning",
+  "text": "The word of the day is plum."
+ },
+ {
+  "type": "text",
+  "text": "plum"
+ },
+ {
+  "type": "turn.end",
+  "status": "complete"
+ }
+]

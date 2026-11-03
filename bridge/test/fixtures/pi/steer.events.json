@@ -1,0 +1,52 @@
+[
+ {
+  "type": "tool.start",
+  "id": "call_KYmRqGffukY6GY8D2TRSPw8K|fc_0617c94f095390d2016accb9f0cc3c87d0b6d183c1817efb93",
+  "name": "terminal",
+  "args": {
+   "command": "sleep 4"
+  }
+ },
+ {
+  "type": "tool.end",
+  "id": "call_KYmRqGffukY6GY8D2TRSPw8K|fc_0617c94f095390d2016accb9f0cc3c87d0b6d183c1817efb93",
+  "name": "terminal",
+  "args": {
+   "command": "sleep 4"
+  },
+  "result": {
+   "output": "",
+   "exit_code": 0
+  },
+  "durationSeconds": 4.017
+ },
+ {
+  "type": "text",
+  "text": "done",
+  "pieces": 1
+ },
+ {
+  "type": "commentary",
+  "text": "done",
+  "alreadyStreamed": true
+ },
+ {
+  "type": "text",
+  "text": "cherry",
+  "pieces": 2
+ },
+ {
+  "type": "turn.end",
+  "status": "complete",
+  "spent": {
+   "tokens": 3687
+  }
+ },
+ {
+  "type": "usage",
+  "usage": {
+   "used": 1253,
+   "max": 272000
+  }
+ }
+]

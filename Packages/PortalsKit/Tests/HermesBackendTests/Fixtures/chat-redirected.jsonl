@@ -1,0 +1,63 @@
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"skin":{"name":"default"},"change_events":true,"heartbeat":true,"replay_epoch":"8a9e048c70014c77aef21efa5a9a90ee"}}}}
+{"dir":"out","frame":{"id":"r1","jsonrpc":"2.0","method":"client.capabilities","params":{"server_requests":true}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"r1","result":{"server_requests":["approval","clarify","display.install.sudo","preview.act","preview.read","secret","sudo","terminal.read","tour","vault.code","vault.save_login","vault.unlock_prompt","window.read"],"declines_not_shown":true}}}
+{"dir":"out","frame":{"id":"r2","jsonrpc":"2.0","method":"session.create","params":{"cwd":"/tmp/aeriportal-cwd","model":"google/gemini-3.8-flash","provider":"gmi","source":"tui","title":"aeriportal-probe"}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"r2","result":{"session_id":"51a431e3","stored_session_id":"20261004_225730_c76589","message_count":0,"messages":[],"info":{"model":"google/gemini-3.8-flash","provider":"gmi","tools":{},"skills":{},"cwd":"/tmp/aeriportal-cwd","branch":"","project":null,"lazy":true,"desktop_contract":8,"profile_name":"default"}}}}
+{"dir":"out","frame":{"id":"r3","jsonrpc":"2.0","method":"prompt.submit","params":{"session_id":"51a431e3","text":"Count slowly from one to twenty in words, one number per line. Do not use any tools."}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"r3","result":{"status":"streaming","user_row_id":62}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"session.info","session_id":"51a431e3","payload":{"model":"google/gemini-3.8-flash","provider":"gmi","reasoning_effort":"","reasoning_effort_wire":"","service_tier":"","fast":false,"yolo":false,"approval_mode":"smart","tools":{},"skills":{},"cwd":"/tmp/aeriportal-cwd","branch":"","project":null,"terminal_backend":"local","personality":"","running":true,"turn_started_at":1791179850.163248,"title":"aeriportal-probe","stored_session_id":"20261004_225730_c76589","desktop_contract":8,"version":"0.21.5","release_date":"2026.9.24","update_behind":1719,"update_command":"hermes update","usage":{"model":"google/gemini-3.8-flash","input":0,"output":0,"reasoning":0,"prompt":0,"completion":0,"total":0,"calls":0,"compressions":0,"active_subagents":0},"profile_name":"default","mcp_servers":[],"system_prompt":null},"seq":1}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.start","session_id":"51a431e3","seq":2}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"session.title","session_id":"51a431e3","payload":{"session_id":"20261004_225730_c76589","title":"Count slowly from one to twenty in words, one…"},"seq":3}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"thinking.delta","session_id":"51a431e3","payload":{"text":"ಠ_ಠ musing..."},"seq":4}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"sessions.changed","session_id":"","payload":{}}}}
+{"dir":"out","frame":{"id":"r4","jsonrpc":"2.0","method":"prompt.submit","params":{"session_id":"51a431e3","text":"Now say the single word: second."}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","id":"r4","result":{"status":"redirected"}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"thinking.delta","session_id":"51a431e3","payload":{"text":""},"seq":5}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"thinking.delta","session_id":"51a431e3","payload":{"text":"( ˘⌣˘)♡ computing..."},"seq":6}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"sessions.changed","session_id":"","payload":{}}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"session.title","session_id":"51a431e3","payload":{"session_id":"20261004_225730_c76589","title":"Count one to twenty in words"},"seq":7}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"thinking.delta","session_id":"51a431e3","payload":{"text":""},"seq":8}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"51a431e3","payload":{"text":"\n\nsecond"},"seq":9}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"thinking.delta","session_id":"51a431e3","payload":{"text":""},"seq":10}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"reasoning.available","session_id":"51a431e3","payload":{"text":"second"},"seq":11}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"message.complete","session_id":"51a431e3","payload":{"text":"second","usage":{"model":"google/gemini-3.8-flash","input":12451,"output":1,"reasoning":0,"prompt":12451,"completion":1,"total":12452,"calls":1,"context_used":12451,"context_max":1048576,"context_percent":1,"context_source":"provider_usage","context_estimated":false,"compressions":0,"avg_latency_s":2.0,"avg_tps":0.5,"active_subagents":0},"status":"complete","persisted_turn":{"row_ids":[62,63,64,65],"complete":false,"user_row_id":62,"final_assistant_row_id":65}},"seq":12}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"session.info","session_id":"51a431e3","payload":{"model":"google/gemini-3.8-flash","provider":"gmi","reasoning_effort":"","reasoning_effort_wire":"","service_tier":"","fast":false,"yolo":false,"approval_mode":"smart","tools":{},"skills":{},"cwd":"/tmp/aeriportal-cwd","branch":"","project":null,"terminal_backend":"local","personality":"","running":false,"turn_started_at":null,"title":"Count one to twenty in words","stored_session_id":"20261004_225730_c76589","desktop_contract":8,"version":"0.21.5","release_date":"2026.9.24","update_behind":1719,"update_command":"hermes update","usage":{"model":"google/gemini-3.8-flash","input":12451,"output":1,"reasoning":0,"prompt":12451,"completion":1,"total":12452,"calls":1,"context_used":12451,"context_max":1048576,"context_percent":1,"context_source":"provider_usage","context_estimated":false,"compressions":0,"avg_latency_s":2.0,"avg_tps":0.5,"active_subagents":0},"profile_name":"default","mcp_servers":[],"system_prompt":null},"seq":13}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","method":"event","params":{"type":"sessions.changed","session_id":"","payload":{}}}}
+{"dir":"out","frame":{"id":"heartbeat-1","jsonrpc":"2.0","method":"gateway.ping","params":{}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","result":{"ok":true},"id":"heartbeat-1"}}
+{"dir":"out","frame":{"id":"heartbeat-2","jsonrpc":"2.0","method":"gateway.ping","params":{}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","result":{"ok":true},"id":"heartbeat-2"}}
+{"dir":"out","frame":{"id":"heartbeat-3","jsonrpc":"2.0","method":"gateway.ping","params":{}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","result":{"ok":true},"id":"heartbeat-3"}}
+{"dir":"out","frame":{"id":"heartbeat-4","jsonrpc":"2.0","method":"gateway.ping","params":{}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","result":{"ok":true},"id":"heartbeat-4"}}
+{"dir":"out","frame":{"id":"heartbeat-5","jsonrpc":"2.0","method":"gateway.ping","params":{}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","result":{"ok":true},"id":"heartbeat-5"}}
+{"dir":"out","frame":{"id":"heartbeat-6","jsonrpc":"2.0","method":"gateway.ping","params":{}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","result":{"ok":true},"id":"heartbeat-6"}}
+{"dir":"out","frame":{"id":"heartbeat-7","jsonrpc":"2.0","method":"gateway.ping","params":{}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","result":{"ok":true},"id":"heartbeat-7"}}
+{"dir":"out","frame":{"id":"heartbeat-8","jsonrpc":"2.0","method":"gateway.ping","params":{}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","result":{"ok":true},"id":"heartbeat-8"}}
+{"dir":"out","frame":{"id":"heartbeat-9","jsonrpc":"2.0","method":"gateway.ping","params":{}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","result":{"ok":true},"id":"heartbeat-9"}}
+{"dir":"out","frame":{"id":"heartbeat-10","jsonrpc":"2.0","method":"gateway.ping","params":{}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","result":{"ok":true},"id":"heartbeat-10"}}
+{"dir":"out","frame":{"id":"heartbeat-11","jsonrpc":"2.0","method":"gateway.ping","params":{}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","result":{"ok":true},"id":"heartbeat-11"}}
+{"dir":"out","frame":{"id":"heartbeat-12","jsonrpc":"2.0","method":"gateway.ping","params":{}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","result":{"ok":true},"id":"heartbeat-12"}}
+{"dir":"out","frame":{"id":"heartbeat-13","jsonrpc":"2.0","method":"gateway.ping","params":{}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","result":{"ok":true},"id":"heartbeat-13"}}
+{"dir":"out","frame":{"id":"heartbeat-14","jsonrpc":"2.0","method":"gateway.ping","params":{}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","result":{"ok":true},"id":"heartbeat-14"}}
+{"dir":"out","frame":{"id":"heartbeat-15","jsonrpc":"2.0","method":"gateway.ping","params":{}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","result":{"ok":true},"id":"heartbeat-15"}}
+{"dir":"out","frame":{"id":"heartbeat-16","jsonrpc":"2.0","method":"gateway.ping","params":{}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","result":{"ok":true},"id":"heartbeat-16"}}
+{"dir":"out","frame":{"id":"heartbeat-17","jsonrpc":"2.0","method":"gateway.ping","params":{}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","result":{"ok":true},"id":"heartbeat-17"}}
+{"dir":"out","frame":{"id":"heartbeat-18","jsonrpc":"2.0","method":"gateway.ping","params":{}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","result":{"ok":true},"id":"heartbeat-18"}}
+{"dir":"out","frame":{"id":"heartbeat-19","jsonrpc":"2.0","method":"gateway.ping","params":{}}}
+{"dir":"in","frame":{"jsonrpc":"2.0","result":{"ok":true},"id":"heartbeat-19"}}

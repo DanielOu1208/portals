@@ -1,0 +1,18 @@
+{
+  "name": "portals-relay",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Sends Portals notifications to Apple for bridges that hold no APNs key of their own, and carries devices to Macs they cannot reach directly.",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.1",
+    "typescript": "7.0.2"
+  }
+}
