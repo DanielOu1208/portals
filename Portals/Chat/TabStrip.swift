@@ -90,6 +90,10 @@ struct TabBar: View {
     /// in it (`Fleet.draftTab`), then a new thread on screen. A tab whose thread is not
     /// listed (its host's list not read yet) is left out until it is.
     private var slots: [TabSlot] {
+        Self.slots(of: fleet)
+    }
+
+    fileprivate static func slots(of fleet: Fleet) -> [TabSlot] {
         let shown = fleet.chat
         let shownKey = shown?.thread?.key
         var slots: [TabSlot] = fleet.tabs.keys.compactMap { key in
@@ -115,6 +119,103 @@ struct TabBar: View {
             ))
         }
         return slots
+    }
+}
+
+/// The tabs down the column beside the chat, where a status bar at the side leaves one: an
+/// iPhone Duo open and wide (2026-11-03: "put the tabs vertically on the right side bar").
+/// Each its logo and what its thread is doing, as a tab with no room for a title is; closed
+/// from its menu. + ends it; the sidebar's button is at the other side of the chat, on the
+/// sidebar's side (`SidebarButtonOverChat`).
+struct TabRail: View {
+    let fleet: Fleet
+    let isCovered: Bool
+    var onNewThread: (Agent) -> Void
+    var onEditLook: (Agent) -> Void
+    var onShowInFolder: (ThreadKey) -> Void
+
+    /// The least column it needs, with a little room each side of a tab.
+    static let leastColumn: CGFloat = TabChip.compactWidth + Theme.grid
+    /// How far down the column the status bar and camera reach, on an iPhone Duo.
+    static let statusBar: CGFloat = 124
+    /// How far the tabs fade out at each end of the column, once they scroll.
+    private static let fade: CGFloat = Theme.grid
+
+    @State private var dragNote = TabDragNote()
+
+    var body: some View {
+        let slots = TabBar.slots(of: fleet)
+        VStack(spacing: Theme.grid) {
+            ScrollViewReader { scroller in
+                ScrollView(.vertical) {
+                    // Lazily: a tab's edge says what its thread is doing in a tree of animated
+                    // layers (`TabStatusFill`), for the ones past the column's end too.
+                    LazyVStack(spacing: 6) {
+                        ForEach(slots) { slot in
+                            chip(slot)
+                                .frame(width: TabChip.compactWidth)
+                                .id(slot.id)
+                                .transition(.opacity.combined(with: .scale(scale: 0.92)))
+                        }
+                    }
+                    .padding(.vertical, Self.fade)
+                }
+                .scrollIndicators(.hidden)
+                .scrollBounceBehavior(.basedOnSize, axes: .vertical)
+                .scrollEdgeEffectHidden(true, for: .all)
+                .scrollClipDisabled()
+                .onChange(of: slots.first(where: \.isSelected)?.id, initial: true) { _, selected in
+                    if let selected { scroller.scrollTo(selected) }
+                }
+                .mask {
+                    VStack(spacing: 0) {
+                        LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: Self.fade)
+                        Color.black
+                        LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: Self.fade)
+                    }
+                    // The edge and shadow of the tab on screen's glass are the tab's.
+                    .padding(.horizontal, -Theme.grid)
+                }
+            }
+            NewTabButton(fleet: fleet, onNewThread: onNewThread)
+        }
+        .animation(.settling(.smooth(duration: 0.25)), value: slots.map(\.id))
+        .opacity(isCovered ? 0 : 1)
+        .allowsHitTesting(!isCovered)
+    }
+
+    @ViewBuilder
+    private func chip(_ slot: TabSlot) -> some View {
+        if let key = slot.key {
+            TabChip(slot: slot, key: key, showsTitle: false, fleet: fleet, dragNote: dragNote, onEditLook: onEditLook, onShowInFolder: onShowInFolder)
+                .equatable()
+        } else {
+            DraftChip(slot: slot, showsTitle: false, fleet: fleet)
+        }
+    }
+}
+
+/// The sidebar's button where the tabs are down the side (`TabRail`): over the chat at its
+/// leading end, on the sidebar's side of the screen (2026-11-03: "why on horizontal unfolded is
+/// the sidebar toggle on the right?"), level with the chat's name (`ChatScreen.barRow`).
+struct SidebarButtonOverChat: View {
+    let isCovered: Bool
+    var onToggle: () -> Void
+
+    @Environment(\.swipeGuard) private var swipeGuard
+
+    var body: some View {
+        HeaderButton(title: "Agents and threads", systemImage: "sidebar.leading", side: TabBar.sidebarButton) {
+            swipeGuard(onToggle)
+        }
+        .keyboardShortcut("s", modifiers: [.control, .command])
+        .disabled(isCovered)
+        .tip("Show or Hide Sidebar (⌘S)")
+        .accessibilityIdentifier("open-sidebar")
+        .padding(.top, ThreadPanel.top)
+        .padding(.leading, TabBar.inset)
+        .opacity(isCovered ? 0 : 1)
+        .allowsHitTesting(!isCovered)
     }
 }
 
@@ -788,6 +889,15 @@ private struct DraftChip: View {
 
     @State private var isHovered = false
 
+    /// Whether it can be closed: the one on screen goes back to the tab before it.
+    private var closes: Bool {
+        slot.isKeptDraft || !fleet.tabs.isEmpty
+    }
+
+    private func close() {
+        if slot.isKeptDraft { fleet.closeDraftTab() } else { fleet.closeShownTab() }
+    }
+
     var body: some View {
         Button {
             if !slot.isSelected { fleet.showDraftTab() }
@@ -823,13 +933,17 @@ private struct DraftChip: View {
             }
         }
         .overlay(alignment: .leading) {
-            if isHovered || TabCloseButton.shown(showsTitle: showsTitle), slot.isKeptDraft || !fleet.tabs.isEmpty {
-                TabCloseButton { slot.isKeptDraft ? fleet.closeDraftTab() : fleet.closeShownTab() }
+            if isHovered || TabCloseButton.shown(showsTitle: showsTitle), closes {
+                TabCloseButton(action: close)
                     .transition(.opacity)
             }
         }
         .onHover { hovering in withAnimation(.easeOut(duration: 0.12)) { isHovered = hovering } }
         .tip(slot.isKeptDraft ? "\(slot.title) (not sent)" : nil)
+        // For a finger where it has no title, and so no close button (`TabRail`, a full row).
+        .contextMenu {
+            if closes { Button("Close Tab", systemImage: "xmark", action: close) }
+        }
     }
 }
 

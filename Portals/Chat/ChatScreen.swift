@@ -28,6 +28,13 @@ struct ChatScreen: View {
     /// and on an iPad in a narrow window. On a Mac and beside an iPad's sidebar the tabs
     /// over the chat say what is on screen instead (`TabBar`).
     var showsHeader = true
+    /// The tabs are down the side (`TabRail`): the chat names itself in the bar over it, on
+    /// one line (`ChatTitleRow`).
+    var titleInBar = false
+    /// The chat's header goes up into the status bar's band this deep, on one line, for the
+    /// chat's height (`WindowLayout.headerBand`, 2026-11-03: "better optimize the vertical
+    /// space", "move the header and buttons up").
+    var headerBand: CGFloat?
     /// A new thread starts by choosing a folder (a coding agent), so one can be started
     /// from an empty thread too, in another folder.
     var choosesFolder = false
@@ -234,7 +241,7 @@ struct ChatScreen: View {
                 ThreadPanelCard(isModal: showsHeader || panelFloats, onEscape: dismissPanel) {
                     ThreadPanelContent(
                         chat: chat, state: panelState, host: panelHost, onClose: { setPanel(shown: false) },
-                        closeSide: showsHeader ? 44 : TabBar.sidebarButton, tint: style.tint, focus: $panelFocus
+                        closeSide: showsHeader && headerBand == nil ? 44 : TabBar.sidebarButton, tint: style.tint, focus: $panelFocus
                     )
                 }
                 .padding(.top, showsHeader ? panelButtonTop : ThreadPanel.top)
@@ -247,6 +254,84 @@ struct ChatScreen: View {
             // On a phone the header's height is measured from the screen's top.
             .ignoresSafeArea(.container, edges: showsHeader ? .top : [])
         }
+    }
+
+    /// What is at the top of the chat where the tabs say the rest: back to the thread that
+    /// started this one, the panel's button and, with the tabs down the side, the chat's name.
+    private var barRow: some View {
+        HStack(alignment: .top, spacing: Theme.grid) {
+            ParentThreadButton(parent: parentThread, answersKeys: isShown && lightbox?.isOpen != true, onOpen: onBackToParent)
+            if titleInBar, !showsStart {
+                ChatTitleRow(agent: chat.agent, title: chat.title, mood: avatarMood, style: style, onEditLook: onEditLook)
+                    .outOfSight(!isShown)
+                    .frame(maxWidth: .infinity)
+                    // As far from the sidebar's button as from the panel's, for the middle.
+                    .padding(.leading, Theme.grid)
+            } else {
+                Spacer(minLength: 0)
+            }
+            // Gone while the panel is open in its place; its room kept, so
+            // the chat does not move.
+            if panelShown {
+                Color.clear
+                    .frame(width: TabBar.sidebarButton, height: TabBar.sidebarButton)
+                    .accessibilityHidden(true)
+            } else {
+                // Where the panel's top is (2026-11-01: "should be the
+                // same as the panel"), moved, not laid out: the chat stays.
+                panelButton(side: TabBar.sidebarButton)
+                    .offset(y: titleInBar ? 0 : ThreadPanel.top - Theme.grid)
+            }
+        }
+        // Clear of the sidebar's button over the chat (`SidebarButtonOverChat`).
+        .padding(.leading, titleInBar ? TabBar.inset + TabBar.sidebarButton : 0)
+        .padding(.trailing, TabBar.inset)
+    }
+
+    /// Something for the bar over the chat to hold where what shows there is over the chat
+    /// instead: with nothing in it, or a clear colour, the system's soft edge under it is gone,
+    /// and the chat is sharp under the name (seen 2026-11-03).
+    private var softEdgeRoom: some View {
+        Color.black.opacity(0.001)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+
+    private var chatHeader: some View {
+        ChatHeader(
+            agent: chat.agent,
+            title: chat.title,
+            mood: avatarMood,
+            style: style,
+            canStartNewThread: offersNewThread,
+            showsAgent: !showsStart,
+            onOpenSidebar: onOpenSidebar,
+            onNewThread: onNewThread,
+            onEditLook: onEditLook,
+            panelButton: panelShownHere ? nil : panelButton(side: 44),
+            onPanelButtonTop: { panelButtonTop = $0 }
+        )
+        // Slid aside for the sidebar, its avatar is past the window's edge,
+        // and holds still there.
+        .outOfSight(chatIsAside || !isShown)
+    }
+
+    private func bandHeader(depth: CGFloat) -> some View {
+        ChatBandHeader(
+            agent: chat.agent,
+            title: chat.title,
+            mood: avatarMood,
+            style: style,
+            canStartNewThread: offersNewThread,
+            showsAgent: !showsStart,
+            depth: depth,
+            onOpenSidebar: onOpenSidebar,
+            onNewThread: onNewThread,
+            onEditLook: onEditLook,
+            panelButton: panelShownHere ? nil : panelButton(side: TabBar.sidebarButton),
+            onPanelButtonTop: { panelButtonTop = $0 }
+        )
+        .outOfSight(chatIsAside || !isShown)
     }
 
     /// Closes the card over the chat at a tap or click beside it.
@@ -338,11 +423,12 @@ struct ChatScreen: View {
             .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { headerBar = $0 }
             .overlay(alignment: .top) {
                 if TopFade.blurs, headerBar > 0 {
-                    // Beside a pinned sidebar (an iPad), it comes in from its leading edge as
-                    // on a Mac (2026-10-23: "the sidebar vs top of the screen gradient
-                    // still doenst transition correctly on ipad").
+                    // Beside a pinned sidebar, where the tabs are, it comes in from its leading
+                    // edge as on a Mac (2026-10-23: "the sidebar vs top of the screen gradient
+                    // still doenst transition correctly on ipad"). Not by the size class: an
+                    // iPhone Duo open and upright is regular, with the sidebar behind the chat.
                     TopFade.Blur(height: headerBar + TopFade.belowHeader, solid: TopFade.phoneSolid,
-                                 leadingFade: horizontalSizeClass == .regular ? Theme.grid * 7 : 0)
+                                 leadingFade: showsHeader ? 0 : Theme.grid * 7)
                 }
             }
             #endif
@@ -376,23 +462,10 @@ struct ChatScreen: View {
             .background { AmbientGradient(tint: tintsChats ? style.tint : nil, mood: washMood) }
             .safeAreaBar(edge: .top) {
                 VStack(spacing: Theme.grid) {
-                    if showsHeader {
-                        ChatHeader(
-                            agent: chat.agent,
-                            title: chat.title,
-                            mood: avatarMood,
-                            style: style,
-                            canStartNewThread: offersNewThread,
-                            showsAgent: !showsStart,
-                            onOpenSidebar: onOpenSidebar,
-                            onNewThread: onNewThread,
-                            onEditLook: onEditLook,
-                            panelButton: panelShownHere ? nil : panelButton(side: 44),
-                            onPanelButtonTop: { panelButtonTop = $0 }
-                        )
-                        // Slid aside for the sidebar, its avatar is past the window's edge,
-                        // and holds still there.
-                        .outOfSight(chatIsAside || !isShown)
+                    if showsHeader, headerBand == nil {
+                        chatHeader
+                    } else if showsHeader {
+                        softEdgeRoom.frame(height: 1)
                     }
                     // Back to the thread that started this one, under the header or, where
                     // the tabs are its header, under them, with the panel's button at the
@@ -400,24 +473,13 @@ struct ChatScreen: View {
                     if showsHeader {
                         ParentThreadButton(parent: parentThread, answersKeys: isShown && lightbox?.isOpen != true, onOpen: onBackToParent)
                     } else {
-                        HStack(alignment: .top, spacing: Theme.grid) {
-                            ParentThreadButton(parent: parentThread, answersKeys: isShown && lightbox?.isOpen != true, onOpen: onBackToParent)
-                            Spacer(minLength: 0)
-                            // Gone while the panel is open in its place; its room kept, so
-                            // the chat does not move.
-                            if panelShown {
-                                Color.clear
-                                    .frame(width: TabBar.sidebarButton, height: TabBar.sidebarButton)
-                                    .accessibilityHidden(true)
-                            } else {
-                                // Where the panel's top is (2026-11-01: "should be the
-                                // same as the panel"), moved, not laid out: the chat stays.
-                                panelButton(side: TabBar.sidebarButton)
-                                    .offset(y: ThreadPanel.top - Theme.grid)
-                            }
+                        if titleInBar {
+                            // The bar's height alone, under the row over it.
+                            softEdgeRoom.frame(height: ThreadPanel.top + TabBar.sidebarButton - TopFade.titleRowLift)
+                        } else {
+                            barRow
+                                .padding(.top, Theme.grid)
                         }
-                        .padding(.top, Theme.grid)
-                        .padding(.trailing, TabBar.inset)
                     }
                     if showsConnectionBanner {
                         ConnectionBanner(problem: connectionProblem, isStopped: connectionIsStopped) {
@@ -464,6 +526,18 @@ struct ChatScreen: View {
                     await chat.checkHost()
                 } else {
                     chat.mcpAuth.clear()
+                }
+            }
+            // Over the chat, not in the bar, where they reach past it: out of a bar's bounds a
+            // touch does not reach them (the panel's button's foot, seen under a real tap).
+            .overlay(alignment: .top) {
+                if showsHeader, let headerBand {
+                    bandHeader(depth: headerBand)
+                        .ignoresSafeArea(.container, edges: .top)
+                } else if titleInBar {
+                    // Level with the panel's top.
+                    barRow
+                        .padding(.top, ThreadPanel.top)
                 }
             }
             // The menu of what is being typed, over the chat just above the bar under it, the
@@ -513,7 +587,7 @@ struct ChatScreen: View {
                     }
                 }
                 .padding(.horizontal, composerMargin)
-                .padding(.bottom, Theme.grid)
+                .bottomRoom()
                 .chatColumn()
                 .animation(reduceMotion ? .easeInOut(duration: 0.2) : .smooth(duration: 0.3), value: isComposing)
                 .animation(reduceMotion ? .easeInOut(duration: 0.2) : .smooth(duration: 0.3), value: chat.pendingRequest?.id)
@@ -1472,6 +1546,11 @@ struct ChatScreen: View {
         /// How far past the header's bar the blur reaches on a phone and an iPad: half the
         /// grid since the user found 8 points a bit much (2026-10-23, "A bit less").
         static let belowHeader: CGFloat = Theme.grid / 2
+        /// How far up the bar over the chat, and so the soft edge and blur under it, comes with
+        /// the chat's name on one line (`ChatTitleRow`), over the chat past the bar's foot
+        /// (2026-11-03: "too big at the top", "move the area up a bit"). The soft edge's own
+        /// height cannot be set, and in its place a blur of the app's stopped too suddenly.
+        static let titleRowLift: CGFloat = Theme.grid * 1.5
         /// The share of the blur's height it is whole over on a phone and an iPad, before
         /// it thins out: about the top third of the header (0.4 before "A bit less").
         static let phoneSolid = 0.3
