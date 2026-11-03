@@ -64,6 +64,11 @@ struct MainScreen: View {
             // the whole sidebar and the whole chat again at each move.
             let position = SidebarSlide.Position(isWide: isWide, isOut: isOut, width: width)
             let offset = position.offset(adding: 0)
+            // A status bar at the side leaves a column for the tabs (`TabRail`).
+            let column = proxy.safeAreaInsets.trailing
+            let tabsAside = !Platform.isMac && isWide && column >= TabRail.leastColumn
+            let headerBand = WindowLayout.headerBand(window: proxy.size.width, top: proxy.safeAreaInsets.top)
+            let bottomTrim = WindowLayout.bottomTrim(window: proxy.size.width, column: column, inset: proxy.safeAreaInsets.bottom)
             ZStack(alignment: .leading) {
                 AgentSidebar(
                     fleet: fleet,
@@ -126,7 +131,7 @@ struct MainScreen: View {
                 // thread on screen at rest became 8.8% while the agent worked.
                 .modifier(SidebarSlide.OutOfSight(slide: slide, position: position))
 
-                chatArea(isWide: isWide, washBleed: isWide ? min(offset, WindowLayout.sidebarEdgeFade) : 0)
+                chatArea(isWide: isWide, tabsAside: tabsAside, headerBand: headerBand, washBleed: isWide ? min(offset, WindowLayout.sidebarEdgeFade) : 0)
                     .overlay {
                         // The chat dims as it slides aside; tap it to come back.
                         Color.black
@@ -166,6 +171,25 @@ struct MainScreen: View {
             // Watchdog: a swipe that stops moving without an end (the view went away
             // mid-swipe, say) mustn't leave the chat partway across.
             .modifier(SidebarSlide.StuckCheck(slide: slide, tracker: sidebarSwipe) { settleSidebar(at: $0, width: width) })
+            // From the window's leading edge: this stack is as wide as the chat alone, which
+            // the sidebar's room moves along.
+            .overlay(alignment: .topLeading) {
+                if tabsAside {
+                    TabRail(
+                        fleet: fleet,
+                        isCovered: lightbox?.isOpen == true,
+                        onNewThread: { startNewThread(with: $0) },
+                        onEditLook: { lookEditor = $0 },
+                        onShowInFolder: showInSidebar
+                    )
+                    .padding(.top, TabRail.statusBar)
+                    .padding(.bottom, Theme.grid - bottomTrim)
+                    .frame(width: column)
+                    .offset(x: proxy.size.width)
+                }
+            }
+            .safeAreaPadding(.top, max(0, WindowLayout.leastTopRoom - proxy.safeAreaInsets.top))
+            .environment(\.bottomTrim, bottomTrim)
         }
         .animation(.smooth(duration: 0.3), value: showsSidebar)
         .animation(.smooth(duration: 0.3), value: pinsSidebar)
@@ -187,9 +211,10 @@ struct MainScreen: View {
         .environment(\.chatIsAside, !isWide && showsSidebar)
         .environment(\.imageStore, fleet.store)
         .environment(\.macNames, fleet.macNames)
-        .onChange(of: showsSidebar) { _, shows in
-            // The keyboard would cover the sidebar it slid aside for.
-            if shows, !isWide { Self.dismissKeyboard() }
+        .onChange(of: !isWide && showsSidebar) { _, aside in
+            // The keyboard would cover the sidebar it slid aside for. Also as a wider window
+            // narrows with the sidebar left out: the chat stays the same view, its focus with it.
+            if aside { Self.dismissKeyboard() }
         }
         // While the sidebar is out, what each host's threads are doing, also the ones
         // not open here (a turn started at the desk, an approval waiting), and the list of
@@ -313,11 +338,12 @@ struct MainScreen: View {
     /// The chat, under the tabs on a Mac and beside the sidebar on an iPad (`TabBar`), in
     /// place of the header the chat has on a phone. On a Mac the tabs are up in the
     /// window's bar: the chat goes up under it, and is told the room the bar takes.
-    @ViewBuilder
-    private func chatArea(isWide: Bool, washBleed: CGFloat) -> some View {
-        if showsTabBar(isWide: isWide) {
-            content(isWide: isWide, washBleed: washBleed)
-                .safeAreaInset(edge: .top, spacing: 0) {
+    private func chatArea(isWide: Bool, tabsAside: Bool, headerBand: CGFloat?, washBleed: CGFloat) -> some View {
+        // The chat is the same view with the tabs or without them: an iPhone Duo opened or
+        // closed crosses from one to the other with what is open in the chat left as it is.
+        content(isWide: isWide, tabsAside: tabsAside, headerBand: headerBand, washBleed: washBleed)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if showsTabBar(isWide: isWide), !tabsAside {
                     TabBar(
                         fleet: fleet,
                         clearsWindowButtons: !isWide || !pinsSidebar,
@@ -328,10 +354,15 @@ struct MainScreen: View {
                         onShowInFolder: showInSidebar
                     )
                 }
-                .ignoresSafeArea(.container, edges: Platform.isMac ? .top : [])
-        } else {
-            content(isWide: isWide, washBleed: washBleed)
-        }
+            }
+            .ignoresSafeArea(.container, edges: Platform.isMac ? .top : [])
+            // Here, not in the chat: there is none while a host connects, and with the sidebar
+            // hidden and no swipe on a wide window, this is the way back to it.
+            .overlay(alignment: .topLeading) {
+                if tabsAside {
+                    SidebarButtonOverChat(isCovered: lightbox?.isOpen == true, onToggle: toggleSidebar)
+                }
+            }
     }
 
     /// Whether the tabs show over the chat: always on a Mac, whose header they are; on an
@@ -345,12 +376,14 @@ struct MainScreen: View {
     /// host connecting. A view of its own (`ChatDeck`), which alone reads the chat on screen:
     /// a tab switch works out the chats, not this whole screen (the sidebar, the tabs and
     /// what they are handed).
-    private func content(isWide: Bool, washBleed: CGFloat) -> some View {
+    private func content(isWide: Bool, tabsAside: Bool, headerBand: CGFloat?, washBleed: CGFloat) -> some View {
         ChatDeck(
             fleet: fleet,
             isWide: isWide,
             washBleed: washBleed,
             showsTabs: showsTabBar(isWide: isWide),
+            tabsAside: tabsAside,
+            headerBand: headerBand,
             pinsSidebar: pinsSidebar,
             onEditHost: onEditHost,
             // ⌘N and /new, as the sidebar's New thread: with the agent the last thread was
@@ -458,6 +491,10 @@ private struct ChatDeck: View {
     let washBleed: CGFloat
     /// Whether the tabs show over the chat (`MainScreen.showsTabBar`).
     let showsTabs: Bool
+    /// Whether they are down the side (`TabRail`), not over the chat.
+    let tabsAside: Bool
+    /// `WindowLayout.headerBand`.
+    let headerBand: CGFloat?
     let pinsSidebar: Bool
     let onEditHost: (HostID) -> Void
     let onNewThread: () -> Void
@@ -471,61 +508,57 @@ private struct ChatDeck: View {
 
     var body: some View {
         if let chat = fleet.chat, let host = fleet.model(of: chat) {
-            if showsTabs {
-                // Where the tabs are, the chats shown lately stay built behind the one on
-                // screen, out of sight (`Fleet.keptChats`): going back to one shows it at
-                // once, as it was left. Each is compared by what it shows, so that those out
-                // of sight are not worked out again as this screen is.
-                let drawn = chatsDrawn(with: chat)
-                let sizes = DebugLaunch.keepsChatsInPlace ? keptSizes.sizes(of: drawn, shown: chat) : [:]
-                ZStack {
-                    ForEach(drawn) { kept in
-                        if let keptHost = fleet.model(of: kept) {
-                            let isShown = kept === chat
-                            let size = sizes[ObjectIdentifier(kept)]
-                            // Each in a place of the deck's size that its size does not change
-                            // (an overlay): out of sight, it keeps the size the deck had as it
-                            // left the screen, by the deck's top trailing corner, which stays
-                            // where it is as the sidebar is shown or hidden (⌘S) beside it. The
-                            // sidebar sliding, or the window resized, lays out and moves the
-                            // chat on screen alone, not every one kept: each frame of the slide
-                            // laid out the chats kept and moved each of their UIKit views (the
-                            // replies' text views among them), which made ⌘S a quarter dearer.
-                            // One comes back at the deck's size then.
-                            Color.clear.overlay(alignment: .topTrailing) {
-                                KeptChat(screen: chatScreen(kept, on: keptHost, isShown: isShown), isShown: isShown)
-                                    .equatable()
-                                    .frame(width: size?.width, height: size?.height)
-                                    // The wash's bleed under the sidebar's edge follows the sidebar
-                                    // as it slides; a chat out of sight keeps the one it left with.
-                                    .environment(\.washBleed, isShown ? washBleed : keptSizes.bleed(of: kept, now: washBleed))
-                                    // On the chat itself, not on its place: the place changes
-                                    // with the deck, and what is hidden here is drawn in a
-                                    // UIKit view of its own, which would change with it.
-                                    .opacity(isShown ? 1 : 0)
-                                    .allowsHitTesting(isShown)
-                                    .accessibilityHidden(!isShown)
-                                    // One leaving the screen with a panel open over it is let go
-                                    // of, the panel with it, as before.
-                                    .onPreferenceChange(PanelOpenKey.self) { isOpen in
-                                        if isOpen {
-                                            fleet.chatsWithPanels.insert(ObjectIdentifier(kept))
-                                        } else {
-                                            fleet.chatsWithPanels.remove(ObjectIdentifier(kept))
-                                        }
+            // Where the tabs are, the chats shown lately stay built behind the one on
+            // screen, out of sight (`Fleet.keptChats`): going back to one shows it at
+            // once, as it was left. Each is compared by what it shows, so that those out
+            // of sight are not worked out again as this screen is. Without the tabs it is
+            // the one on screen alone, in the same place: the window crossing between the
+            // two (an iPhone Duo opened or closed) keeps it. Another thread starts with a
+            // fresh screen: draft, scroll, composer.
+            let drawn = showsTabs ? chatsDrawn(with: chat) : [chat]
+            let sizes = DebugLaunch.keepsChatsInPlace ? keptSizes.sizes(of: drawn, shown: chat) : [:]
+            ZStack {
+                ForEach(drawn) { kept in
+                    if let keptHost = fleet.model(of: kept) {
+                        let isShown = kept === chat
+                        let size = sizes[ObjectIdentifier(kept)]
+                        // Each in a place of the deck's size that its size does not change
+                        // (an overlay): out of sight, it keeps the size the deck had as it
+                        // left the screen, by the deck's top trailing corner, which stays
+                        // where it is as the sidebar is shown or hidden (⌘S) beside it. The
+                        // sidebar sliding, or the window resized, lays out and moves the
+                        // chat on screen alone, not every one kept: each frame of the slide
+                        // laid out the chats kept and moved each of their UIKit views (the
+                        // replies' text views among them), which made ⌘S a quarter dearer.
+                        // One comes back at the deck's size then.
+                        Color.clear.overlay(alignment: .topTrailing) {
+                            KeptChat(screen: chatScreen(kept, on: keptHost, isShown: isShown), isShown: isShown)
+                                .equatable()
+                                .frame(width: size?.width, height: size?.height)
+                                // The wash's bleed under the sidebar's edge follows the sidebar
+                                // as it slides; a chat out of sight keeps the one it left with.
+                                .environment(\.washBleed, isShown ? washBleed : keptSizes.bleed(of: kept, now: washBleed))
+                                // On the chat itself, not on its place: the place changes
+                                // with the deck, and what is hidden here is drawn in a
+                                // UIKit view of its own, which would change with it.
+                                .opacity(isShown ? 1 : 0)
+                                .allowsHitTesting(isShown)
+                                .accessibilityHidden(!isShown)
+                                // One leaving the screen with a panel open over it is let go
+                                // of, the panel with it, as before.
+                                .onPreferenceChange(PanelOpenKey.self) { isOpen in
+                                    if isOpen {
+                                        fleet.chatsWithPanels.insert(ObjectIdentifier(kept))
+                                    } else {
+                                        fleet.chatsWithPanels.remove(ObjectIdentifier(kept))
                                     }
-                            }
-                            .zIndex(isShown ? 1 : 0)
+                                }
                         }
+                        .zIndex(isShown ? 1 : 0)
                     }
                 }
-                .onGeometryChange(for: CGSize.self) { $0.size } action: { keptSizes.deck = $0 }
-            } else {
-                chatScreen(chat, on: host, isShown: true)
-                    .environment(\.washBleed, washBleed)
-                    // Another thread starts with a fresh screen: draft, scroll, composer.
-                    .id(chat.id)
             }
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { keptSizes.deck = $0 }
         } else if let host = fleet.hosts.first {
             if host.offersNoAgents {
                 NoAgentsView(hostName: host.host.name, onEditHost: { onEditHost(host.id) }) {
@@ -557,6 +590,8 @@ private struct ChatDeck: View {
             connectionIsStopped: host.connectionIsStopped,
             onEditHost: { onEditHost(host.id) },
             showsHeader: !showsTabs,
+            titleInBar: tabsAside,
+            headerBand: headerBand,
             choosesFolder: fleet.choosesFolder(for: chat.agent.id),
             firstThreadHint: firstThreadHint(for: chat, on: host),
             // On a phone too (2026-10-27: "can we have this on mobile as well").
@@ -699,7 +734,7 @@ private struct KeptChat: View, Equatable {
         return !one.isShown && !other.isShown && a.isShown == b.isShown && a.chat === b.chat && a.style == b.style
             && a.hostName == b.hostName && a.isConnected == b.isConnected && a.hostIsConnected == b.hostIsConnected
             && a.connectionProblem == b.connectionProblem && a.connectionIsStopped == b.connectionIsStopped
-            && a.showsHeader == b.showsHeader && a.choosesFolder == b.choosesFolder
+            && a.showsHeader == b.showsHeader && a.titleInBar == b.titleInBar && a.headerBand == b.headerBand && a.choosesFolder == b.choosesFolder
             && a.firstThreadHint == b.firstThreadHint && (a.newThreadPickers == nil) == (b.newThreadPickers == nil)
             && a.panelHost == b.panelHost
     }

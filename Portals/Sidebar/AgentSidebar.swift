@@ -678,7 +678,7 @@ struct AgentSidebar: View {
         // As a row: its icon in the icon's column, its words on the text's edge.
         .labelStyle(RowLabelStyle())
         .padding(.horizontal, RowMetrics.inset + RowMetrics.padding)
-        .padding(.bottom, Theme.grid)
+        .bottomRoom()
         .accessibilityIdentifier("sidebar-connection")
     }
 }

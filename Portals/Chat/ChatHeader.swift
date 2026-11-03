@@ -60,20 +60,7 @@ struct ChatHeader: View {
                 // the name: a dimmer one is lost against text behind the glass. A long
                 // title gives way before the name does.
                 if style.logo == nil || title != nil {
-                    HStack(spacing: 0) {
-                        if style.logo == nil {
-                            Text(agent.displayName)
-                                .lineLimit(1)
-                                .fixedSize()
-                        }
-                        if let title {
-                            Text(style.logo == nil ? " · \(title)" : title)
-                                .lineLimit(1)
-                        }
-                    }
-                    .font(.app.subheadline.weight(.medium))
-                    // Like a navigation bar's title, it stops growing at the accessibility sizes.
-                    .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+                    ChatTitleText(agent: agent, title: title, style: style)
                     .padding(.horizontal, Theme.grid * 1.75)
                     .padding(.vertical, Theme.grid / 2)
                     .glassEffect(.regular, in: .capsule)
@@ -114,6 +101,138 @@ struct ChatHeader: View {
         // A little into the status bar's band, to leave the chat more room, with clear
         // space between the avatar and the Dynamic Island.
         .padding(.top, -Theme.grid)
+    }
+}
+
+/// The agent's name and the thread's title, as the chat's header and `ChatTitleRow` have them.
+/// A coding agent's logo says which it is, and it has no name of its own here.
+private struct ChatTitleText: View {
+    let agent: Agent
+    let title: String?
+    let style: AgentAvatarStyle
+
+    var body: some View {
+        HStack(spacing: 0) {
+            if style.logo == nil {
+                Text(agent.displayName)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            if let title {
+                Text(style.logo == nil ? " · \(title)" : title)
+                    .lineLimit(1)
+            }
+        }
+        .font(.app.subheadline.weight(.medium))
+        // Like a navigation bar's title, it stops growing at the accessibility sizes.
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+    }
+}
+
+/// The chat's header on one line, where the tabs are down the side (`TabRail`) and name no
+/// thread: the avatar small and beside the name in its pill, not over it, for the chat's
+/// height (2026-11-03: "putting them in line, not stacked like it is on a vertical phone").
+struct ChatTitleRow: View {
+    let agent: Agent
+    let title: String?
+    let mood: AgentMood
+    var style: AgentAvatarStyle = .standard
+    var onEditLook: () -> Void = {}
+
+    @Environment(\.swipeGuard) private var swipeGuard
+
+    var body: some View {
+        HStack(spacing: Theme.grid / 2) {
+            Button { swipeGuard(onEditLook) } label: {
+                AgentAvatarView(mood: mood, size: TabBar.sidebarButton, style: style)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Change \(agent.displayName)'s look")
+            if style.logo == nil || title != nil {
+                ChatTitleText(agent: agent, title: title, style: style)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel([agent.displayName, title].compactMap(\.self).joined(separator: ", "))
+                    .accessibilityAddTraits(.isHeader)
+            }
+        }
+        .padding(.trailing, Theme.grid * 1.5)
+        .frame(height: TabBar.sidebarButton)
+        .glassEffect(.regular, in: .capsule)
+        .accessibilityIdentifier("chat-header")
+    }
+}
+
+/// The chat's header up in the band a status bar leaves over it: an iPhone Duo open and
+/// upright, whose status bar has only the band's end (`WindowLayout.headerBand`, 2026-11-03:
+/// "better optimize the vertical space", "move the header and buttons up"). The chat's name on
+/// one line in the middle of the screen, the sidebar's button level with it at the leading
+/// edge, and the panel's at the trailing edge, under the status bar ("center the thread name",
+/// "just underneath the time and battery indicator").
+struct ChatBandHeader: View {
+    let agent: Agent
+    let title: String?
+    let mood: AgentMood
+    var style: AgentAvatarStyle = .standard
+    let canStartNewThread: Bool
+    /// The avatar and the name, left out while a new thread's start has them.
+    var showsAgent = true
+    /// How deep the band is.
+    let depth: CGFloat
+    var onOpenSidebar: () -> Void
+    var onNewThread: () -> Void
+    var onEditLook: () -> Void = {}
+    /// The panel's button (`ThreadPanel`).
+    var panelButton: ThreadPanelButton?
+    /// How far down the screen that button's place is: the panel opens there, over it.
+    var onPanelButtonTop: (CGFloat) -> Void = { _ in }
+
+    @Environment(\.swipeGuard) private var swipeGuard
+
+    /// How far across the band the status bar and camera reach, on an iPhone Duo: the name
+    /// keeps clear of it, and as far from the other edge, to stay in the middle.
+    private static let statusWidth: CGFloat = 144
+    /// How far down the screen the name and the sidebar's button are: level with the clock.
+    private static let top: CGFloat = 31
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            HeaderButton(title: "Agents and threads", systemImage: "sidebar.leading", side: TabBar.sidebarButton) { swipeGuard(onOpenSidebar) }
+                .keyboardShortcut("s", modifiers: [.control, .command])
+                .accessibilityIdentifier("open-sidebar")
+                .frame(maxWidth: .infinity, alignment: .leading)
+            ChatTitleRow(agent: agent, title: title, mood: mood, style: style, onEditLook: onEditLook)
+                // Its room kept and its avatar still, while a new thread's start has the avatar.
+                .outOfSight(!showsAgent)
+                .opacity(showsAgent ? 1 : 0)
+                .allowsHitTesting(showsAgent)
+                .accessibilityHidden(!showsAgent)
+                .animation(.smooth(duration: 0.35), value: showsAgent)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, Self.statusWidth + Theme.grid - Theme.margin)
+            Group {
+                if let panelButton {
+                    panelButton
+                } else {
+                    Color.clear.accessibilityHidden(true)
+                }
+            }
+            .frame(width: TabBar.sidebarButton, height: TabBar.sidebarButton)
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { onPanelButtonTop($0) }
+            .background {
+                Button("New thread") { swipeGuard(onNewThread) }
+                    .keyboardShortcut("n", modifiers: .command)
+                    .disabled(!canStartNewThread)
+                    .opacity(0)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+            // A little up the band, whose status bar ends short of its foot: touching the first
+            // message under the band, otherwise.
+            .padding(.top, depth - Self.top - Theme.grid)
+            .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+        .pageMargins()
+        .padding(.top, Self.top)
     }
 }
 

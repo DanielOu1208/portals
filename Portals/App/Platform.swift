@@ -311,6 +311,25 @@ nonisolated enum WindowLayout {
     static func sidebarWidth(window width: CGFloat) -> CGFloat {
         width >= wideWidth ? pinnedSidebarWidth : min(width * overlaidSidebarShare, overlaidSidebarWidth)
     }
+    /// The least room kept above everything in a window. A status bar usually gives more;
+    /// on an iPhone Duo it can be at the side, leaving none. A Mac's window has its bar.
+    static let leastTopRoom: CGFloat = Platform.isMac ? 0 : 8
+    /// How deep the band a status bar leaves over a large narrow window is, for the chat's
+    /// header to go up into it: an iPhone Duo open and upright, whose status bar has only the
+    /// band's end. Nil elsewhere: a phone's header stays under its status bar and Dynamic
+    /// Island, and an iPad's has no band.
+    static func headerBand(window width: CGFloat, top: CGFloat) -> CGFloat? {
+        !Platform.isMac && width >= 600 && width < wideWidth && top >= 60 ? top : nil
+    }
+    /// How far what rests at the bottom of a window comes down into a bottom safe area that
+    /// is a phone's, for its home indicator: to an iPad's 20. In a large window (2026-11-03,
+    /// of an iPhone Duo open: "a lot of extra space at the bottom"), and in one beside a
+    /// status bar at the side, an iPhone Duo's outer display, as short as that screen is ("too
+    /// much space between the composer and the bottom"). None on an iPhone, nor with the
+    /// keyboard up, whose height the inset is then.
+    static func bottomTrim(window width: CGFloat, column: CGFloat, inset: CGFloat) -> CGFloat {
+        (width >= 600 || column > 0) && inset > 20 && inset <= 34 ? inset - 20 : 0
+    }
     /// How far the sidebar's background takes to fade out at its far edge beside the
     /// chat, and how far the chat's wash runs on under it there, so that the blue of the
     /// one passes into the other with no edge between them.
@@ -330,7 +349,27 @@ nonisolated enum WindowLayout {
     static let firstWindow = CGSize(width: 1300, height: 820)
 }
 
+extension EnvironmentValues {
+    /// `WindowLayout.bottomTrim`, for what rests at the bottom of the window (`bottomRoom`).
+    @Entry var bottomTrim: CGFloat = 0
+}
+
+/// `View.bottomRoom`. Reads the trim itself, so that only this, and not the whole sidebar nor
+/// each chat kept out of sight, is worked out again as the keyboard changes it.
+private struct BottomRoom: ViewModifier {
+    @Environment(\.bottomTrim) private var trim
+
+    func body(content: Content) -> some View {
+        content.padding(.bottom, Theme.grid - trim)
+    }
+}
+
 extension View {
+    /// The room under what rests at the bottom of the window: a grid, less `bottomTrim`.
+    func bottomRoom() -> some View {
+        modifier(BottomRoom())
+    }
+
     /// Keeps the chat's column to its widest (`WindowLayout.chatColumnWidth`), in the
     /// middle of whatever room there is, or as far left of it as the panel open beside it
     /// needs (`chatColumnShift`).
