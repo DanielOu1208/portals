@@ -135,7 +135,7 @@ class MessageActionsUIHarness: XCTestCase {
         let text = field.value as? String ?? ""
         XCTAssertNotEqual(text, before)
         XCTAssertTrue(text.contains("123"))
-        return text
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     func unchanged(_ s: [String: Any]) throws {
