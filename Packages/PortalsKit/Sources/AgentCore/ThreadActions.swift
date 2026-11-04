@@ -65,10 +65,14 @@ public struct ThreadActivityReport: Hashable, Sendable {
     /// A later version of the host's bridge that is out, when a host that says so
     /// (`HostUpdate`) has one; nil when it has none, and from any other host.
     public var update: String?
+    /// The free space on the host's disk, from a host that says it (`HostDisk`); nil from
+    /// any other host.
+    public var disk: HostDisk?
 
     public init(
         threads: [ThreadRef.ID: ThreadActivity] = [:], inherited: Set<ThreadRef.ID> = [], withoutTurn: Set<ThreadRef.ID> = [],
-        list: ThreadListRevision? = nil, looks: LookListRevision? = nil, order: SidebarOrderRevision? = nil, update: String? = nil
+        list: ThreadListRevision? = nil, looks: LookListRevision? = nil, order: SidebarOrderRevision? = nil, update: String? = nil,
+        disk: HostDisk? = nil
     ) {
         self.threads = threads
         self.inherited = inherited
@@ -77,6 +81,7 @@ public struct ThreadActivityReport: Hashable, Sendable {
         self.looks = looks
         self.order = order
         self.update = update
+        self.disk = disk
     }
 }
 

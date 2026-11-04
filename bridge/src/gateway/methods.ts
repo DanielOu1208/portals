@@ -26,6 +26,7 @@ import { ErrorCode, invalidParams, RpcError } from "./errors.ts";
 import type { PollNow, PollNowPeer } from "./pollNow.ts";
 import { McpAuthSettling, type McpAuthAction } from "../providers/mcpAuth.ts";
 import { SettingRefused } from "../providers/types.ts";
+import { diskFields, type DiskReading } from "../disk.ts";
 
 // Every method the app calls (docs/gateway-protocol.md, section 5), with the params the
 // bridge reads. Params not listed are ignored, never rejected: Hermes rejects them, but
@@ -68,6 +69,8 @@ export interface GatewayContext {
   readonly search: ThreadSearch;
   /** Whether a later portals-host is out (feature update_notice); absent when the bridge does not ask (`updates.check` off). */
   readonly updates?: { readonly latest: string | undefined };
+  /** The free space on the bridge's disk, once it has been read (feature disk_space). */
+  readonly disk?: { readonly now: DiskReading | undefined };
   /** The apps a thread's folder opens in on this computer (feature open_on_host); this computer's own when absent. */
   readonly openers?: Openers;
 }
@@ -742,12 +745,12 @@ export const methods: Record<string, MethodSpec> = {
   },
 
   "sessions.activity": {
-    summary: "The bridge's threads that are running or waiting on an answer now, followed here or not (feature activity), the id and revision of its list of threads (feature thread_sync), of its agents' looks (feature agent_looks) and of the sidebar's order (feature sidebar_order), and `latest`, a later portals-host that is out, only when there is one (feature update_notice).",
+    summary: "The bridge's threads that are running or waiting on an answer now, followed here or not (feature activity), the id and revision of its list of threads (feature thread_sync), of its agents' looks (feature agent_looks) and of the sidebar's order (feature sidebar_order), `latest`, a later portals-host that is out, only when there is one (feature update_notice), and `disk`, the free space on the bridge's disk (feature disk_space).",
     params: {},
     handle(_params, { gateway }) {
-      // `thread_list`, `looks`, `order` and `latest` go to every client: an app without the feature never reads them.
+      // `thread_list`, `looks`, `order`, `latest` and `disk` go to every client: an app without the feature never reads them.
       const latest = gateway.updates?.latest;
-      return { sessions: gateway.sessions.activity(), thread_list: gateway.sessions.list(), looks: gateway.looks.revision(), order: gateway.order.revision(), ...(latest ? { latest } : {}) };
+      return { sessions: gateway.sessions.activity(), thread_list: gateway.sessions.list(), looks: gateway.looks.revision(), order: gateway.order.revision(), ...(latest ? { latest } : {}), ...diskFields(gateway.disk?.now) };
     },
   },
 

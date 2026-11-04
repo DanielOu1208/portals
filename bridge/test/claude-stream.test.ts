@@ -594,6 +594,23 @@ test("a warning Claude Code shows in the terminal (a hook's feedback) is a notic
   assert.deepEqual(stream.map({ type: "system", subtype: "informational", level: "warning", content: "  " } as never), []);
 });
 
+test("Claude Code saying a full disk kept it from saving is a notice: the conversation, so history may come back short, or only its settings", () => {
+  const stream = new ClaudeStream({ cwd: "/w", now: () => 0, timeZone: "UTC" });
+  const lost = (m: Record<string, unknown>) => stream.map({ type: "system", subtype: "session_writes_lost", uuid: "u1", session_id: "s1", ...m } as never);
+  // As the SDK's types of 0.3.317 describe it, sent as the process exits.
+  assert.deepEqual(lost({ error_code: "ENOSPC", lost: ["transcript", "global_config"], transcript_session_ids: ["s1"] }), [
+    { type: "notice", level: "warn", text: "The disk is full, so Claude Code could not save all of this conversation. Its history may come back short." },
+  ]);
+  assert.deepEqual(lost({ error_code: "EDQUOT", lost: ["transcript"], transcript_session_ids: ["s1"] }), [
+    { type: "notice", level: "warn", text: "The disk quota is used up, so Claude Code could not save all of this conversation. Its history may come back short." },
+  ]);
+  assert.deepEqual(lost({ error_code: "ENOSPC", lost: ["global_config"] }), [{ type: "notice", level: "warn", text: "The disk is full, so Claude Code could not save its settings." }]);
+  // A code or a kind of write added later still says what is likely.
+  assert.deepEqual(lost({ error_code: "EIO", lost: ["memory"] }), [
+    { type: "notice", level: "warn", text: "The disk is full, so Claude Code could not save all of this conversation. Its history may come back short." },
+  ]);
+});
+
 test("a subagent's own subagent is on the line too, naming the one that started it; an unknown parent is none", () => {
   const stream = new ClaudeStream({ cwd: "/w", now: () => 0, timeZone: "UTC" });
   const news = (m: Record<string, unknown>) => stream.map({ type: "system", ...m } as never).flatMap((event) => (event.type === "subagent" ? [event.subagent] : []));

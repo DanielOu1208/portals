@@ -41,6 +41,7 @@ import { cursorMode, cursorName, cursorQuirks, goAheadText, levelLeftToCursorTex
 import { askQuestion, createPlan, mergedTodos, permissionCard, permissionOutcome, planCard, planOutcome, questionCard, questionOutcome, todoRow, unplacedAnswer, updateTodos, type Todo } from "./requests.ts";
 import { CursorSubagents } from "./subagents.ts";
 import { cursorTools } from "./tools.ts";
+import { outOfSpace } from "../../disk.ts";
 
 // One thread of Cursor's. Its id is the id of the Cursor session it was made with
 // (`session/new`); the session it talks to now is `sessionID`, which differs only once
@@ -122,8 +123,11 @@ export interface CursorHost {
   model(id: string): CursorModel | undefined;
   /** Cursor has listed its models at some time. */
   modelsKnown(): boolean;
-  /** Keeps a thread: its conversation, its Cursor session when that is not the thread's id, whether Cursor was told of `portals`, and its to-do list. */
-  save(id: string, kept: KeptThread): void;
+  /**
+   * Keeps a thread: its conversation, its Cursor session when that is not the thread's id,
+   * whether Cursor was told of `portals`, and its to-do list. Whether it could be written.
+   */
+  save(id: string, kept: KeptThread): { kept: true } | { kept: false; error: unknown };
   /** The thread talks to another Cursor session from now on. */
   rerouted(session: CursorSession, from: string, to: string): void;
   /**
@@ -242,6 +246,8 @@ export class CursorSession implements ProviderSession {
   private readonly answers = new Map<string, string[]>();
   /** Cursor's session for the thread got the note on the `portals` command. */
   private told: boolean;
+  /** The thread was told its conversation could not be saved, and no save has worked since (`save`). */
+  private toldUnsaved = false;
   /** The subagents Cursor has told of in this run of the thread. */
   private readonly subagents: CursorSubagents;
   /** What is Cursor's own of its tools (./tools.ts). */
@@ -595,8 +601,13 @@ export class CursorSession implements ProviderSession {
     if (keep && (event.type === "tool.end" || event.type === "turn.end")) this.save();
   }
 
+  /**
+   * Keeps the conversation, the only copy the thread is shown from after a restart. One
+   * that cannot be written (a full disk) is told in the thread, once until a save works
+   * again: its history may come back short.
+   */
   private save(): void {
-    this.host.save(this.id, {
+    const saved = this.host.save(this.id, {
       messages: this.transcript.messages,
       cwd: this.cwd,
       ...(this.sessionID === this.id ? {} : { session: this.sessionID }),
@@ -604,6 +615,13 @@ export class CursorSession implements ProviderSession {
       ...(this.todos.length > 0 ? { todos: this.todos } : {}),
       ...(this.turnOpen ? { open: true } : {}),
     });
+    if (saved.kept || this.toldUnsaved) {
+      this.toldUnsaved = !saved.kept;
+      return;
+    }
+    this.toldUnsaved = true;
+    const said = "could not save this conversation. Its history may come back short.";
+    this.emit({ type: "notice", level: "warn", text: outOfSpace(saved.error) ? `The disk is full, so Portals ${said}` : `Portals ${said}` }, false);
   }
 
   /** The message as Cursor takes it: the text, then each image it can read. */

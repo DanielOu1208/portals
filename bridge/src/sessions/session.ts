@@ -25,6 +25,7 @@ import type {
   TurnUsage,
 } from "../providers/types.ts";
 import { machineWord } from "../platform.ts";
+import type { DiskSpace } from "../disk.ts";
 import { modeFields } from "../providers/modes.ts";
 import { counters } from "../counters.ts";
 import { gitHead, threadRepo } from "../git.ts";
@@ -157,6 +158,8 @@ export interface SessionOptions {
   diffs?: DiffStore;
   /** The last id a session of this thread gave a message waiting earlier in this run: ids number on from it. */
   lastQueueID?: number;
+  /** How much room the host's disk has (src/disk.ts): the thread is told when it runs low, or when a write fails for want of it. */
+  disk?: Pick<DiskSpace, "lowSpell" | "hostName" | "outOfSpace">;
 }
 
 export interface SubmitOutcome {
@@ -413,6 +416,11 @@ export class Session {
   private readonly waiting: WaitingStore | undefined;
   private readonly spentStore: SpentStore | undefined;
   private readonly diffStore: DiffStore | undefined;
+  private readonly disk: SessionOptions["disk"];
+  /** The spell of low space on the host's disk the thread was told of (`tellDiskLow`). */
+  private diskToldSpell: number | undefined;
+  /** The thread was told that a write failed for want of space, and none of its turns' writes has worked since (`writeFailed`). */
+  private toldFull = false;
   /**
    * The thread's latest messages that failed without reaching the agent (`failUnreached`),
    * kept on disk with those waiting, so that it shows them once loaded again.
@@ -427,6 +435,7 @@ export class Session {
     this.waiting = options.waiting;
     this.spentStore = options.spent;
     this.diffStore = options.diffs;
+    this.disk = options.disk;
     // A device that still holds an id of the session before never meets it again here.
     this.queued = options.lastQueueID ?? 0;
     this.log = new EventLog(record.id, options.logCapacity, options.lastSeq);
@@ -1239,6 +1248,7 @@ export class Session {
       return true;
     } catch (error) {
       log.warn("could not keep the messages waiting on disk", { session: this.id, error: (error as Error).message });
+      this.writeFailed(error);
       return false;
     }
   }
@@ -1403,6 +1413,7 @@ export class Session {
       this.write({ cardAnswers: kept });
     } catch (error) {
       log.warn("could not keep how a card settled its questions", { session: this.id, error: (error as Error).message });
+      this.writeFailed(error);
     }
   }
 
@@ -1517,6 +1528,7 @@ export class Session {
       this.write({ subagentsCleared: left.length > 0 ? left : undefined });
     } catch (error) {
       log.warn("could not write that a subagent is at work again", { session: this.id, error: (error as Error).message });
+      this.writeFailed(error);
     }
   }
 
@@ -1707,6 +1719,7 @@ export class Session {
     this.emit("message.start", resent ? undefined : startFields(text, { ...opening, fleet }, this.fromOf(text), cardAnswer));
     // After the turn's start, which every device opens the turn with.
     if (kept) this.clear(cleared);
+    this.tellDiskLow();
     try {
       this.requireProvider().startTurn(prompt);
     } catch (error) {
@@ -1762,6 +1775,7 @@ export class Session {
     // Said at the desk: every device opens the turn with it (feature turn_messages).
     this.emit("message.start", !host && user !== "" ? messageFields(user, "desk") : undefined);
     if (kept) this.clear(cleared);
+    this.tellDiskLow();
   }
 
   private end(event: TurnEnd): void {
@@ -1847,6 +1861,7 @@ export class Session {
       this.diffStore.keep(this.id, id, diff);
     } catch (error) {
       log.warn("could not keep the diff of an edit", { session: this.id, error: (error as Error).message });
+      this.writeFailed(error);
     }
   }
 
@@ -1857,6 +1872,7 @@ export class Session {
       this.spentStore.keep(this.id, { turn: event.agentTurn, ...event.spent });
     } catch (error) {
       log.warn("could not keep what a turn spent", { session: this.id, error: (error as Error).message });
+      this.writeFailed(error);
     }
   }
 
@@ -2085,11 +2101,38 @@ export class Session {
   private writeTurn(change: () => void): boolean {
     try {
       change();
+      this.toldFull = false;
       return true;
     } catch (error) {
       log.warn("could not keep a turn's change in the thread's record", { session: this.id, error: (error as Error).message });
+      this.writeFailed(error);
       return false;
     }
+  }
+
+  /**
+   * A write of the thread's (its record, the messages waiting, what its turns kept) failed:
+   * for want of space on the host's disk, the thread is told so, once until one of its
+   * turns' writes works again (2026-11-03: "guard against full disk"). The rest went on
+   * without it, as before.
+   */
+  private writeFailed(error: unknown): void {
+    if (!this.disk?.outOfSpace(error) || this.toldFull || this.retired) return;
+    this.toldFull = true;
+    this.emit("status.update", { kind: "warn", text: `${this.disk.hostName} is out of disk space, so this thread could not be fully saved. Agents may fail until space is freed.` });
+  }
+
+  /**
+   * The host's disk is low on space: the thread is told, once in each spell of it, as it
+   * starts a turn or, at work, as the spell begins (`SessionManager.diskLow`). Not when it
+   * was told just now that a write failed for want of it, which says as much.
+   */
+  tellDiskLow(): void {
+    const spell = this.disk?.lowSpell;
+    if (spell === undefined || spell === this.diskToldSpell || this.retired) return;
+    this.diskToldSpell = spell;
+    if (this.toldFull) return;
+    this.emit("status.update", { kind: "warn", text: `${this.disk!.hostName} is almost out of disk space. Agents may fail and history may not be saved until space is freed.` });
   }
 
   /**

@@ -347,6 +347,15 @@
 //   that cannot say. An agent is asked at most once a minute, whoever asks, a failure
 //   standing for that minute too. A window kept from an earlier answer has its own
 //   `heard_at` (milliseconds since 1970).
+// - `disk_space`: `gateway.ready`'s `bridge` block and the `sessions.activity` answer carry
+//   `disk`, the free space on the volume the bridge keeps its folder on: `free` and `total`
+//   in bytes, and `level`, `ok`, `low` (under 5 GB, or a tenth of a small volume) or
+//   `critical` (under 1 GB, or a fiftieth), once it has been read. The bridge reads it as it
+//   starts, every five minutes, and as a write fails for want of space (src/disk.ts);
+//   `poll.now` tells the devices that ask as the level changes, or the free space by a
+//   quarter of a gigabyte. As space runs low, each thread at work, and each that starts a
+//   turn, is told once with a warning notice; a write of a thread's that fails for want of
+//   space tells it too.
 // - `open_on_host`: `host.apps` lists the apps on the host a thread's folder opens in (the
 //   Finder, the editors and terminals installed), and `folder.open` opens the thread's
 //   folder in one, on the host's own screen (src/openers.ts).
@@ -422,6 +431,7 @@ export const bridgeFeatures = [
   "git_status",
   "usage_read",
   "open_on_host",
+  "disk_space",
 ] as const;
 
 export const bridgeProtocol = 1;

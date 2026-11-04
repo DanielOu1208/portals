@@ -162,7 +162,8 @@
    "model_levels_none",
    "git_status",
    "usage_read",
-   "open_on_host"
+   "open_on_host",
+   "disk_space"
   ],
   "events": {
    "mcp.auth": {

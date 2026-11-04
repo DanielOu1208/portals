@@ -32,7 +32,7 @@ import { claudeEffort, permissionModeFor, queryOptions, thinkingBudget, threadMo
 import { permissionRequest, permissionResult } from "./permissions.ts";
 import type { CommandAccess } from "../../portals/access.ts";
 import type { Warmable, WarmPool } from "../pool.ts";
-import { ClaudeStream, type ContextWindows } from "./stream.ts";
+import { ClaudeStream, isWritesLost, writesLost, type ContextWindows } from "./stream.ts";
 import type { PastSubagent } from "./tasks.ts";
 
 // One Claude Code thread. It has a process ("warm") only while it is in use: the first
@@ -553,7 +553,12 @@ export class ClaudeSession implements ProviderSession, Warmable {
   }
 
   private receive(live: Live, message: SDKMessage): void {
-    if (this.live !== live) return;
+    if (this.live !== live) {
+      // Claude Code says it could not save all it wrote as its process exits, which is
+      // mostly after the bridge let it go (`stop`, as a warm process cools): told all the same.
+      if (isWritesLost(message)) this.sink.emit(writesLost(message as Record<string, unknown>));
+      return;
+    }
     if (message.type === "rate_limit_event") this.host.limitsHeard(message.rate_limit_info as Record<string, unknown>);
     // Claude Code also sends `api_retry` after a turn's result, as a heartbeat while a
     // background agent waits out a usage limit: at rest there is no turn to show it in,

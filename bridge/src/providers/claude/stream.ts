@@ -451,6 +451,8 @@ export class ClaudeStream {
         // kept the turn going, a message a hook turned down), at its level. The warnings
         // only: the others are tips, or lines its terminal shows only when asked.
         return m.level === "warning" && typeof m.content === "string" && m.content.trim() !== "" ? [{ type: "notice", level: "warn", text: m.content.trim() }] : [];
+      case "session_writes_lost":
+        return [writesLost(m)];
       default:
         return [];
     }
@@ -673,6 +675,26 @@ function tokens(usage: Message): number {
 
 function seconds(milliseconds: number): number {
   return Math.max(0, Math.round(milliseconds) / 1000);
+}
+
+/**
+ * What the thread is told when Claude Code could not save all it wrote, for a full disk
+ * (`ENOSPC`) or a used-up quota (`EDQUOT`): lines of the conversation, so its history may
+ * come back short, or its own settings (`~/.claude.json`). Claude Code says it once, as its
+ * process exits, mostly after the bridge let the process go (ClaudeSession `receive`).
+ */
+export function writesLost(m: Message): ProviderEvent {
+  const why = m.error_code === "EDQUOT" ? "The disk quota is used up" : "The disk is full";
+  const lost: unknown[] = Array.isArray(m.lost) ? m.lost : [];
+  const text = lost.includes("global_config") && !lost.includes("transcript")
+    ? `${why}, so Claude Code could not save its settings.`
+    : `${why}, so Claude Code could not save all of this conversation. Its history may come back short.`;
+  return { type: "notice", level: "warn", text };
+}
+
+/** Whether `message` is Claude Code saying it could not save all it wrote (`writesLost`). */
+export function isWritesLost(message: { type: string; subtype?: unknown }): boolean {
+  return message.type === "system" && message.subtype === "session_writes_lost";
 }
 
 function failureText(m: Message): string {
