@@ -30,6 +30,7 @@ import {
 } from "../types.ts";
 import { userAgentVersion, VersionCheck } from "../program.ts";
 import { titleFrom, titleSource } from "../titles.ts";
+import { Unknowns } from "../unknowns.ts";
 import { CodexClient, processConnector, socketConnector, type ClientListener, type Connector } from "./client.ts";
 import { codexVersion, defaultSocketPath, desktopDefaults, testedCodexVersion, threadModeFor, type DesktopDefaults } from "./options.ts";
 import { compactCommand, reviewCommand } from "./history.ts";
@@ -125,6 +126,18 @@ const maxSubAgentDepth = 8;
  * grew by a sub-agent's thread for as long as the bridge ran (recovery-21).
  */
 const parentsKeptDefault = 4096;
+/**
+ * What Codex tells every connection of that is about no thread (its notifications with no
+ * thread id, at 0.166) and the bridge does not read: anything else is new.
+ */
+const threadlessQuiet = new Set([
+  "skills/changed", "project/changed", "command/exec/outputDelta", "process/outputDelta", "process/exited", "mcpServer/event/stream/notification",
+  "account/updated", "account/gatewayOAuth/changed", "app/list/updated", "remoteControl/status/changed", "externalAgentConfig/import/progress",
+  "externalAgentConfig/import/completed", "fs/changed", "fuzzyFileSearch/sessionUpdated", "fuzzyFileSearch/sessionCompleted",
+  "windows/worldWritableWarning", "windowsSandbox/setupCompleted", "account/login/completed",
+]);
+/** How many of Codex's warnings (`warned`) are kept, so one said again is not logged again. */
+const warningsKept = 64;
 
 /** The environment for `codex`: the bridge's own, with `~/.codex` as Codex's home whatever the shell said. */
 export function codexEnvironment(parent: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -198,6 +211,10 @@ export class CodexProvider implements Provider, CodexHost {
   private readonly unowned = new Map<string, boolean>();
   /** Each title-generation thread at work: what Codex says of it goes to whoever waits for its answer, and `stop` ends the wait. */
   private readonly naming = new Map<string, { notify(method: string, params: Record<string, any>): void; stop(): void }>();
+  /** What Codex says of no thread that the bridge does not know, each kind said once in the log. */
+  private readonly threadless = new Unknowns((method) => log.info("Codex sent a notification the bridge does not know", { method }), threadlessQuiet);
+  /** The warnings Codex gave of no thread that were logged: it gives the same one again at each read of a thread. */
+  private readonly warnings = new Set<string>();
 
   constructor(options: CodexProviderOptions) {
     this.settings = options.settings;
@@ -295,7 +312,11 @@ export class CodexProvider implements Provider, CodexHost {
         return;
       }
       const threadID = params?.threadId ?? params?.thread?.id;
-      if (typeof threadID !== "string") return;
+      if (typeof threadID !== "string") {
+        if (method === "deprecationNotice" || method === "configWarning" || method === "warning") this.warned(method, params);
+        else this.threadless.note(method);
+        return;
+      }
       const naming = this.naming.get(threadID);
       if (naming) {
         naming.notify(method, params);
@@ -362,6 +383,23 @@ export class CodexProvider implements Provider, CodexHost {
       for (const naming of this.naming.values()) naming.stop();
     },
   };
+
+  /**
+   * A warning Codex gave of no thread: a call the bridge makes that Codex means to take
+   * away (`deprecationNotice`), a setting in its config it passes over (`configWarning`),
+   * or any other (`warning`, its `message`). Logged once each, for whoever looks into what
+   * changed; nobody in a thread is told.
+   */
+  private warned(method: string, params: Record<string, any> | undefined): void {
+    const summary = typeof params?.summary === "string" ? params.summary : typeof params?.message === "string" ? params.message : "";
+    const details = typeof params?.details === "string" ? params.details : undefined;
+    const key = `${method}\n${summary}\n${details ?? ""}`;
+    if (this.warnings.has(key)) return;
+    if (this.warnings.size >= warningsKept) this.warnings.delete(this.warnings.values().next().value!);
+    this.warnings.add(key);
+    const what = method === "deprecationNotice" ? "Codex says something the bridge does is deprecated" : method === "configWarning" ? "Codex warned of its configuration" : "Codex warned";
+    log.warn(what, { summary, ...(details ? { details } : {}) });
+  }
 
   // MARK: Sub-agents
 

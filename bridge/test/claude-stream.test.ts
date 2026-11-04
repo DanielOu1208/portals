@@ -650,6 +650,50 @@ test("a warning Claude Code shows in the terminal (a hook's feedback) is a notic
   assert.deepEqual(stream.map({ type: "system", subtype: "informational", level: "warning", content: "  " } as never), []);
 });
 
+test("a reply the model declined is told in the thread: the other model Claude Code switched to, or that none answered", () => {
+  // Crafted from the SDK's types (`model_refusal_fallback`, `model_refusal_no_fallback`): no real refusal was recorded.
+  const stream = new ClaudeStream({ cwd: "/w", now: () => 0, timeZone: "UTC" });
+  const refusal = { type: "system", trigger: "refusal", direction: "retry", request_id: null, content: "", uuid: "u", session_id: "s" };
+  assert.deepEqual(stream.map({ ...refusal, subtype: "model_refusal_fallback", original_model: "claude-opus-5-5", fallback_model: "claude-sonnet-5-5", scope: "session" } as never), [
+    { type: "notice", level: "warn", text: "claude-opus-5-5 declined to answer, so Claude Code switched to claude-sonnet-5-5 and answered with it." },
+  ]);
+  // An older Claude Code says no scope: the session's model, as for `session`.
+  assert.deepEqual(stream.map({ ...refusal, subtype: "model_refusal_fallback", original_model: "claude-opus-5-5", fallback_model: "claude-sonnet-5-5" } as never), [
+    { type: "notice", level: "warn", text: "claude-opus-5-5 declined to answer, so Claude Code switched to claude-sonnet-5-5 and answered with it." },
+  ]);
+  assert.deepEqual(stream.map({ ...refusal, subtype: "model_refusal_fallback", original_model: "claude-opus-5-5", fallback_model: "claude-sonnet-5-5", scope: "local" } as never), [
+    { type: "notice", level: "warn", text: "claude-opus-5-5 declined to answer part of the work, so Claude Code had claude-sonnet-5-5 do that part." },
+  ]);
+  assert.deepEqual(stream.map({ type: "system", subtype: "model_refusal_no_fallback", original_model: "claude-opus-5-5", request_id: null, content: "", uuid: "u", session_id: "s" } as never), [
+    { type: "notice", level: "warn", text: "claude-opus-5-5 declined to answer." },
+  ]);
+});
+
+test("a message Claude Code sends that the stream does not know is told of once for its kind, for the log; none of the recordings has one", () => {
+  const seen: string[] = [];
+  const stream = new ClaudeStream({ cwd: "/w", now: () => 0, timeZone: "UTC", unknown: (kind) => seen.push(kind) });
+  for (const message of [
+    { type: "something_new" },
+    { type: "something_new", more: 1 },
+    { type: "system", subtype: "something_newer" },
+    { type: "system", subtype: "something_newer" },
+    { type: "system" },
+    {},
+    // Known, and let pass.
+    { type: "tool_progress" },
+    { type: "command_lifecycle", state: "queued" },
+    { type: "system", subtype: "hook_started" },
+  ]) {
+    assert.deepEqual(stream.map(message as never), []);
+  }
+  assert.deepEqual(seen, ["something_new", "system/something_newer"]);
+  for (const name of scenarios) {
+    const unknown: string[] = [];
+    replayStream(name, { unknown: (kind) => unknown.push(kind) });
+    assert.deepEqual(unknown, [], name);
+  }
+});
+
 test("a subagent's own subagent is on the line too, naming the one that started it; an unknown parent is none", () => {
   const stream = new ClaudeStream({ cwd: "/w", now: () => 0, timeZone: "UTC" });
   const news = (m: Record<string, unknown>) => stream.map({ type: "system", ...m } as never).flatMap((event) => (event.type === "subagent" ? [event.subagent] : []));

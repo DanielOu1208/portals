@@ -509,7 +509,8 @@ export interface ProviderSession {
    * off mid-way (its agent's process stopped with the bridge, a crash) rather than ended,
    * as the agent's own record shows (Claude Code: its last entry is not the model's
    * finished answer). A turn the bridge recorded running that is over at the next load is
-   * then told as stopped, not as finished. Agents whose record cannot tell need not have it.
+   * then told as stopped, not as finished. Agents whose record cannot tell need not have it:
+   * a record that ends on the person's message or a tool's row is taken as cut off anyway.
    */
   lastTurnCutOff?(): boolean;
   /** Starts a turn. The provider reports it through the sink and ends it with `turn.end`. */

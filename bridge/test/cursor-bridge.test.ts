@@ -2568,20 +2568,29 @@ test("a bridge whose config.json has Pi and Cursor both on runs both, Pi listed 
 
 // MARK: A later Cursor
 
-test("what a later Cursor might send that the bridge does not know leaves the turn running, or ended complete", async (t) => {
+test("what a later Cursor might send that the bridge does not know leaves the turn running, and a reason for stopping it does not know ends it as not finished", async (t) => {
   const state = await rig(t, { features: ["future"] });
   // A new session in a mode nobody knows: the thread's own mode is sent, and nothing is read back.
   const session = await createThread({}, state.phone);
   // An update of a kind nobody knows, a tool call and a permission request that cannot be read
   // (passed over, and answered cancelled), a request nobody knows (refused), and a reason for
-  // stopping nobody knows.
+  // stopping nobody knows: what was said is kept, and the turn is not told as finished.
   const events = await runTurn(state.phone, session, "use the editor in the future");
   const done = events.at(-1).payload;
-  assert.equal(done.status, "complete");
-  assert.equal(done.text, 'odd={"outcome":{"outcome":"cancelled"}} The client answered -32601. pong: use the editor in the future');
+  assert.equal(done.status, "error");
+  assert.equal(done.text, 'Cursor stopped the turn for a reason Portals does not know ("enlightened").');
+  assert.equal(ofType(events, "message.delta").map((event) => event.payload.text).join(""), 'odd={"outcome":{"outcome":"cancelled"}} The client answered -32601. pong: use the editor in the future');
   assert.deepEqual(notices(events), []);
   assert.deepEqual(tools(events), []);
   assert.equal((await state.phone.call("session.resume", { session_id: session })).info.mode, "default");
+});
+
+test("a turn Cursor stops for a refusal keeps what was said, and is told as not finished", async () => {
+  const session = await createThread();
+  const done = (await runTurn(client, session, "decline this")).at(-1).payload;
+  assert.equal(done.status, "error");
+  assert.equal(done.text, "Cursor's model declined to go on.");
+  assert.equal((await runTurn(client, session, "and now?")).at(-1).payload.text, "pong: and now?");
 });
 
 // MARK: Closing

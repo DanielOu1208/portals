@@ -948,6 +948,8 @@ async function turnAsCursor(session: Stored, prompt: { type: string; text?: stri
   session.said.push({ role: "agent", text: reply });
   if (turn.cancelled && !has("stubborn")) return "cancelled";
   text(id, "\n\nError: RetriableError: WritableIterable is closed");
+  // ACP's own reason for a reply the model declined, which Cursor has not been seen to send.
+  if (has("decline")) return "refusal";
   return has("future") ? "enlightened" : "end_turn";
 }
 
