@@ -351,8 +351,14 @@ export class ServerLocator {
     // Settlement and the callback can outlive this child. Its exit listener has
     // already cleaned up the group; never signal its possibly reused PID here.
     if (child?.pid !== undefined && child.exitCode === null && child.signalCode === null) {
-      if (server && !same(server, processOf(child.pid, 250))) throw this.uncertain(`owned server PID ${child.pid} no longer has the recorded identity`);
-      await endGroup(child.pid);
+      if (server && !same(server, processOf(child.pid, 250))) {
+        // The OS can reap the process before Node delivers its exit event. Wait
+        // for that event, without signalling an identity we no longer recognize.
+        const deadline = Date.now() + 1000;
+        while (child.exitCode === null && child.signalCode === null && Date.now() < deadline) await sleep(20);
+        if (child.exitCode === null && child.signalCode === null) throw this.uncertain(`owned server PID ${child.pid} no longer has the recorded identity`);
+      }
+      if (child.exitCode === null && child.signalCode === null) await endGroup(child.pid);
       // SIGKILL can leave a zombie until Node receives and reaps the child.
       const deadline = Date.now() + 1000;
       while (child.exitCode === null && child.signalCode === null && Date.now() < deadline) await sleep(20);
