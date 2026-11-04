@@ -1,5 +1,6 @@
 import "./environment.ts";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { createServer as createSocketServer } from "node:net";
@@ -2183,6 +2184,38 @@ test("update reports a failed recovery reload with the backup location and leave
   assert.equal(readFileSync(file, "utf8"), previous);
   const folder = readdirSync(dirname(file)).find((name) => name.startsWith(".portals-service-update-"))!;
   assert.equal(readFileSync(join(dirname(file), folder, "previous"), "utf8"), previous);
+});
+
+test("update recovers the stopped service from its prepared backup when payload writes fail with ENOSPC", async (t) => {
+  const { system, ui, ctx, file, label } = await uninstallFixture("linux", "refresh-disk-full");
+  const previous = readFileSync(file, "utf8").replace("TimeoutStopSec=20", "TimeoutStopSec=10");
+  writeFileSync(file, previous);
+  const run = system.run.bind(system);
+  let writesFail = false;
+  let restarts = 0;
+  let reloads = 0;
+  system.run = async (program, args, options) => {
+    if (args[1] === "daemon-reload") reloads++;
+    if (args[1] === "restart" && ++restarts === 1) {
+      writesFail = true;
+      system.active.delete(unitName(label));
+      return { code: 1, stdout: "", stderr: "restart failed" };
+    }
+    return run(program, args, options);
+  };
+  const write = fs.writeFileSync;
+  t.mock.method(fs, "writeFileSync", (...args: Parameters<typeof write>) => {
+    if (writesFail) throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
+    return Reflect.apply(write, fs, args);
+  });
+  let failure: unknown;
+  try { await update(ctx); } catch (error) { failure = error; }
+  assert.ok(system.active.has(unitName(label)), "the recovery restart starts the service despite unavailable payload writes");
+  assert.equal(readFileSync(file, "utf8"), previous);
+  assert.equal(reloads, 2);
+  assert.equal(restarts, 2);
+  assert.ok(failure instanceof Error);
+  assert.match(failure.message, /restart failed/);
 });
 
 test("relay reset takes the relay id out of net-own.json and its .bak, keeping the token and key, and restarts a bridge its LaunchAgent runs around it (net-19)", async () => {

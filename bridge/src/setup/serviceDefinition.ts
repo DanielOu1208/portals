@@ -1,5 +1,6 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { ServiceSpec } from "./service.ts";
 
 /** A changed definition is kept reversible until its service has restarted. */
@@ -11,6 +12,23 @@ export interface DefinitionUpdate {
 
 /** A custom definition the current template cannot safely round-trip. Leave it alone. */
 export class UnsupportedServiceDefinition extends Error {}
+
+/** Use the system's permission-aware copy, never a shell or the updater's PATH. */
+function permissionCommand(program: string, args: string[]): string {
+  const result = spawnSync(program, args, { encoding: "utf8", timeout: 15_000, env: { PATH: "/usr/bin:/bin", LC_ALL: "C" } });
+  if (result.status !== 0) throw new UnsupportedServiceDefinition("the service definition's access permissions could not be preserved");
+  return result.stdout;
+}
+
+function linuxAcl(file: string): string {
+  const acl = permissionCommand("getfacl", ["--omit-header", "--numeric", "--absolute-names", "--", resolve(file)]).trim();
+  for (const entry of ["user", "group", "other"]) {
+    if (!new RegExp(`^${entry}::[r-][w-][x-](?:\\s+#effective:[r-][w-][x-])?$`, "m").test(acl)) {
+      throw new UnsupportedServiceDefinition("the service definition's ACL could not be checked");
+    }
+  }
+  return acl;
+}
 
 /** Do not erase custom directives that setup's current template does not know. */
 export function checkDefinitionFields(before: string, next: string, format: "plist" | "unit"): void {
@@ -30,24 +48,36 @@ export function checkDefinitionFields(before: string, next: string, format: "pli
 
 /**
  * Replace in the same folder, atomically. A failed write never cuts the old file
- * short. Keep its exact bytes and mode until restart succeeds; on recovery failure
- * leave the backup in place rather than lose the last working definition.
+ * short. Keep the original inode, with its ACL and mode, until restart succeeds.
+ * On recovery failure, leave the backup in place rather than lose the last working definition.
  */
 export async function replaceDefinition(file: string, next: string, reload: () => Promise<void> = async () => {}): Promise<DefinitionUpdate> {
   const stat = fs.lstatSync(file);
   if (!stat.isFile()) throw new UnsupportedServiceDefinition("the service definition is not a plain file");
   const before = fs.readFileSync(file, "utf8");
   if (before === next) return { changed: false, commit() {}, async rollback() {} };
+  let acl: string | undefined;
+  if (process.platform === "linux") {
+    if (!permissionCommand("/bin/cp", ["--version"]).startsWith("cp (GNU coreutils)")) {
+      throw new UnsupportedServiceDefinition("refreshing the service definition requires an ACL-aware copy");
+    }
+    acl = linuxAcl(file);
+  } else if (process.platform !== "darwin") {
+    throw new UnsupportedServiceDefinition("the service definition's access permissions could not be preserved");
+  }
   const folder = fs.mkdtempSync(join(dirname(file), ".portals-service-update-"));
   const backup = join(folder, "previous");
+  const recovery = join(folder, "restore");
   const staged = join(folder, "next");
   const clean = () => fs.rmSync(folder, { recursive: true, force: true });
   let replaced = false;
+  let restored = false;
   const restore = async () => {
     if (replaced) {
-      fs.writeFileSync(staged, before, { mode: stat.mode & 0o777 });
-      fs.chmodSync(staged, stat.mode & 0o777);
-      fs.renameSync(staged, file);
+      if (!restored) {
+        fs.renameSync(recovery, file);
+        restored = true;
+      }
       await reload();
       replaced = false;
     }
@@ -61,9 +91,31 @@ export async function replaceDefinition(file: string, next: string, reload: () =
     }
   };
   try {
-    fs.writeFileSync(backup, before, { mode: stat.mode & 0o777 });
-    fs.writeFileSync(staged, next, { mode: stat.mode & 0o777 });
-    fs.chmodSync(staged, stat.mode & 0o777);
+    // An inherited allow ACL can bypass 0700 on a Mac. Clear it while the folder is empty.
+    if (process.platform === "darwin") permissionCommand("/bin/chmod", ["-N", resolve(folder)]);
+    fs.chmodSync(folder, 0o700);
+    fs.linkSync(file, backup);
+    fs.linkSync(file, recovery);
+    // Open before copying permissions: even a read-only definition can be updated
+    // through this descriptor, without changing its copied ACL or mode afterward.
+    const descriptor = fs.openSync(staged, "wx", 0o600);
+    try {
+      permissionCommand("/bin/cp", ["-p", resolve(file), resolve(staged)]);
+      fs.ftruncateSync(descriptor, 0);
+      fs.writeFileSync(descriptor, next);
+      const copied = fs.fstatSync(descriptor);
+      const named = fs.lstatSync(staged);
+      const sameFile = named.isFile() && named.ino === copied.ino && named.dev === copied.dev;
+      const samePermissions = copied.uid === stat.uid && copied.gid === stat.gid && (copied.mode & 0o7777) === (stat.mode & 0o7777);
+      if (!sameFile || !samePermissions) {
+        throw new UnsupportedServiceDefinition("the service definition's ownership or permissions could not be preserved");
+      }
+      if (acl !== undefined && linuxAcl(staged) !== acl) {
+        throw new UnsupportedServiceDefinition("the service definition's ACL could not be preserved");
+      }
+    } finally {
+      fs.closeSync(descriptor);
+    }
     fs.renameSync(staged, file);
     replaced = true;
     await reload();

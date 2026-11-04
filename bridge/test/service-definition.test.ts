@@ -1,5 +1,6 @@
 import "./environment.ts";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -67,6 +68,77 @@ test("atomic replacement keeps a backup until commit, preserves permissions, and
   assert.deepEqual(fs.readdirSync(folder), ["service"]);
 });
 
+for (const rollback of [false, true]) {
+  test(`${rollback ? "rollback" : "replacement"} preserves ACL restrictions on a service definition`, { skip: process.platform !== "darwin" }, async (t) => {
+    const folder = fs.mkdtempSync(join(tmpdir(), "portals-definition-"));
+    t.after(() => fs.rmSync(folder, { recursive: true, force: true }));
+    fs.chmodSync(folder, 0o755);
+    const file = join(folder, "service");
+    fs.writeFileSync(file, "FAKE_SECRET=before", { mode: 0o644 });
+    const acl = spawnSync("/bin/chmod", ["+a", "user:nobody deny read", file], { encoding: "utf8" });
+    assert.equal(acl.status, 0, acl.stderr);
+    const restrictions = (path = file) => {
+      const listing = spawnSync("/bin/ls", ["-lde", path], { encoding: "utf8" });
+      assert.equal(listing.status, 0, listing.stderr);
+      return listing.stdout.split("\n").filter((line) => /^\s*\d+:/.test(line));
+    };
+    const before = restrictions();
+    assert.ok(before.some((line) => line.includes("user:nobody deny read")));
+    const inode = fs.statSync(file).ino;
+    const update = await replaceDefinition(file, "FAKE_SECRET=after");
+    const backupFolder = fs.readdirSync(folder).find((name) => name.startsWith(".portals-service-update-"))!;
+    const backup = join(folder, backupFolder, "previous");
+    assert.equal(fs.statSync(backup).ino, inode);
+    assert.deepEqual(restrictions(backup), before);
+    if (rollback) await update.rollback();
+    assert.deepEqual(restrictions(), before);
+    assert.equal(fs.statSync(file).mode & 0o777, 0o644);
+    assert.equal(fs.readFileSync(file, "utf8"), rollback ? "FAKE_SECRET=before" : "FAKE_SECRET=after");
+    if (rollback) assert.equal(fs.statSync(file).ino, inode);
+    update.commit();
+  });
+}
+
+test("read-only definitions retain their mode through replacement and rollback", async (t) => {
+  const folder = fs.mkdtempSync(join(tmpdir(), "portals-definition-"));
+  t.after(() => fs.rmSync(folder, { recursive: true, force: true }));
+  const file = join(folder, "service");
+  fs.writeFileSync(file, "before", { mode: 0o444 });
+  const inode = fs.statSync(file).ino;
+  const update = await replaceDefinition(file, "after");
+  assert.equal(fs.statSync(file).mode & 0o777, 0o444);
+  assert.equal(fs.readFileSync(file, "utf8"), "after");
+  await update.rollback();
+  assert.equal(fs.statSync(file).mode & 0o777, 0o444);
+  assert.equal(fs.statSync(file).ino, inode);
+  assert.equal(fs.readFileSync(file, "utf8"), "before");
+});
+
+test("staging is private before copying a definition from a directory with inheritable ACL grants", { skip: process.platform !== "darwin" }, async (t) => {
+  const folder = fs.mkdtempSync(join(tmpdir(), "portals-definition-"));
+  t.after(() => fs.rmSync(folder, { recursive: true, force: true }));
+  const grant = spawnSync("/bin/chmod", ["+a", "user:nobody allow read,execute,file_inherit,directory_inherit", folder], { encoding: "utf8" });
+  assert.equal(grant.status, 0, grant.stderr);
+  const file = join(folder, "service");
+  fs.writeFileSync(file, "FAKE_SECRET=before");
+  const open = fs.openSync;
+  let inspected = false;
+  t.mock.method(fs, "openSync", (...args: Parameters<typeof open>) => {
+    if (String(args[0]).endsWith("/next")) {
+      const staging = join(String(args[0]), "..");
+      const listing = spawnSync("/bin/ls", ["-lde", staging], { encoding: "utf8" });
+      assert.equal(listing.status, 0, listing.stderr);
+      assert.doesNotMatch(listing.stdout, /user:nobody/);
+      assert.equal(fs.statSync(staging).mode & 0o777, 0o700);
+      inspected = true;
+    }
+    return Reflect.apply(open, fs, args);
+  });
+  const update = await replaceDefinition(file, "FAKE_SECRET=after");
+  assert.ok(inspected);
+  update.commit();
+});
+
 for (const operation of ["writeFileSync", "renameSync"] as const) {
   test(`a failed ${operation} leaves the previous definition intact`, async (t) => {
     const folder = fs.mkdtempSync(join(tmpdir(), "portals-definition-"));
@@ -75,7 +147,7 @@ for (const operation of ["writeFileSync", "renameSync"] as const) {
     fs.writeFileSync(file, "before");
     const original = fs[operation];
     const mock = t.mock.method(fs, operation, (...args: unknown[]) => {
-      if (String(args[0]).endsWith("/next")) throw new Error("disk failure");
+      if (operation === "writeFileSync" || String(args[0]).endsWith("/next")) throw new Error("disk failure");
       return Reflect.apply(original, fs, args);
     });
     try {
