@@ -274,10 +274,25 @@ short call to a cheap model (`codex.titleModel`; `null` for none).
 
 ### Pi
 
-**Pi does not ask before it acts.** It has no approvals and no permission modes: it runs
-every command and makes every edit its model decides on, at once, and there is no `/mode`
-for it. Give a Pi thread only work you would let Pi do unattended in your terminal. (If one
-of your Pi extensions asks something, the app shows it as a card.)
+Pi threads have a mode picker and `/mode`. Existing threads and new threads start in
+**Default**, which keeps Pi's usual behavior: it acts without asking. Your own
+extensions still apply in every mode.
+
+- **Ask** asks on a question card before each `bash`, `write` and `edit` call. Choose
+  **Allow once** or **Deny**; dismissing the card or pressing Stop denies the call.
+- **Accept edits** allows `write` and `edit`, and asks before `bash`.
+- **Plan** allows only the `read`, `grep`, `find` and `ls` tool calls and tells Pi to
+  describe a plan before acting. Change modes to carry it out.
+- **Full access** runs without asking, like Default.
+
+A mode change takes effect with the next turn. The chosen mode survives cooling and
+host restarts. A small extension shipped with the host supplies the gate through Pi's
+extension API, supported on Pi 1.1.0 and newer. Calls made by `codemode` also pass through
+it. Ask and Accept edits do not gate other tool names, including MCP tools.
+**This is not a security boundary:** other extensions can act outside tool calls, and
+Pi subagents run in separate processes outside the gate. Plan blocks this Pi's
+delegation tools, but cannot restrict a subagent another extension starts. Give Pi
+only work you would let it do unattended in your terminal.
 
 - **Sign in with Pi's own `/login`.** The host gets a PATH and nothing else of your
   shell's, so an API key you keep in a shell variable does not reach its Pi: models that

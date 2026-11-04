@@ -1,6 +1,8 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+import type permissions from "../src/providers/pi/permission-extension.ts";
 
 // A stand-in for `pi --mode rpc`, run as a real child process by the tests of the Pi
 // client and provider. It speaks Pi's protocol on its standard input and output, keeps
@@ -162,6 +164,10 @@ function here(record: Json): Json {
 // MARK: The models and commands
 
 interface Settings {
+  missingPermissions?: boolean;
+  refusePermissionMode?: boolean;
+  permissionModeGate?: string;
+  permissionModeGateWhen?: string;
   /** Models besides the built-in ones. */
   models?: Json[];
   /** `provider/id` of the model a new session runs on. */
@@ -346,6 +352,26 @@ function has(script: string, name: string): boolean {
 
 // MARK: Dialogs and the extension's commands
 
+type PermissionAPI = Parameters<typeof permissions>[0];
+const permissionHandlers = new Map<string, { handler(args: string): Promise<void> }>();
+let toolGate: Parameters<PermissionAPI["on"]>[1] | undefined;
+
+// The permission tests run the shipped extension itself, with Pi's select UI played
+// by the same RPC dialogs as the recorded extensions.
+const extensionPath = option("-e");
+if (extensionPath && !settings.missingPermissions) {
+  const extension = (await import(pathToFileURL(extensionPath).href)).default as typeof permissions;
+  extension({
+    registerCommand(name, command) {
+      permissionHandlers.set(name, command);
+      commands.push({ name, description: command.description, source: "extension" });
+    },
+    on(event: string, handler: any) {
+      if (event === "tool_call") toolGate = handler;
+    },
+  });
+}
+
 /** Asks, and resolves with the answer; undefined when its time ran out. */
 function ask(request: Json): Promise<Json> {
   const id = randomUUID();
@@ -369,6 +395,17 @@ async function extensionCommand(text: string): Promise<boolean> {
   const space = text.indexOf(" ");
   const name = space < 0 ? text.slice(1) : text.slice(1, space);
   const rest = space < 0 ? "" : text.slice(space + 1);
+  const permission = permissionHandlers.get(name);
+  if (permission) {
+    if (settings.refusePermissionMode) {
+      // Pi reports the handler error and still answers the prompt as handled.
+      say({ type: "extension_error", extensionPath: `command:${name}`, event: "command", error: "The stand-in refused the permission mode." });
+      return true;
+    }
+    await permission.handler(rest);
+    if (settings.permissionModeGate && rest === (settings.permissionModeGateWhen ?? "full")) await released(settings.permissionModeGate);
+    return true;
+  }
   switch (name) {
     case "ask-confirm": {
       const reply = await ask({ method: "confirm", title: "Send the report?", message: "It goes to everyone on the list." });
@@ -534,6 +571,19 @@ async function wind(): Promise<void> {
 
 /** A reply made up here. True when it was aborted. */
 async function improvise(text: string): Promise<boolean> {
+  const tool = /^permission (\w+)( nested)?$/.exec(text);
+  if (tool) {
+    const name = tool[1];
+    const input = name === "bash" ? { command: "echo harmless" } : { path: "note.txt", content: "hello" };
+    const call = { toolName: name, input, ...(tool[2] ? { parentToolCallId: "call_script" } : {}) };
+    const blocked = await (toolGate as any)?.(call, {
+      hasUI: true,
+      ui: { select: async (title: string, options: string[]) => (await ask({ method: "select", title, options }))?.value },
+    });
+    note("permission", { call, blocked: blocked?.block === true });
+    reply([blocked ? "Tool blocked." : "Tool allowed."]);
+    return state.aborted;
+  }
   const pending = { ...assistant("", "pending"), usage: usageOf(0) };
   say({ type: "message_start", message: pending });
   say({ type: "message_update", assistantMessageEvent: { type: "text_start", contentIndex: 0 } });
@@ -655,9 +705,16 @@ async function prompt(command: Json): Promise<void> {
   const text = String(command.message ?? "");
   const images = Array.isArray(command.images) ? command.images : [];
   // The extension's commands run at once, even during a run.
-  if (text.startsWith("/") && (await extensionCommand(text))) {
-    answer(command.id, "prompt", { disposition: "handled" });
-    return;
+  if (text.startsWith("/")) {
+    try {
+      if (await extensionCommand(text)) {
+        answer(command.id, "prompt", { disposition: "handled" });
+        return;
+      }
+    } catch (error) {
+      refuse(command.id, "prompt", (error as Error).message);
+      return;
+    }
   }
   if (state.compacting) {
     refuse(command.id, "prompt", "Cannot submit a prompt while compaction is in progress. Wait for compaction to finish and retry.");

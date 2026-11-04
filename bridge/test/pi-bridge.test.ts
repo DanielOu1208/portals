@@ -9,6 +9,7 @@ import { machineWord } from "../src/platform.ts";
 import { WaitingStore } from "../src/sessions/waiting.ts";
 import { agentInstructions, mathInstructions, visualInstructions } from "../src/portals/guide.ts";
 import { makeProviders } from "../src/providers/index.ts";
+import { threadArguments } from "../src/providers/pi/options.ts";
 import type { PiProvider } from "../src/providers/pi/provider.ts";
 import { isEvent, RpcFailure, startTestBridge, streamedText, TestClient, unspent, type Frame, type TestBridge } from "./helpers.ts";
 import { piProvider, standin, until, type Standin } from "./pi-standin.ts";
@@ -126,10 +127,12 @@ test("profiles.list, model.options and the commands describe Pi from what a shor
       "o3-mini": ["low", "medium", "high"],
       "gpt-locked": ["none"],
     },
+    mode_options: provider.modeOptions,
+    modes: { default: "full" },
     model_names: { "gpt-6-luna": "GPT-6 Luna", "gpt-5": "GPT-5", "gpt-4.1-nano": "GPT-4.1 nano", "o3-mini": "o3-mini", "gpt-locked": "Locked" },
   });
   assert.deepEqual((await client.call("profiles.list")).profiles, [
-    { name: "pi", kind: "pi", display_name: "Pi", description: `Pi on this ${machineWord()}, with your own settings, extensions and sign-ins. It does not ask before it acts.`, model: "gpt-6-luna", provider: "openai", is_default: true, adopt_modes: ["continue", "fork", "read"] },
+    { name: "pi", kind: "pi", display_name: "Pi", description: `Pi on this ${machineWord()}, with your own settings, extensions and sign-ins. Pick a mode to ask before commands and edits. Subagents are outside the gate.`, model: "gpt-6-luna", provider: "openai", is_default: true, adopt_modes: ["continue", "fork", "read"], mode_options: provider.modeOptions },
   ]);
   // Pi's own default level, `off`, in the app's word.
   assert.deepEqual(await client.call("config.get", { key: "reasoning", profile: "pi" }), { value: "none" });
@@ -138,7 +141,7 @@ test("profiles.list, model.options and the commands describe Pi from what a shor
   assert.deepEqual(
     catalog.categories.map((category: Frame) => [category.name, category.pairs.map((pair: string[]) => pair[0])]),
     [
-      ["Bridge", ["/status"]],
+      ["Bridge", ["/status", "/mode"]],
       // The bridge's own `/compact`, then the extension's commands. One with a capital letter is left out.
       ["Pi", ["/compact", "/ask-confirm", "/ask-select", "/ask-input", "/ask-editor", "/ask-timed", "/say", "/tell", "/own", "/ask-later", "/quit"]],
     ],
@@ -180,7 +183,7 @@ test("a thread starts no process; its first message starts Pi on the thread's id
   // One process, in the thread's folder, on the session whose id is the thread's.
   const processes = pi.starts(session);
   assert.equal(processes.length, 1);
-  assert.deepEqual(processes[0].args, ["--mode", "rpc", "--session-id", session]);
+  assert.deepEqual(processes[0].args, threadArguments(session, null, pi.agentDir));
   assert.equal(processes[0].cwd, cwd);
   // One `get_state`, the ring, the name, then the prompt, which says what to do if a run is under way.
   assert.deepEqual(pi.sentTo(session).slice(0, 4), [
@@ -940,6 +943,179 @@ test("a command of an extension's is a turn Pi handles itself, and what the comm
   assert.deepEqual(pi.sessionFiles(session), []);
 });
 
+test("Pi offers /mode; ask uses question cards, allows once and keeps the next mode out of an open card", async () => {
+  const session = await createThread();
+  assert.equal((await client.call("session.resume", { session_id: session })).info.mode, "default");
+  await client.call("slash.exec", { session_id: session, command: "/mode ask" });
+  assert.equal((await client.call("session.resume", { session_id: session })).info.mode, "ask");
+  for (const [tool, choice] of [["bash", "Deny"], ["write", "Allow once"], ["write", "Deny"], ["edit", "Deny"], ["bash nested", "Deny"]]) {
+    const start = await send(session, `permission ${tool}`);
+    const card = await client.nextRequest();
+    assert.equal(card.method, "clarify");
+    const question = card.params.questions[0];
+    assert.match(question.question, /^Allow (bash|write|edit)\?/);
+    assert.deepEqual(question.choices, ["Allow once", "Deny"]);
+    client.answer(card.id, { answers: { [question.qid]: choice } });
+    assert.equal((await completed(session, start)).payload.text, choice === "Allow once" ? "Tool allowed." : "Tool blocked.");
+  }
+  const start = await send(session, "permission bash");
+  const card = await client.nextRequest();
+  await client.call("session.set_mode", { session_id: session, mode: "full" });
+  assert.equal(pi.sentTo(session, "prompt").filter((entry) => entry.message.startsWith("/portals-permission-mode")).at(-1).message, "/portals-permission-mode ask");
+  client.answer(card.id, { answers: { [card.params.questions[0].qid]: "Deny" } });
+  assert.equal((await completed(session, start)).payload.text, "Tool blocked.");
+  assert.equal((await turn(session, "permission bash")).at(-1).payload.text, "Tool allowed.");
+  await client.call("session.set_mode", { session_id: session, mode: "default" });
+  assert.equal((await turn(session, "permission write")).at(-1).payload.text, "Tool allowed.");
+  await assert.rejects(client.call("session.set_mode", { session_id: session, mode: "medium" }));
+});
+
+test("Pi accept edits and plan have distinct tool policies; Stop withdraws a permission card", async () => {
+  const session = await createThread();
+  await client.call("session.set_mode", { session_id: session, mode: "edits" });
+  for (const tool of ["write", "edit"]) assert.equal((await turn(session, `permission ${tool}`)).at(-1).payload.text, "Tool allowed.");
+  const start = await send(session, "permission bash");
+  const card = await client.nextRequest();
+  await client.call("session.interrupt", { session_id: session });
+  assert.equal((await completed(session, start)).payload.status, "interrupted");
+  // A late allow cannot grant the cancelled call or the next one.
+  client.answer(card.id, { answers: { [card.params.questions[0].qid]: "Allow once" } });
+  await client.call("session.set_mode", { session_id: session, mode: "plan" });
+  for (const tool of ["bash", "write", "edit", "codemode", "delegate_task"]) assert.equal((await turn(session, `permission ${tool}`)).at(-1).payload.text, "Tool blocked.");
+  for (const tool of ["read", "grep", "find", "ls"]) assert.equal((await turn(session, `permission ${tool}`)).at(-1).payload.text, "Tool allowed.");
+});
+
+test("a chosen Pi mode survives cooling and a host restart without entering the conversation", async () => {
+  const ownProvider = piProvider(pi, { folder: cwd });
+  const first = await startTestBridge({ keepHome: true, providers: new Map([["pi", ownProvider]]), config: { generalFolder: cwd } });
+  const phone = await TestClient.open(first);
+  const session = await createThread({}, phone);
+  await phone.call("session.set_mode", { session_id: session, mode: "plan" });
+  await turn(session, "permission write", phone);
+  await ownProvider.pool.sweep(Date.now() + 16 * 60_000);
+  await until(() => pi.alive().length === 0);
+  assert.equal((await turn(session, "permission bash", phone)).at(-1).payload.text, "Tool blocked.");
+  await phone.close();
+  await first.dispose();
+  const second = await startTestBridge({ home: first.home, providers: new Map([["pi", piProvider(pi, { folder: cwd })]]) });
+  const again = await TestClient.open(second);
+  try {
+    const resumed = await again.call("session.resume", { session_id: session });
+    assert.equal(resumed.info.mode, "plan");
+    assert.equal(resumed.messages.some((message: Frame) => message.text?.includes("/portals-permission-mode")), false);
+    assert.equal((await turn(session, "permission edit", again)).at(-1).payload.text, "Tool blocked.");
+  } finally {
+    await again.close();
+    await second.dispose();
+  }
+});
+
+test("a missing or refused Pi permission extension fails before the user's message reaches Pi", async () => {
+  for (const settings of [{ missingPermissions: true }, { refusePermissionMode: true }]) {
+    const ownPi = standin(settings);
+    const own = await startTestBridge({ providers: new Map([["pi", piProvider(ownPi, { folder: cwd })]]), config: { generalFolder: cwd } });
+    const phone = await TestClient.open(own);
+    try {
+      const session = await createThread({}, phone);
+      await phone.call("session.set_mode", { session_id: session, mode: "ask" });
+      const events = await turn(session, "must not reach Pi", phone);
+      assert.equal(events.at(-1).payload.status, "error");
+      assert.match(events.at(-1).payload.text, /could not set its permission mode/);
+      assert.equal(ownPi.sentTo(session, "prompt").some((entry) => entry.message === "must not reach Pi"), false);
+      await until(() => ownPi.alive().length === 0);
+    } finally {
+      await phone.close();
+      await own.dispose();
+      ownPi.dispose();
+    }
+  }
+});
+
+test("a stopped Pi mode change finishes before the next turn rechecks its own mode", async () => {
+  const ownPi = standin({ permissionModeGate: "mode-ack" });
+  const own = await startTestBridge({ providers: new Map([["pi", piProvider(ownPi, { folder: cwd })]]), config: { generalFolder: cwd } });
+  const phone = await TestClient.open(own);
+  try {
+    const session = await createThread({}, phone);
+    await phone.call("session.set_mode", { session_id: session, mode: "ask" });
+    await turn(session, "permission read", phone);
+    await phone.call("session.set_mode", { session_id: session, mode: "full" });
+    const first = await send(session, "must stay unsent", phone);
+    await until(() => ownPi.sentTo(session, "prompt").some((entry) => entry.message === "/portals-permission-mode full"));
+    await phone.call("session.interrupt", { session_id: session });
+    assert.equal((await completed(session, first, phone)).payload.status, "interrupted");
+    await phone.call("session.set_mode", { session_id: session, mode: "ask" });
+    const second = await send(session, "permission bash", phone);
+    ownPi.release("mode-ack");
+    const card = await phone.nextRequest();
+    phone.answer(card.id, { answers: { [card.params.questions[0].qid]: "Deny" } });
+    assert.equal((await completed(session, second, phone)).payload.text, "Tool blocked.");
+    assert.equal(ownPi.sentTo(session, "prompt").some((entry) => entry.message === "must stay unsent"), false);
+    assert.deepEqual(ownPi.sentTo(session, "prompt").filter((entry) => entry.message.startsWith("/portals-permission-mode")).map((entry) => entry.message), ["/portals-permission-mode ask", "/portals-permission-mode full", "/portals-permission-mode ask"]);
+  } finally {
+    ownPi.release("mode-ack");
+    await phone.close();
+    await own.dispose();
+    ownPi.dispose();
+  }
+});
+
+test("Default resets a cancelled Pi mode change whose acknowledgement never arrives", async () => {
+  const ownPi = standin({ permissionModeGate: "mode-timeout", permissionModeGateWhen: "plan" });
+  const own = await startTestBridge({ providers: new Map([["pi", piProvider(ownPi, { folder: cwd, callTimeoutMs: 2000 })]]), config: { generalFolder: cwd } });
+  const phone = await TestClient.open(own);
+  try {
+    const session = await createThread({}, phone);
+    await phone.call("session.set_mode", { session_id: session, mode: "plan" });
+    const first = await send(session, "must stay unsent", phone);
+    await until(() => ownPi.sentTo(session, "prompt").some((entry) => entry.message === "/portals-permission-mode plan"));
+    await phone.call("session.interrupt", { session_id: session });
+    await completed(session, first, phone);
+    await phone.call("session.set_mode", { session_id: session, mode: "default" });
+    assert.equal((await turn(session, "permission write", phone)).at(-1).payload.text, "Tool allowed.");
+    assert.equal(ownPi.sentTo(session, "prompt").some((entry) => entry.message === "/portals-permission-mode default"), true);
+  } finally {
+    ownPi.release("mode-timeout");
+    await phone.close();
+    await own.dispose();
+    ownPi.dispose();
+  }
+});
+
+test("a Pi mode change follows a stopped stray run onto its replacement, also when the old run settles while leaving", async () => {
+  for (const settles of [false, true]) {
+    const ownPi = standin();
+    const quick = piProvider(ownPi, { folder: cwd, interruptGraceMs: 60_000 });
+    const own = await startTestBridge({ providers: new Map([["pi", quick]]), config: { generalFolder: cwd } });
+    const phone = await TestClient.open(own);
+    try {
+      const session = await createThread({}, phone);
+      const start = await send(session, "hold never slowstop first-stopped settle-first", phone);
+      await event(session, start, "message.delta", phone);
+      assert.equal(await submit(session, `slowstart stray hold never deaf ${settles ? "settle-leaving" : ""}`, phone), "steered");
+      await until(() => ownPi.sentTo(session, "prompt").length === 2);
+      await phone.call("session.interrupt", { session_id: session });
+      await phone.call("session.set_mode", { session_id: session, mode: "ask" });
+      assert.equal(await submit(session, "permission bash", phone), "queued");
+      ownPi.release("first-stopped");
+      await ends(session, start, 1, phone);
+      await phone.from(start, () => turnEvents(session, start, phone).filter((entry) => entry.type === "message.start").length === 2);
+      (quick as { interruptGraceMs: number }).interruptGraceMs = 150;
+      ownPi.release("stray");
+      const card = await phone.nextRequest();
+      phone.answer(card.id, { answers: { [card.params.questions[0].qid]: "Deny" } });
+      const [, done] = await ends(session, start, 2, phone);
+      assert.equal(done.status, "complete");
+      assert.match(done.text, /Tool blocked\.$/);
+      assert.equal(ownPi.starts(session).length, 2);
+    } finally {
+      await phone.close();
+      await own.dispose();
+      ownPi.dispose();
+    }
+  }
+});
+
 test("each of an extension's four dialogs is a card, and the card's answer goes back to Pi", async () => {
   const session = await createThread();
   const ask = async (command: string, answer: (card: Frame) => unknown): Promise<{ card: Frame; reply: string; back: Frame }> => {
@@ -1352,7 +1528,7 @@ test("a short-lived Pi that cannot start: the models fail with its sentence, /co
     const sentence = 'Pi did not say which models it has: Pi stopped (exit code 1): Error: Failed to load extension "broken.ts": it threw as it loaded';
     await assert.rejects(phone.call("model.options", { profile: "pi" }), (error: RpcFailure) => error.message === sentence);
     const catalog = await phone.call("commands.catalog", { profile: "pi" });
-    assert.deepEqual(catalog.pairs.map((pair: string[]) => pair[0]), ["/status", "/compact"]);
+    assert.deepEqual(catalog.pairs.map((pair: string[]) => pair[0]), ["/status", "/mode", "/compact"]);
     await assert.rejects(phone.call("session.create", { profile: "pi", cwd }), (error: RpcFailure) => error.message === sentence);
     // Nothing of the failure is kept.
     broken.breakCatalog(false);
@@ -1367,7 +1543,7 @@ test("a short-lived Pi that cannot start: the models fail with its sentence, /co
     await asked.close();
     broken.install(true);
     assert.equal((await phone.call("model.options", { profile: "pi" })).model, "gpt-6-luna");
-    assert.equal((await phone.call("commands.catalog", { profile: "pi" })).pairs.length, 14);
+    assert.equal((await phone.call("commands.catalog", { profile: "pi" })).pairs.length, 15);
   } finally {
     await phone.close();
     await own.dispose();
@@ -1444,7 +1620,7 @@ test("an idle thread's process is stopped, and the next message starts one on th
   assert.equal(again.at(-1).payload.text, "kiwi");
   const processes = pi.starts(session);
   assert.equal(processes.length, 2);
-  assert.deepEqual(processes[1].args, ["--mode", "rpc", "--session-id", session]);
+  assert.deepEqual(processes[1].args, threadArguments(session, null, pi.agentDir));
   // One file for the session, with every turn in it; and the name is not given again: Pi kept it.
   const files = pi.sessionFiles(session);
   assert.equal(files.length, 1);
@@ -1574,7 +1750,7 @@ test("a bridge closed in the middle of a Pi turn stops the turn as Stop does and
     assert.equal(streamedText(next), "Working. You said: and now?");
     assert.deepEqual(notices(next), []);
     // A new process, on the same session.
-    assert.deepEqual(pi.starts(session).map((line) => line.args), [["--mode", "rpc", "--session-id", session], ["--mode", "rpc", "--session-id", session]]);
+    assert.deepEqual(pi.starts(session).map((line) => line.args), [threadArguments(session, null, pi.agentDir), threadArguments(session, null, pi.agentDir)]);
     assert.equal(pi.sessionFiles(session).length, 1);
   } finally {
     await again.close();
@@ -1723,7 +1899,7 @@ test("a bridge with providers.pi on runs the pi at pi.path, and gives its thread
     assert.deepEqual(started.env!.PATH!.split(":").slice(0, 2), [portals.bin, dirname(pi.path)]);
     assert.equal(started.env!.PORTALS_THREAD, session);
     const lines = `${agentInstructions(portals.command)}\n\n${mathInstructions}\n\n${visualInstructions(portals.command)}`;
-    assert.deepEqual(started.args, ["--mode", "rpc", "--session-id", session, "--append-system-prompt", lines]);
+    assert.deepEqual(started.args, threadArguments(session, lines, pi.agentDir));
     // The Pi asked for the models and the commands has no session, and is told nothing.
     // The one that asked for the models; not the one that named the thread (`--print`).
     const asked = pi.starts().filter((line) => line.args?.includes("--no-session") && !line.args.includes("--print") && line.env?.PATH?.startsWith(`${portals.bin}:`));
@@ -1734,7 +1910,7 @@ test("a bridge with providers.pi on runs the pi at pi.path, and gives its thread
     writeFileSync(ownLines, "Answer in Dutch.\n");
     const second = await createThread({}, phone);
     await turn(second, "hello", phone);
-    assert.deepEqual(pi.starts(second)[0].args, ["--mode", "rpc", "--session-id", second, "--append-system-prompt", ownLines, "--append-system-prompt", lines]);
+    assert.deepEqual(pi.starts(second)[0].args, [...threadArguments(second, null, pi.agentDir), "--append-system-prompt", ownLines, "--append-system-prompt", lines]);
     await phone.call("thread.delete", { thread: second });
   } finally {
     await phone.close();
@@ -1749,7 +1925,7 @@ test("a bridge with providers.pi on runs the pi at pi.path, and gives its thread
     await turn(session, "hello", other);
     const [started] = pi.starts(session);
     // The user's own file is still there from above, so it is named first.
-    assert.deepEqual(started.args, ["--mode", "rpc", "--session-id", session, "--append-system-prompt", ownLines, "--append-system-prompt", mathInstructions]);
+    assert.deepEqual(started.args, [...threadArguments(session, null, pi.agentDir), "--append-system-prompt", ownLines, "--append-system-prompt", mathInstructions]);
     assert.equal(started.env!.PATH!.split(":")[0], pathsFor(quiet.home).bin);
     assert.equal(started.env!.PORTALS_THREAD, session);
     await other.call("thread.delete", { thread: session });

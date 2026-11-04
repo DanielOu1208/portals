@@ -6,7 +6,7 @@ import type { ChildExit } from "../child.ts";
 import { imageType, skippedImagesText } from "../images.ts";
 import type { Warmable, WarmPool } from "../pool.ts";
 import { titleFrom } from "../titles.ts";
-import type { ModelChangeResult, Prompt, ProviderEvent, ProviderSession, SessionOptions, SessionSettings, SessionSink, StoredMessage } from "../types.ts";
+import { SettingRefused, type ModeState, type ModelChangeResult, type Prompt, type ProviderEvent, type ProviderSession, type SessionOptions, type SessionSettings, type SessionSink, type StoredMessage, type ThreadMode } from "../types.ts";
 import { PiClient, PiGone, PiRefused } from "./client.ts";
 import { realFolder, terminalMayHaveIt } from "./desk.ts";
 import { cancelled, dialogAnswer, dialogCard } from "./dialogs.ts";
@@ -14,6 +14,7 @@ import { agentFolder, movedSessions, sessionFileId, type PiHistory } from "./his
 import { appLevel, isForkId, modelLevels, piLevel, threadArguments } from "./options.ts";
 import type { PiCommand, PiEvent, PiImage, PiModel, PiSessionStats, PiState, PiUiRequest } from "./protocol.ts";
 import { PiStream } from "./stream.ts";
+import { permissionCommand, permissionModes } from "./permission-extension.ts";
 
 // One Pi thread. It has a process only while it is in use: the first message starts
 // `pi --mode rpc --session-id <thread id>` in the thread's folder, later messages go to
@@ -112,6 +113,8 @@ interface Live {
   stream: PiStream;
   /** It has answered `get_state`: it is up, and what follows is known of it. */
   ready: boolean;
+  mode: ThreadMode | null;
+  modeError: string | null;
   /** What Pi runs on now, as it last said. */
   model: PiModel | null;
   /** Its thinking level, in Pi's word. */
@@ -230,6 +233,7 @@ export class PiSession implements ProviderSession, Warmable {
   private levelChosen = false;
   /** What the thread is to run on, as the app chose it. */
   private current: SessionSettings;
+  private threadMode: ThreadMode;
   /** The level Pi said it runs at, as the app names it; "" until one has said. */
   private reported = "";
   private title: string | null;
@@ -278,6 +282,7 @@ export class PiSession implements ProviderSession, Warmable {
     this.readOnly = options.readOnly === true;
     this.takenUp = options.desk === true;
     this.current = { ...options.settings };
+    this.threadMode = options.mode ?? "default";
     this.title = options.title ?? null;
     this.conversed = history.length > 0;
     this.known = read ?? null;
@@ -539,7 +544,10 @@ export class PiSession implements ProviderSession, Warmable {
       const live = await this.warm();
       if (!this.mine(turn)) return null;
       await this.applySettings(live);
-      return this.mine(turn) && this.live === live ? live : null;
+      await this.applyMode(live, turn);
+      // A stopped stray run may have ended this process while mode setup waited for
+      // it. writable checks the process and loops to its replacement.
+      return this.mine(turn) ? live : null;
     } catch (error) {
       // A process that ended has ended the turn itself (`exited`).
       if (this.mine(turn) && !(error instanceof PiGone)) this.finish(this.live, "error", (error as Error).message);
@@ -762,6 +770,48 @@ export class PiSession implements ProviderSession, Warmable {
 
   // MARK: Settings
 
+  mode(): ModeState {
+    return { mode: this.threadMode, defaultsTo: "full" };
+  }
+
+  async setMode(mode: ThreadMode): Promise<void> {
+    if (!(permissionModes as readonly string[]).includes(mode)) throw new SettingRefused("Pi does not offer that mode.");
+    this.threadMode = mode;
+  }
+
+  /** A mode is given only before the next turn, never while a question card is open. */
+  private applyMode(live: Live, turn: number): Promise<void> {
+    const stops = this.stops;
+    const current = () => this.live === live && this.mine(turn) && this.stops === stops;
+    // A stopped initialization still owns its place until Pi answers. The next turn's
+    // initialization and every user prompt wait behind it.
+    const next = live.prompting.then(async () => {
+      if (!current() || !live.client.running || live.stream.inRun) return;
+      if (live.mode === this.threadMode) return;
+      try {
+        const listed = await live.client.call<{ commands?: { name?: string; source?: string }[] }>({ type: "get_commands" });
+        if (!current() || !live.client.running || live.stream.inRun) return;
+        if (!listed?.commands?.some((command) => command.name === permissionCommand && command.source === "extension")) throw new Error("Pi did not load the permission extension.");
+        while (current() && live.client.running && !live.stream.inRun && live.mode !== this.threadMode) {
+          const mode = this.threadMode;
+          live.modeError = null;
+          const reply = await live.client.call<PromptAnswer>({ type: "prompt", message: `/${permissionCommand} ${mode}` }, this.host.callTimeoutMs);
+          if (live.modeError) throw new Error(live.modeError);
+          if (reply?.disposition !== "handled") throw new Error("Pi did not confirm the permission mode.");
+          live.mode = mode;
+        }
+      } catch (error) {
+        live.mode = null;
+        // A cancelled turn must neither stop nor reconfigure a newer turn.
+        if (!current() || !live.client.running) return;
+        await this.letGo(live);
+        throw new Error(`Pi could not set its permission mode, so no message was sent: ${(error as Error).message}`);
+      }
+    });
+    live.prompting = next.catch(() => undefined);
+    return next;
+  }
+
   async setModel(model: string, provider: string): Promise<ModelChangeResult> {
     const before = { current: this.current, chosen: this.modelChosen };
     this.current = { ...this.current, model, provider };
@@ -908,7 +958,7 @@ export class PiSession implements ProviderSession, Warmable {
     const client = new PiClient({
       command: this.host.piPath,
       args: threadArguments(this.id, this.host.instructions, agentFolder(this.host.environment(null))),
-      env: this.host.environment(this.id),
+      env: { ...this.host.environment(this.id), PORTALS_PI_PERMISSION_MODE: "default" },
       cwd: this.cwd,
       timeoutMs: this.host.callTimeoutMs,
       listener: {
@@ -925,6 +975,8 @@ export class PiSession implements ProviderSession, Warmable {
         progress: (event) => this.sink.emit(event),
       }),
       ready: false,
+      mode: "default",
+      modeError: null,
       model: null,
       level: "",
       name: "",
@@ -1040,6 +1092,8 @@ export class PiSession implements ProviderSession, Warmable {
 
   private event(live: Live, record: PiEvent): void {
     if (this.live !== live) return;
+    // Pi answers an extension command as handled even when its handler threw.
+    if (record.type === "extension_error" && record.extensionPath === `command:${permissionCommand}`) live.modeError = record.error ?? "The permission command failed.";
     const events = live.stream.map(record);
     const settled = record.type === "agent_settled";
     for (const event of events) {
@@ -1148,7 +1202,8 @@ export class PiSession implements ProviderSession, Warmable {
     const live = this.live;
     // A card still open can no longer be answered: the bridge withdraws it with the turn.
     if (live) this.closeDialogs(live, "ended");
-    this.sink.emit(event);
+    // Cancelling a permission card can let Pi settle before it reads abort.
+    this.sink.emit(stopped && event.status === "complete" ? { ...event, status: "interrupted" } : event);
     this.host.pool.touch(this);
     // One still starting takes the thread's settings when the next turn writes to it.
     if (!live?.ready) return;
