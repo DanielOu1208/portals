@@ -182,7 +182,7 @@ struct HostSettingsSheet: View {
             ProgressView()
         } else {
             Button(host == nil ? "Add" : "Save", action: save)
-                .disabled(config == nil)
+                .disabled(config == nil || addressIsTheDeviceItself)
                 .accessibilityIdentifier("save-host")
         }
     }
@@ -209,6 +209,8 @@ struct HostSettingsSheet: View {
                 if let renameProblem {
                     Text(renameProblem)
                         .foregroundStyle(.red)
+                } else if addressIsTheDeviceItself, !isFromCode {
+                    Text(Self.addressOnlyWorksOnTheMac)
                 } else if Platform.isMac, isOnlyOnThisMac {
                     Text("This host is on this Mac, and only this Mac can reach it. Your iPhone or iPad needs Tailscale: install it on this Mac and on the device, then run npx portals-host setup again."
                         + (renamesEverywhere ? " A new name renames it on all your portals and hosts." : ""))
@@ -265,7 +267,7 @@ struct HostSettingsSheet: View {
                     if trial.phase == .running { ProgressView() }
                 }
             }
-            .disabled(config == nil || trial.phase == .running)
+            .disabled(config == nil || trial.phase == .running || addressIsTheDeviceItself)
             switch trial.phase {
             case .none, .running:
                 EmptyView()
@@ -287,8 +289,8 @@ struct HostSettingsSheet: View {
             CodeCard(symbol: "laptopcomputer", name: config?.name ?? suggestedName, address: Self.shortAddress(address))
         } footer: {
             Group {
-                if codeIsForAnotherMac {
-                    Text(Self.needsTailscaleOnMac)
+                if addressIsTheDeviceItself {
+                    Text(Self.addressOnlyWorksOnTheMac)
                 } else if let macRefused {
                     Text("\(macRefused) You can switch \(Platform.thisDevice) to that host's net instead.")
                 } else if let netProblem {
@@ -314,10 +316,11 @@ struct HostSettingsSheet: View {
                 CodeButton(title: "Done", isWorking: false) { dismiss() }
             } else if macRefused != nil {
                 CodeButton(title: "Switch to this host's net", isWorking: isWorking) { confirmsSwitch = true }
+                    .disabled(addressIsTheDeviceItself)
                     .accessibilityIdentifier("switch-net")
             } else {
                 CodeButton(title: matched == nil ? "Add this host" : "Update this host", isWorking: isWorking, action: addFromCode)
-                    .disabled(config == nil || codeIsForAnotherMac)
+                    .disabled(config == nil || addressIsTheDeviceItself)
                     .accessibilityIdentifier("add-from-code")
             }
         }
@@ -331,8 +334,8 @@ struct HostSettingsSheet: View {
             CodeCard(symbol: "point.3.filled.connected.trianglepath.dotted", name: link.macName, address: Self.shortAddress(link.url.absoluteString))
         } footer: {
             Group {
-                if Platform.loopbackIsNeverAHost, link.url.isLoopback {
-                    Text(Self.needsTailscaleOnMac)
+                if addressIsTheDeviceItself {
+                    Text(Self.addressOnlyWorksOnTheMac)
                 } else if let netProblem {
                     Text(netProblem)
                         .foregroundStyle(.red)
@@ -353,10 +356,11 @@ struct HostSettingsSheet: View {
                 CodeButton(title: "Done", isWorking: false) { dismiss() }
             case .switchNet:
                 CodeButton(title: "Switch to this net", isWorking: isWorking) { confirmsSwitch = true }
+                    .disabled(addressIsTheDeviceItself)
                     .accessibilityIdentifier("switch-net")
             default:
                 CodeButton(title: "Join", isWorking: isWorking) { run { try await $0.open(.join(link)) } }
-                    .disabled(Platform.loopbackIsNeverAHost && link.url.isLoopback)
+                    .disabled(addressIsTheDeviceItself)
                     .accessibilityIdentifier("join-net")
             }
         }
@@ -436,7 +440,7 @@ struct HostSettingsSheet: View {
     }
 
     private func save() {
-        guard let config else { return }
+        guard let config, !addressIsTheDeviceItself else { return }
         // A Mac of the net whose Macs take renames: renamed on every device and Mac, through
         // the net, and not saved here as a name of this device's own. Asked once more as
         // Save is pressed, for a sheet that came up before any Mac of the net connected.
@@ -494,13 +498,15 @@ struct HostSettingsSheet: View {
         HostConfig.url(fromTyped: address)?.isLoopback == true
     }
 
-    /// A code with such an address, here on an iPhone or iPad, which would dial itself.
-    private var codeIsForAnotherMac: Bool {
-        Platform.loopbackIsNeverAHost && isOnlyOnThisMac
+    /// Such an address here on an iPhone or iPad, typed or from a code or link, where it is the
+    /// device itself: none of this sheet's buttons use it, and it says why.
+    private var addressIsTheDeviceItself: Bool {
+        guard Platform.loopbackIsNeverAHost else { return false }
+        return joinLink?.url.isLoopback ?? isOnlyOnThisMac
     }
 
-    /// Why that code can't be used here, and what to do instead.
-    private static let needsTailscaleOnMac = "This code is for Portals on the Mac it came from, which isn't reachable from here yet. To use that Mac from \(Platform.thisDevice), install Tailscale on both, signed in to the same account, then run npx portals-host setup again on the Mac and scan the code it shows."
+    /// Why such an address can't be used here, and what to do instead.
+    private static let addressOnlyWorksOnTheMac = "This address only works on the Mac itself. To use that Mac from \(Platform.thisDevice), install Tailscale on both, signed in to the same account, then run npx portals-host setup again on the Mac and scan the code it shows."
 
     /// What the one button of a sheet filled in from a code does (`DebugLaunch.pressesFromCode`).
     private func pressFromCode() {
@@ -532,6 +538,7 @@ struct HostSettingsSheet: View {
     /// Does something with the net, and closes the sheet once it is done. The sheet holds
     /// it: closed first, the work is cancelled, and what it comes to is not acted on.
     private func run(_ work: @escaping (Net) async throws -> Net.Outcome) {
+        guard !addressIsTheDeviceItself else { return }
         guard let net else { return save() }
         isWorking = true
         netProblem = nil

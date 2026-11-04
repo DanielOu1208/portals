@@ -38,6 +38,9 @@ import { isAddress, isNamedLater, liveMembers, longestMemberName, memberIDPatter
 /** Why nothing else can join a Mac set up for itself alone (`Net.thisMacOnly`): what to do about it. */
 export const thisMacOnlyRefusal = "This Mac is set up to use Portals on this Mac only, so nothing else can reach it. To add your iPhone, iPad or another computer, install Tailscale and run npx portals-host setup again.";
 
+/** Why a Mac can't join one set up for itself alone: said to that other Mac, so "that". */
+export const thisMacOnlyJoinRefusal = "That Mac is set up to use Portals on itself only, so it can't share a net. To change that, install Tailscale and run npx portals-host setup again on it.";
+
 /** How long a call to another Mac about the list may take. */
 const syncCallMs = 10_000;
 /** A day: how far past this Mac's clock a device's stamp of a name may be (`rename`). */
@@ -393,6 +396,9 @@ export class Net {
   }
 
   private joinMac(code: string, given: Record<string, unknown>, list: unknown, from: unknown): Record<string, unknown> {
+    // The answer would hand that Mac this one's 127.0.0.1, for it and its devices to dial
+    // themselves at. A code gets this far by a password sign-in, or a tunnel to this Mac. It is kept.
+    if (this.thisMacOnly) throw new NetRefused(409, thisMacOnlyJoinRefusal);
     // Its devices would come along into the net this Mac is joining, their tokens with them.
     if (this.joining) throw new NetRefused(409, "This Mac is joining another net. Try again in a moment.");
     // Made by this Mac, as a device's is: a Mac's own word does not undo its removal

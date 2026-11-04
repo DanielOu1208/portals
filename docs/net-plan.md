@@ -350,8 +350,9 @@ Portals on the same Mac needs nothing in between.
   (`Net.thisMacOnly`), never the address alone: scratch bridges, the simulator and the tests
   use loopback addresses for real joins between them.
 - **The host.** `net.invite` answers only a password sign-in, which is how Portals on that Mac
-  joins. Anyone else, and `net.join_with`, is refused with what to do: 127.0.0.1 in a code or
-  an entry would have whoever got it dial themselves. It opens no standby to the relay.
+  joins. Anyone else, `net.join_with`, and a Mac at `POST /net/join` are refused with what to
+  do: 127.0.0.1 in a code or an entry would have whoever got it dial themselves. It opens no
+  standby to the relay.
 - **The app.** A Mac whose net has only loopback hosts (`portalsNeedTailscale`) shows the
   steps in Add a portal in place of a code. An iPhone or iPad given such a link says why it
   can't use it. A Mac in a net with real hosts adds a loopback host by itself, outside the net.

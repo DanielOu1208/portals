@@ -43,7 +43,7 @@ whether the host has a user name (Portals/App/HostDirectory.swift:35-41).
 | `POST {base}/api/auth/ws-ticket` | Body `{}`, session cookies | `{"ticket":"<non-empty string>"}` (PasswordAuthenticator.swift:113-117). Hermes adds `"ttl_seconds":30`, unread. | 200 ticket; 401 or 403: the app signs in again and asks once more, then gives up as "sign-in not accepted" (PasswordAuthenticator.swift:80-90, 118-120); other: unexpected |
 | `GET {base}/` (loopback only) | Nothing | An HTML page containing `window.__HERMES_SESSION_TOKEN__="<token>"`, a JSON string literal (HermesAuthenticator.swift:118-123) | Non-200: unexpected. Fetched before every socket and every REST call (HermesAuthenticator.swift:101-114) |
 | `GET {base}/api/status` | — | Not called by the app. Useful as a health check: it answers 200. | Optional |
-| `POST {base}/net/join` | portals-bridge with feature `net` only: a code and who joins, no sign-in (section 11, docs/pairing-and-relay.md) | The member's token and the net's list | 200 joined; 400 a body it cannot use; 401 a code used, expired or wrong; 409 refused, with a sentence; 429 too many wrong codes |
+| `POST {base}/net/join` | portals-bridge with feature `net` only: a code and who joins, no sign-in (section 11, docs/pairing-and-relay.md) | The member's token and the net's list | 200 joined; 400 a body it cannot use; 401 a code used, expired or wrong; 409 refused, with a sentence (a Mac joining a Mac set up for itself alone, among others); 429 too many wrong codes |
 | Push routes | See section 10 | | |
 
 - Loopback sign-in is what the simulator uses ("This Mac", no user name). REST calls then

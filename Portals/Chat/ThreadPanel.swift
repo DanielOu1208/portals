@@ -78,7 +78,7 @@ struct ThreadPanelHost: Equatable {
         guard isConnected else { return "Not connected" }
         if route == .relay { return "Relay" }
         if let address, Self.isTailscale(address) { return "Tailscale" }
-        if let address, URL(string: "http://\(address)")?.isLoopback == true { return "This Mac" }
+        if let address, URL.isLoopback(host: address) { return "This Mac" }
         return "Direct"
     }
 

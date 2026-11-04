@@ -14,11 +14,15 @@ import { RelayStandIn } from "./relay-standin.ts";
 
 const tailnet = "https://mac.example.ts.net:10010";
 
+/** A Mac's entry, as `POST /net/join` takes one. */
+const anotherMac = { id: "other-mac-000000", kind: "mac", name: "Other", url: "https://other.test:10010", token_hash: "a".repeat(64), key: "k".repeat(43), relay: "r".repeat(22) };
+
 test("isLoopbackAddress is the addresses only the computer itself answers at", () => {
-  for (const address of ["http://127.0.0.1:9120", "http://127.1.2.3:80", "http://localhost:9120", "http://LOCALHOST", "http://[::1]:9120"]) {
+  // The same two lists as in ThisMacOnlyTests.swift: the host and the app must agree.
+  for (const address of ["http://127.0.0.1:9120", "http://127.1.2.3:80", "http://127.1:9120", "http://2130706433:9120", "http://0x7f.0.0.1:9120", "http://017700000001:80", "http://127.0.0.1.:80", "http://localhost:9120", "http://LOCALHOST", "http://[::1]:9120", "http://[0:0:0:0:0:0:0:1]:9120"]) {
     assert.equal(isLoopbackAddress(address), true, address);
   }
-  for (const address of ["https://mac.tailnet.ts.net:10010", "http://100.64.0.1:9120", "http://192.168.1.5:9120", "http://127.0.0.1.example.com", "not an address", ""]) {
+  for (const address of ["https://mac.tailnet.ts.net:10010", "http://100.64.0.1:9120", "http://192.168.1.5:9120", "http://128.0.0.1:80", "http://126.255.255.255:80", "http://0.0.0.0:80", "http://127.0.0.1.example.com", "http://127.0.0.1000:80", "http://localhost.:80", "http://[::2]:80", "http://[::ffff:127.0.0.1]:80", "not an address", ""]) {
     assert.equal(isLoopbackAddress(address), false, address);
   }
 });
@@ -45,8 +49,23 @@ test("a host set up for its own Mac: Portals there joins, nothing else is handed
     await sleep(100);
     assert.equal(relay.open(here.relay, "mac").length, 0);
 
-    // Portals on this Mac: the password, a code, and in.
+    // Portals on this Mac: the password, a code.
     const { code } = await owner.call("net.invite");
+
+    // Another Mac with that code, through a tunnel, is refused: the answer would hand it 127.0.0.1.
+    let currentCode = code;
+    const macJoin = (at: string) => fetch(`${at}/net/join`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: currentCode, member: anotherMac }),
+    });
+    const refused = await macJoin(local.url);
+    assert.equal(refused.status, 409);
+    assert.match(((await refused.json()) as { detail: string }).detail, /run npx portals-host setup again on it/);
+    const after = await owner.call("net.list");
+    assert.ok(!after.members.some((member: { id: string }) => member.id === anotherMac.id), "the other Mac is not in the net");
+
+    // The code was kept for Portals on this Mac, which comes in with it.
     const joined = await fetch(`${local.url}/net/join`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -75,6 +94,11 @@ test("a host set up for its own Mac: Portals there joins, nothing else is handed
     const again = await TestClient.open(reachable, { token });
     const invite = await again.call("net.invite");
     assert.equal(invite.url, tailnet);
+
+    // The same Mac, joining the same way, comes in now: it was the rule that stopped it.
+    currentCode = invite.code;
+    const allowed = await macJoin(reachable.url);
+    assert.equal(allowed.status, 200);
     for (const end = Date.now() + 5000; relay.open(here.relay, "mac").length === 0;) {
       assert.ok(Date.now() < end, "the relay's standby opens");
       await sleep(10);

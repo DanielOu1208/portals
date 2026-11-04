@@ -133,10 +133,22 @@ extension URL {
     /// A host at one was set up for Portals on its own Mac alone (the host's
     /// `isLoopbackAddress`, docs/net-plan.md); anything else reaches it through Tailscale.
     public var isLoopback: Bool {
-        guard let name = host()?.lowercased() else { return false }
-        if name == "localhost" || name == "::1" || name == "[::1]" { return true }
-        let parts = name.split(separator: ".", omittingEmptySubsequences: false)
-        return parts.count == 4 && parts[0] == "127" && parts.allSatisfy { UInt8($0) != nil }
+        host().map(Self.isLoopback(host:)) ?? false
+    }
+
+    /// The same for a host name or address as `host()` gives it, with no brackets. An IPv4
+    /// address is read as the host's URL parser reads it, so the two agree (ThisMacOnlyTests):
+    /// 127.1, 2130706433, 0x7f.0.0.1 and 127.0.0.1. are all 127.0.0.1.
+    public static func isLoopback(host: String) -> Bool {
+        let name = host.lowercased()
+        if name == "localhost" { return true }
+        var ipv4 = in_addr()
+        if inet_aton(name.hasSuffix(".") ? String(name.dropLast()) : name, &ipv4) != 0 {
+            return UInt32(bigEndian: ipv4.s_addr) >> 24 == 127
+        }
+        var ipv6 = in6_addr()
+        guard inet_pton(AF_INET6, name.trimmingCharacters(in: CharacterSet(charactersIn: "[]")), &ipv6) == 1 else { return false }
+        return withUnsafeBytes(of: &ipv6) { $0.dropLast().allSatisfy { $0 == 0 } && $0.last == 1 }
     }
 }
 
