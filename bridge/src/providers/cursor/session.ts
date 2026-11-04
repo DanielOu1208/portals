@@ -37,7 +37,7 @@ import {
   type ThreadMode,
 } from "../types.ts";
 import { cursorID, levelAt, levelSetting, levelsOf, modelAt, type CursorModel } from "./models.ts";
-import { cursorMode, cursorName, cursorQuirks, goAheadText, levelLeftToCursorText, noSuchModeText, notSignedInText, portalsNote, runsEverything, saysSignedOut, signInReply, turnFailure } from "./options.ts";
+import { cursorMode, cursorName, cursorQuirks, goAheadText, leftFullAccessText, levelLeftToCursorText, noSuchModeText, notSignedInText, portalsNote, runsEverything, saysSignedOut, signInReply, turnFailure } from "./options.ts";
 import { askQuestion, createPlan, mergedTodos, permissionCard, permissionOutcome, planCard, planOutcome, questionCard, questionOutcome, todoRow, unplacedAnswer, updateTodos, type Todo } from "./requests.ts";
 import { CursorSubagents } from "./subagents.ts";
 import { cursorTools } from "./tools.ts";
@@ -225,6 +225,12 @@ export class CursorSession implements ProviderSession {
   private threadMode: ThreadMode;
   /** The run of Cursor the thread last ran on; a stopped one counts for nothing. */
   private process: CursorProcess | null;
+  /**
+   * Cursor has had the thread's session on a run with `--force`, and so keeps Run
+   * Everything in it (`leftFullAccessText`): in this run of the bridge, or, for a thread
+   * that comes up in Full access with a conversation, most likely in an earlier one.
+   */
+  private ranEverything: boolean;
   private loading: Promise<CursorProcess> | null = null;
   /** Cursor is sending the conversation again (`session/load`): it is already kept. */
   private replaying = false;
@@ -286,6 +292,7 @@ export class CursorSession implements ProviderSession {
     // A mode Cursor has none for cannot have been kept; a thread from before is in its own.
     this.threadMode = options.mode && cursorMode(options.mode) ? options.mode : "default";
     this.process = start.process;
+    this.ranEverything = start.process?.forced === true || (this.threadMode === "full" && start.stored.length > 0);
     this.title = options.title ?? null;
     this.titleFixed = this.title !== null;
     this.told = start.told;
@@ -428,6 +435,7 @@ export class CursorSession implements ProviderSession {
   /** Cursor reads the mode as it takes a prompt, so it is only kept here, and goes with the thread's next message. */
   async setMode(mode: ThreadMode): Promise<void> {
     if (cursorMode(mode) === null) throw new SettingRefused(noSuchModeText);
+    if (this.threadMode === "full" && mode !== "full" && this.ranEverything) this.sink.emit({ type: "notice", level: "warn", text: leftFullAccessText });
     this.threadMode = mode;
   }
 
@@ -686,6 +694,7 @@ export class CursorSession implements ProviderSession {
     }
     const before = this.process;
     this.process = process;
+    if (process.forced) this.ranEverything = true;
     // Moved to the other of the folder's processes (its mode went to or from Full access):
     // the one it leaves holds what it had of the conversation, which this turn will make
     // old, so it is loaded afresh should the thread come back while that one still runs.

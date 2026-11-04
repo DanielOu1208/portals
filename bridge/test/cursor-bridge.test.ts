@@ -11,7 +11,7 @@ import { promisify } from "node:util";
 import { setLogLevel } from "../src/log.ts";
 import { machineWord } from "../src/platform.ts";
 import type { CommandAccess } from "../src/portals/access.ts";
-import { levelLeftToCursorText, notSignedInText, noSuchModeText, testedCursorVersion } from "../src/providers/cursor/options.ts";
+import { leftFullAccessText, levelLeftToCursorText, notSignedInText, noSuchModeText, testedCursorVersion } from "../src/providers/cursor/options.ts";
 import { ProcessNotes } from "../src/providers/cursor/leftovers.ts";
 import { CursorProvider } from "../src/providers/cursor/provider.ts";
 import { providerModeOptions } from "../src/providers/modes.ts";
@@ -560,6 +560,36 @@ test("a thread alone in its folder that moves to Full access stops the Cursor it
   assert.notEqual(after, before);
   await until(() => !alive(before), "the Cursor it left has stopped");
   assert.ok(alive(after));
+});
+
+// Cursor keeps Run Everything in a session it once had on a run with --force, and goes on
+// searching the web for it without asking: the thread says so as it leaves Full access.
+test("a thread that Cursor ran in Full access says, as it leaves it, that web searches go on without asking; also after a restart", async (t) => {
+  const state = await rig(t);
+  const session = await createThread({}, state.phone);
+  const said = (from: number) => notices(state.phone.events(session).slice(from));
+  // Chosen and left again before any message: Cursor never had it so, and nothing is said.
+  await state.phone.call("session.set_mode", { session_id: session, mode: "full" });
+  await state.phone.call("session.set_mode", { session_id: session, mode: "default" });
+  assert.deepEqual(said(0), []);
+
+  await state.phone.call("session.set_mode", { session_id: session, mode: "full" });
+  assert.match(await reply(session, "where forced", state.phone), /forced=true/);
+  let mark = state.phone.events(session).length;
+  await state.phone.call("session.set_mode", { session_id: session, mode: "ask" });
+  assert.deepEqual(said(mark), [leftFullAccessText]);
+  // Only leaving Full access says it.
+  mark = state.phone.events(session).length;
+  await state.phone.call("session.set_mode", { session_id: session, mode: "default" });
+  assert.deepEqual(said(mark), []);
+
+  // Back in Full access, and the bridge restarts: the thread comes up in it with a conversation.
+  await state.phone.call("session.set_mode", { session_id: session, mode: "full" });
+  await state.restart();
+  await state.phone.call("session.resume", { session_id: session });
+  mark = state.phone.events(session).length;
+  assert.deepEqual(await state.phone.call("slash.exec", { session_id: session, command: "/mode default" }), { type: "exec", output: "This thread now follows your Cursor settings." });
+  assert.deepEqual(said(mark), [leftFullAccessText]);
 });
 
 // MARK: Permission requests
