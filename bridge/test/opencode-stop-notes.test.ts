@@ -16,7 +16,7 @@ import { startTestBridge, TestClient } from "./helpers.ts";
 const id = "ses_stop_notes";
 const result = (complete = true, settled = [id], unsettled: string[] = []): OwnedStopResult => ({
   serverIdentity: "server_native_process", complete, settled, unsettled,
-  executions: [...settled, ...unsettled].map((sessionID) => ({ sessionID, openerID: "user_1", assistantID: "assistant_1", ...(settled.includes(sessionID) ? { terminalID: "idle_1" } : {}) })),
+  executions: [...settled, ...unsettled].map((sessionID) => ({ sessionID, openerID: "user_1", assistantID: "assistant_1", ...(settled.includes(sessionID) ? { terminalID: "idle_1", outcome: "interrupted" as const } : {}) })),
 });
 const idle = (outcome: "interrupted" | "succeeded" | "failed" = "interrupted", created = Date.now()): Message[] => [{ id: "idle_1", type: "idle", outcome, time: { created } }];
 const restarted = (): Message[] => [
@@ -201,6 +201,36 @@ test("a completed root and child do not produce a false live stop notice", async
   await session.close();
 });
 
+test("a settled root beyond the execution limit has an unconfirmed outcome, never an inferred interruption", async (t) => {
+  const r = rig(t);
+  const events: ProviderEvent[] = [];
+  const api = { pendingPermissions: async () => [], forms: async () => [] } as unknown as OpenCodeApi;
+  const session = new OpenCodeSession(
+    { id, cwd: "/tmp", settings: { model: "p/m", provider: "p", reasoningEffort: "" } },
+    { emit: (event) => events.push(event), ask: async () => ({ kind: "withdrawn", reason: "" }) },
+    { api: async () => api, bind() {}, forget() {}, contextOf() {}, levelsOf() {} },
+    { info: { id, time: { created: 1, updated: 1 } }, messages: [{ id: "user_1", type: "user", text: "Working", time: { created: 1 } }], running: true },
+  );
+  session.attached();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const prior = Array.from({ length: stopNoteLimits.ids }, (_, index) => `ses_prior_${index}`);
+  const capped = result(true, [...prior, id]);
+  capped.executions = capped.executions!.slice(0, stopNoteLimits.ids);
+  assert.equal(session.serverStopped(capped), true);
+  const ended = events.filter((event) => event.type === "turn.end");
+  assert.equal(ended.length, 1);
+  assert.equal(ended[0].status, "error");
+  assert.equal(ended[0].retryable, true);
+  assert.match(ended[0].error!, /could not confirm this turn's outcome/);
+  assert.ok(events.some((event) => event.type === "notice" && event.level === "warn" && /may resume/.test(event.text)));
+  assert.ok(!events.some((event) => event.type === "notice" && /stopped because/.test(event.text)));
+  r.notes.remember(capped);
+  const note = new OpenCodeStopNotes(r.path).take(id, [], idle("succeeded"), new Set())!;
+  assert.match(note.text, /could not confirm/);
+  assert.doesNotMatch(note.text, /stopped because/);
+  await session.close();
+});
+
 test("child settlement and unknown inventory annotate their live root without falsely ending it", async () => {
   const events: ProviderEvent[] = [];
   const api = { pendingPermissions: async () => [], forms: async () => [] } as unknown as OpenCodeApi;
@@ -244,7 +274,7 @@ test("shutdown annotation survives the real manager's close order and overlays o
         assert.equal((provider as any).sessions.size, 0, "the generic manager already closed/forgot the provider session");
         fake.active.delete(thread);
         fake.sessions.get(thread)!.messages.push(...idle());
-        (provider as any).serverStopped({ serverIdentity: "owned_test", settled: [thread], unsettled: [], complete: true, executions: [{ sessionID: thread, terminalID: "idle_1" }] });
+        (provider as any).serverStopped({ serverIdentity: "owned_test", settled: [thread], unsettled: [], complete: true, executions: [{ sessionID: thread, terminalID: "idle_1", outcome: "interrupted" }] });
         observed = true;
       },
     };

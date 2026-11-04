@@ -388,15 +388,19 @@ export class OpenCodeSession implements ProviderSession {
     const owns = (id: string) => id === this.id || this.subagents.owns(id);
     const settled = result.settled.some(owns);
     const outcomes = new Map(result.executions?.map((execution) => [execution.sessionID, execution.outcome]));
-    const stopped = result.settled.filter((id) => owns(id) && outcomes.get(id) !== "succeeded" && outcomes.get(id) !== "failed");
-    const uncertain = !result.complete || result.unsettled.some(owns);
+    const stopped = result.settled.filter((id) => owns(id) && outcomes.get(id) === "interrupted");
+    // A bounded execution inventory can omit the root even when all native
+    // sessions became idle. Idle alone does not prove this turn was interrupted.
+    const uncertain = !result.complete || result.unsettled.some(owns)
+      || result.settled.some((id) => owns(id) && !outcomes.get(id));
     if (!settled && !uncertain) return false;
     if (result.settled.includes(this.id) && this.turnOpen) {
       this.turn.stop();
       const outcome = outcomes.get(this.id);
       if (outcome === "succeeded") this.endTurn({ type: "turn.end", status: "complete" }, true);
       else if (outcome === "failed") this.endTurn({ type: "turn.end", status: "error", error: sessionError(undefined), retryable: true }, true);
-      else this.endTurn({ type: "turn.end", status: "interrupted", error: `This turn ${ownedStopReason}.` }, true);
+      else if (outcome === "interrupted") this.endTurn({ type: "turn.end", status: "interrupted", error: `This turn ${ownedStopReason}.` }, true);
+      else this.endTurn({ type: "turn.end", status: "error", error: "The host could not confirm this turn's outcome before stopping its OpenCode server. Send a message to continue.", retryable: true }, true);
     }
     if (this.closed) return false; // The ledger supplies the note at the next resume.
     if (!stopped.length && !uncertain) return true;

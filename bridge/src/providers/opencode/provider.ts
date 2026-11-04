@@ -305,8 +305,10 @@ export class OpenCodeProvider implements Provider {
 
   // MARK: Threads
 
-  private async prepareSession(id: string, thread = id): Promise<void> {
-    return this.prepareOn(await this.api(), id, thread);
+  private async prepareSession(id: string, thread = id, refresh = false): Promise<void> {
+    const api = await this.api();
+    if (refresh) this.prepared.get(api)?.delete(id);
+    return this.prepareOn(api, id, thread);
   }
 
   private prepareOn(api: OpenCodeApi, id: string, thread: string): Promise<void> {
@@ -375,7 +377,7 @@ export class OpenCodeProvider implements Provider {
     try {
       const api = await this.api();
       const [info, messages, active, inbox, children] = await Promise.all([api.session(options.id), api.messages(options.id), api.active(), api.inbox(options.id), api.sessions(1000, options.id)]);
-      if (!options.readOnly) await this.prepareSession(options.id);
+      if (!options.readOnly) await this.prepareSession(options.id, options.id, true);
       const agents = await agentSettings(api, info.location?.directory ?? options.cwd);
       void this.loadedCatalog().catch(() => undefined);
       // Native stop inventory includes nested children too. Rebuild ownership
@@ -496,7 +498,7 @@ export class OpenCodeProvider implements Provider {
       return info ? knownLevels((info.variants ?? []).map((variant) => variant.id)) : undefined;
     },
     prepareChild: async (id: string, thread: string) => {
-      await this.prepareSession(id, thread);
+      await this.prepareSession(id, thread, true);
       this.childThreads.set(id, thread);
     },
     unknown: (kind: string) => this.unknowns.note(kind),
