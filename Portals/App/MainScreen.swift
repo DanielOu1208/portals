@@ -605,6 +605,11 @@ private struct ChatDeck: View {
             onForkMessage: { checkpoint, before, draft in
                 try await host.forkMessage(in: chat, checkpoint: checkpoint, before: before, draft: draft)
             },
+            canUndoFiles: host.canUndoFiles(in: chat),
+            onPreviewFileUndo: { try await host.previewFileUndo(in: chat, checkpoint: $0) },
+            onUndoFiles: { checkpoint, preview in
+                try await host.undoFiles(in: chat, checkpoint: checkpoint, preview: preview)
+            },
             startedThreads: { chat.thread.map { fleet.startedThreads(from: $0.key) } ?? [] },
             onOpenThread: { fleet.openStarted($0) },
             onBackToParent: { parent in

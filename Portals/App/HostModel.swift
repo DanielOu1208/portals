@@ -886,6 +886,42 @@ final class HostModel: Identifiable {
         }
     }
 
+    private var undoingFiles: Set<ThreadRef.ID> = []
+
+    func canUndoFiles(in controller: ThreadController) -> Bool {
+        guard let source = controller.thread, controller.fileUndoTurn != nil,
+              controller.canForkMessage, !controller.hasFileWork, connection == .connected,
+              activity(of: source.id) == .idle, !forkingThreads.contains(source.id), !undoingFiles.contains(source.id),
+              let folder = controller.fileUndoFolder, !folder.isEmpty else { return false }
+        let normalized = (folder as NSString).standardizingPath
+        let sameFolder: (String?) -> Bool = { path in
+            path.map { ($0 as NSString).standardizingPath == normalized } ?? false
+        }
+        if threads.contains(where: { $0.id != source.id && sameFolder($0.ref.workingDirectory)
+            && (activity(of: $0.id) != .idle || undoingFiles.contains($0.id) || forkingThreads.contains($0.id)) }) { return false }
+        let known = Array(controllers.values) + Array(draftControllers.values) + [threadOnScreen].compactMap { $0 }
+        return !known.contains { $0 !== controller && sameFolder($0.fileUndoFolder) && $0.hasFileWork }
+    }
+
+    func previewFileUndo(in controller: ThreadController, checkpoint: MessageCheckpoint) async throws -> TurnFileUndoPreview {
+        guard canUndoFiles(in: controller), controller.fileUndoTurn?.fileUndoCheckpoint == checkpoint,
+              let thread = controller.thread, let provider = backend as? any TurnFileUndoing else { throw TurnFileUndoError.busy }
+        let preview = try await provider.previewFileUndo(thread, checkpoint: checkpoint)
+        guard canUndoFiles(in: controller), controller.fileUndoTurn?.fileUndoCheckpoint == checkpoint else { throw TurnFileUndoError.stalePreview }
+        return preview
+    }
+
+    func undoFiles(in controller: ThreadController, checkpoint: MessageCheckpoint, preview: TurnFileUndoPreview) async throws -> TurnFileUndoResult {
+        guard canUndoFiles(in: controller), controller.fileUndoTurn?.fileUndoCheckpoint == checkpoint,
+              let thread = controller.thread, let provider = backend as? any TurnFileUndoing else { throw TurnFileUndoError.busy }
+        undoingFiles.insert(thread.id)
+        defer { undoingFiles.remove(thread.id) }
+        let result = try await provider.undoFiles(thread, preview: preview)
+        guard !isRetired else { throw TurnFileUndoError.stalePreview }
+        controller.fileUndoFinished(result)
+        return result
+    }
+
     func forkViewOnly(_ controller: ThreadController) async throws {
         guard let thread = controller.thread else { return }
         try await fork(thread)

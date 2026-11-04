@@ -118,6 +118,7 @@ import Testing
         #expect(subset["methods"]?[BridgeWire.Method.foldersRemove] == nil)
         let features = Set(try #require(subset["bridge"]?["features"]?.arrayValue).compactMap(\.stringValue))
         #expect(features == [
+            BridgeWire.Feature.turnFileUndo,
             BridgeWire.Feature.messageFork,
             BridgeWire.Feature.folders, BridgeWire.Feature.modelLevels, BridgeWire.Feature.pushHost, BridgeWire.Feature.deskSessions,
             BridgeWire.Feature.modelNames, BridgeWire.Feature.compaction, BridgeWire.Feature.rename, BridgeWire.Feature.activity,

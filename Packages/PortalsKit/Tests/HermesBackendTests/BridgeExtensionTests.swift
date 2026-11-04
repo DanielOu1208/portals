@@ -629,6 +629,115 @@ import Testing
         }
     }
 
+    // MARK: Latest-turn file undo
+
+    private static let fileUndoReady: JSONValue = ["replay_epoch": "e1", "heartbeat": false,
+                                                  "bridge": ["protocol": 1, "features": ["turn_file_undo"]]]
+
+    private func fileUndoPreview(on backend: HermesBackend, transport: ScriptedTransport, thread: ThreadRef, files: JSONValue = ["src/app.swift"]) async throws -> TurnFileUndoPreview {
+        let checkpoint = MessageCheckpoint(id: "native-turn", canFork: true, canEdit: true, canUndoFiles: true)
+        let fetching = Task { try await backend.previewFileUndo(thread, checkpoint: checkpoint) }
+        let request = try #require(await transport.nextSentRequest())
+        #expect(request["method"] == "session.files.preview")
+        #expect(request["params"] == ["session_id": .string(thread.id.rawValue), "checkpoint_id": "native-turn"])
+        transport.deliver(["jsonrpc": "2.0", "id": try #require(request["id"]), "result": [
+            "preview_id": "review-1", "files": files, "insertions": 3, "deletions": 1,
+            "expires_at": .number(Date.now.addingTimeInterval(60).timeIntervalSince1970),
+        ]])
+        return try await fetching.value
+    }
+
+    @Test(arguments: [TurnFileUndoResult(restored: true, skippedLinks: 0), TurnFileUndoResult(restored: true, skippedLinks: 2), TurnFileUndoResult(restored: false, skippedLinks: 0)])
+    func fileUndoUsesOneReviewedPreviewAndPreservesPartialResults(expected: TurnFileUndoResult) async throws {
+        let (backend, transport) = try await connect(ready: Self.fileUndoReady)
+        #expect(await backend.offersTurnFileUndo == true)
+        let thread = ThreadRef(id: .init(rawValue: "stored"), agent: claude)
+        let preview = try await fileUndoPreview(on: backend, transport: transport, thread: thread)
+        let applying = Task { try await backend.undoFiles(thread, preview: preview) }
+        let request = try #require(await transport.nextSentRequest())
+        #expect(request["method"] == "session.files.undo")
+        #expect(request["params"] == ["session_id": "stored", "preview_id": "review-1", "confirmed": true])
+        transport.deliver(["jsonrpc": "2.0", "id": try #require(request["id"]), "result": [
+            "restored": .bool(expected.restored), "skipped_links": .number(Double(expected.skippedLinks)),
+        ]])
+        #expect(try await applying.value == expected)
+        await #expect(throws: TurnFileUndoError.stalePreview) { try await backend.undoFiles(thread, preview: preview) }
+        await backend.disconnect()
+    }
+
+    @Test func fileUndoRefusesOldHostsEmptyPreviewsWrongThreadsAndRefreshedPermits() async throws {
+        let thread = ThreadRef(id: .init(rawValue: "stored"), agent: claude)
+        let checkpoint = MessageCheckpoint(id: "native-turn", canFork: true, canEdit: true, canUndoFiles: true)
+        let (older, oldTransport) = try await connect(ready: Self.bridgeReady)
+        #expect(await older.offersTurnFileUndo == false)
+        await #expect(throws: TurnFileUndoError.unavailable) { try await older.previewFileUndo(thread, checkpoint: checkpoint) }
+        let fabricated = TurnFileUndoPreview(previewID: "review", files: ["src/app.swift"], expiresAt: .now.addingTimeInterval(60))
+        await #expect(throws: TurnFileUndoError.unavailable) { try await older.undoFiles(thread, preview: fabricated) }
+        let listing = Task { try await older.listAgents() }
+        let next = try #require(await oldTransport.nextSentRequest())
+        #expect(next["method"] == "profiles.list")
+        oldTransport.deliver(["jsonrpc": "2.0", "id": try #require(next["id"]), "result": ["profiles": []]])
+        _ = try await listing.value
+        await older.disconnect()
+
+        let (backend, transport) = try await connect(ready: Self.fileUndoReady)
+        let denied = MessageCheckpoint(id: "native-turn", canFork: true, canEdit: true)
+        await #expect(throws: TurnFileUndoError.unavailable) { try await backend.previewFileUndo(thread, checkpoint: denied) }
+        let readOnly = ThreadRef(id: .init(rawValue: "read-only"), agent: claude, readOnly: true)
+        await #expect(throws: TurnFileUndoError.unavailable) { try await backend.previewFileUndo(readOnly, checkpoint: checkpoint) }
+        let empty = try await fileUndoPreview(on: backend, transport: transport, thread: thread, files: [])
+        await #expect(throws: TurnFileUndoError.stalePreview) { try await backend.undoFiles(thread, preview: empty) }
+        let first = try await fileUndoPreview(on: backend, transport: transport, thread: thread)
+        _ = try await fileUndoPreview(on: backend, transport: transport, thread: thread)
+        await #expect(throws: TurnFileUndoError.stalePreview) { try await backend.undoFiles(thread, preview: first) }
+        let other = ThreadRef(id: .init(rawValue: "other"), agent: claude)
+        let latest = try await fileUndoPreview(on: backend, transport: transport, thread: thread)
+        await #expect(throws: TurnFileUndoError.stalePreview) { try await backend.undoFiles(other, preview: latest) }
+        let beforeDisconnect = try await fileUndoPreview(on: backend, transport: transport, thread: thread)
+        await backend.disconnect()
+        await #expect(throws: TurnFileUndoError.stalePreview) { try await backend.undoFiles(thread, preview: beforeDisconnect) }
+    }
+
+    @Test func onlyTypedPreRestoreFileChangesCanRequestANewPreview() async throws {
+        let (backend, transport) = try await connect(ready: Self.fileUndoReady)
+        let thread = ThreadRef(id: .init(rawValue: "stored"), agent: claude)
+        let cases: [(Int, JSONValue?, Bool)] = [
+            (JSONRPCError.invalidParamsCode, ["reason": "files_changed"], true),
+            (JSONRPCError.invalidParamsCode, nil, false),
+            (-32603, ["reason": "files_changed"], false),
+            (JSONRPCError.invalidParamsCode, ["reason": "other"], false),
+        ]
+        for (code, data, mayRefresh) in cases {
+            let preview = try await fileUndoPreview(on: backend, transport: transport, thread: thread)
+            let applying = Task { try await backend.undoFiles(thread, preview: preview) }
+            let request = try #require(await transport.nextSentRequest())
+            var error: [String: JSONValue] = ["code": .number(Double(code)), "message": "Files changed after this preview."]
+            if let data { error["data"] = data }
+            transport.deliver(["jsonrpc": "2.0", "id": try #require(request["id"]), "error": .object(error)])
+            do {
+                _ = try await applying.value
+                Issue.record("Expected a refused restore")
+            } catch {
+                if mayRefresh { #expect(error as? TurnFileUndoError == .filesChangedBeforeRestore) }
+                else { #expect((error as? JSONRPCError)?.code == code) }
+            }
+            await #expect(throws: TurnFileUndoError.stalePreview) { try await backend.undoFiles(thread, preview: preview) }
+        }
+        await backend.disconnect()
+    }
+
+    @Test func aRejectedRestoreConsumesThePreviewAndRequiresFreshReview() async throws {
+        let (backend, transport) = try await connect(ready: Self.fileUndoReady)
+        let thread = ThreadRef(id: .init(rawValue: "stored"), agent: claude)
+        let preview = try await fileUndoPreview(on: backend, transport: transport, thread: thread)
+        let applying = Task { try await backend.undoFiles(thread, preview: preview) }
+        let request = try #require(await transport.nextSentRequest())
+        transport.deliver(["jsonrpc": "2.0", "id": try #require(request["id"]), "error": ["code": -32602, "message": "Files changed. Refresh the preview."]])
+        await #expect { try await applying.value } throws: { $0.localizedDescription.contains("Files changed") }
+        await #expect(throws: TurnFileUndoError.stalePreview) { try await backend.undoFiles(thread, preview: preview) }
+        await backend.disconnect()
+    }
+
     // MARK: Sessions from the desk
 
     private static let deskReady: JSONValue = [

@@ -230,6 +230,8 @@ struct TranscriptBlock<Row: View>: View, Equatable {
         var canRetry: Bool
         var offersMessageFork = false
         var canForkMessage = false
+        var fileUndoTurn: Turn.ID?
+        var canUndoFiles = false
         var listing: Turn.ID?
         /// Built wherever it is: the last blocks, which the chat scrolls to by their
         /// turns (`ChatScreen.settle`, the repair of a blank chat), and one with a turn

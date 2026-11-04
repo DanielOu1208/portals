@@ -360,6 +360,7 @@
 //   whole. The conversation no longer has it, after a resume too.
 
 export const bridgeFeatures = [
+  "turn_file_undo",
   "message_fork",
   "mcp_auth",
   "folders",

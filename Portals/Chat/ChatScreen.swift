@@ -51,6 +51,9 @@ struct ChatScreen: View {
     var onFork: () async throws -> Void = {}
     var canForkMessage = false
     var onForkMessage: (MessageCheckpoint, Bool, ComposerDraft?) async throws -> Void = { _, _, _ in }
+    var canUndoFiles = false
+    var onPreviewFileUndo: (MessageCheckpoint) async throws -> TurnFileUndoPreview = { _ in throw TurnFileUndoError.unavailable }
+    var onUndoFiles: (MessageCheckpoint, TurnFileUndoPreview) async throws -> TurnFileUndoResult = { _, _ in throw TurnFileUndoError.unavailable }
     /// The threads agents started from this one (`Fleet.startedThreads`): asked for by
     /// the line at the chat's foot as it is drawn, so that only it follows their news.
     var startedThreads: () -> [StartedThread] = { [] }
@@ -85,6 +88,8 @@ struct ChatScreen: View {
 
     @State private var messageActionProblem: String?
     @State private var isWorkingOnMessage = false
+    @State private var fileUndo: MessageCheckpoint?
+    @State private var openedFileUndoForDebug = false
     @State private var openedMessageForkForDebug = false
     /// When this chat was put on screen: a long reply new to it after a moment came while
     /// someone looked, and plays in (`ReplyTextView`).
@@ -692,6 +697,19 @@ struct ChatScreen: View {
             } message: {
                 Text(messageActionProblem ?? "")
             }
+            .onChange(of: debugFileUndoCheckpoint?.id, initial: true) { _, id in
+                guard id != nil, let checkpoint = debugFileUndoCheckpoint else { return }
+                openedFileUndoForDebug = true
+                fileUndo = checkpoint
+            }
+            .sheet(isPresented: Binding(get: { fileUndo != nil }, set: { if !$0 { fileUndo = nil } })) {
+                if let checkpoint = fileUndo {
+                    FileUndoSheet(canUndo: canUndoFiles && chat.fileUndoTurn?.fileUndoCheckpoint == checkpoint,
+                                  workingDirectory: chat.thread?.workingDirectory, turnDiff: chat.fileUndoTurn?.diff,
+                                  onDone: { fileUndo = nil }, onPreview: { try await onPreviewFileUndo(checkpoint) },
+                                  onUndo: { try await onUndoFiles(checkpoint, $0) })
+                }
+            }
             .selectsTextHere()
             .expandsWidgetsHere()
             .showsTurnDiffsHere()
@@ -743,6 +761,12 @@ struct ChatScreen: View {
                     isComposing = true
                 }
             }
+    }
+
+    private var debugFileUndoCheckpoint: MessageCheckpoint? {
+        guard DebugLaunch.opensFileUndo, !openedFileUndoForDebug, isShown, !isCovered, !hidesChat,
+              !chat.isLoadingHistory, canUndoFiles else { return nil }
+        return chat.fileUndoTurn?.fileUndoCheckpoint
     }
 
     private var debugMessageForkTurn: Turn? {
@@ -854,6 +878,8 @@ struct ChatScreen: View {
                                 canRetry: chat.canRetry,
                                 offersMessageFork: chat.offersMessageFork,
                                 canForkMessage: canForkMessage,
+                                fileUndoTurn: chat.fileUndoTurn.flatMap { undo in blockTurns.contains { $0.id == undo.id } ? undo.id : nil },
+                                canUndoFiles: canUndoFiles,
                                 listing: listing.flatMap { id in blockTurns.contains { $0.id == id } ? id : nil },
                                 staysBuilt: block.index >= lastBlocks || hasRunning
                             )) { turn in
@@ -869,6 +895,9 @@ struct ChatScreen: View {
                                     onForkMessage: { message, checkpoint, before in
                                         swipeGuard { messageAction(message, checkpoint: checkpoint, before: before) }
                                     },
+                                    offersFileUndo: turn.id == chat.fileUndoTurn?.id,
+                                    canUndoFiles: canUndoFiles,
+                                    onUndoFiles: { checkpoint in swipeGuard { fileUndo = checkpoint } },
                                     // The latest ended turn's footer lists the threads the agent started.
                                     startedThreads: turn.id == listing
                                         ? StartedThreadsLink(threads: startedThreads, onOpen: onOpenThread, onShare: onShareThread) : nil

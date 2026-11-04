@@ -123,6 +123,16 @@ export interface MessageCheckpoint {
   id: string;
   can_fork: boolean;
   can_edit: boolean;
+  can_undo_files?: boolean;
+}
+
+export interface FileRewindResult {
+  canRewind: boolean;
+  error?: string;
+  filesChanged?: string[];
+  insertions?: number;
+  deletions?: number;
+  skippedLinks?: number;
 }
 
 /**
@@ -496,6 +506,8 @@ export class SettingRefused extends Error {}
 
 /** One conversation inside a provider. */
 export interface ProviderSession {
+  /** Preview or restore native file checkpoints without truncating conversation. */
+  rewindFiles?(checkpointId: string, dryRun: boolean): Promise<FileRewindResult>;
   mcpAuth?(action: import("./mcpAuth.ts").McpAuthAction): Promise<{ servers: import("./mcpAuth.ts").McpAuthCard[] }>;
   /** The conversation so far, oldest first. Read once, when the session is loaded. */
   history(): Promise<StoredMessage[]>;

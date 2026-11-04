@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { realpathSync } from "node:fs";
+import { isAbsolute, relative, sep } from "node:path";
 import { performance } from "node:perf_hooks";
 import { counters } from "../counters.ts";
 import { threadRepo } from "../git.ts";
@@ -50,6 +52,14 @@ export class UnknownThreadError extends Error {}
 /** A thread that cannot be taken off the list now (`remove`). The message is for the user. */
 export class RemoveRefused extends Error {}
 
+function overlappingFolders(left: string, right: string): boolean {
+  const contains = (parent: string, child: string) => {
+    const path = relative(parent, child);
+    return path === "" || (!isAbsolute(path) && path !== ".." && !path.startsWith(`..${sep}`));
+  };
+  return contains(left, right) || contains(right, left);
+}
+
 export class SessionManager {
   private readonly registry: Registry;
   private readonly providers: Map<string, Provider>;
@@ -68,6 +78,7 @@ export class SessionManager {
     activityChanged: (id) => this.tell((listener) => listener.activityChanged?.(id)),
   };
   private readonly live = new Map<string, Session>();
+  private readonly fileRestores = new Set<string>();
   private readonly loading = new Map<string, Promise<Session>>();
   /** Desk sessions being taken up, by id. */
   private readonly adopting = new Map<string, Promise<Session>>();
@@ -225,6 +236,7 @@ export class SessionManager {
 
   /** Copy a completed native turn's conversation, retaining the source's policy. */
   async fork(source: Session, checkpointId: string, before: boolean): Promise<Session> {
+    if (this.folderLocked(source.record.cwd)) throw new DeskRefused("Wait for this folder's file action to finish before forking a thread.");
     if (this.closing || this.live.get(source.id) !== source) throw new DeskRefused("Open this thread again before forking it.");
     const provider = this.provider(source.record.agent);
     if (!provider.forkAt) throw new DeskRefused("This agent does not support forking from a message.");
@@ -249,6 +261,41 @@ export class SessionManager {
       try { return await taking; }
       finally { this.adopting.delete(record.id); }
     });
+  }
+
+  async previewFileUndo(source: Session, owner: Peer, checkpointId: string) {
+    return this.withFileFolder(source, () => source.previewFileUndo(owner, checkpointId));
+  }
+
+  async undoFiles(source: Session, owner: Peer, previewId: string, afterReply: (action: () => void) => void) {
+    return this.withFileFolder(source, () => source.undoFiles(owner, previewId, afterReply));
+  }
+
+  private async withFileFolder<T>(source: Session, work: () => Promise<T>): Promise<T> {
+    if (this.closing || this.live.get(source.id) !== source) throw new DeskRefused("Open this thread again before restoring files.");
+    const folder = realpathSync(source.record.cwd);
+    if (this.folderLocked(source.record.cwd)) throw new DeskRefused("Wait for this folder's current file action to finish.");
+    const sessions = [...this.live.values()].filter((session) => {
+      try { return overlappingFolders(realpathSync(session.record.cwd), folder); } catch { return session === source; }
+    });
+    if (sessions.some((session) => !session.atRest || session.hasBackgroundWork)) throw new DeskRefused("Wait until every thread using this folder has finished before restoring files.");
+    this.fileRestores.add(folder);
+    try {
+      for (const session of sessions) if (await session.stopping()) throw new DeskRefused("An agent is still working in this folder. Wait before restoring files.");
+      if (sessions.some((session) => !session.atRest || session.hasBackgroundWork || session.isRetired)) throw new DeskRefused("A thread changed while its folder was checked. Review a fresh file preview.");
+      return await work();
+    } finally {
+      this.fileRestores.delete(folder);
+      for (const session of this.live.values()) {
+        try { if (overlappingFolders(realpathSync(session.record.cwd), folder) && !this.folderLocked(session.record.cwd)) session.folderAvailable(); }
+        catch { /* A removed folder has no waiting work to resume here. */ }
+      }
+    }
+  }
+
+  private folderLocked(cwd: string): boolean {
+    if (this.fileRestores.size === 0) return false;
+    try { return [...this.fileRestores].some((folder) => overlappingFolders(realpathSync(cwd), folder)); } catch { return true; }
   }
 
   private async keepFork(provider: Provider, record: ThreadRecord): Promise<Session> {
@@ -663,7 +710,7 @@ export class SessionManager {
   /** A session for `record`, numbering its events on past the last one of this thread in this run. */
   private session(record: ThreadRecord): Session {
     const provider = this.provider(record.agent);
-    return new Session(record, this.registry, { modeOptions: providerModeOptions(provider), agentName: provider.profile.displayName, logCapacity: this.logCapacity, listener: this.listener, lastSeq: this.lastSeq.get(record.id), waiting: this.waiting, spent: this.spent, diffs: this.diffs, lastQueueID: this.lastQueueID.get(record.id) });
+    return new Session(record, this.registry, { folderLocked: () => this.folderLocked(record.cwd), modeOptions: providerModeOptions(provider), agentName: provider.profile.displayName, logCapacity: this.logCapacity, listener: this.listener, lastSeq: this.lastSeq.get(record.id), waiting: this.waiting, spent: this.spent, diffs: this.diffs, lastQueueID: this.lastQueueID.get(record.id) });
   }
 
   /** Lets go of a loaded session; it is loaded again from the registry when next asked for. */

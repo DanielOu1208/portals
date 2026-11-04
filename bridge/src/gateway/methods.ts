@@ -1,4 +1,5 @@
 import { basename, extname } from "node:path";
+import { FileUndoRefused } from "../sessions/fileUndo.ts";
 import type { Config } from "../config.ts";
 import { defaultDeskLimit, type DeskSessions } from "../desk.ts";
 import { checkLevel, chooseModel, defaultWaitMs, isThreadState, readOnlyText, threadStates, type Fleet, type Sender } from "../fleet/fleet.ts";
@@ -860,6 +861,38 @@ export const methods: Record<string, MethodSpec> = {
         return { sessions: await gateway.desk.list(agent, limit) };
       } catch (error) {
         throw new RpcError(ErrorCode.internal, (error as Error).message);
+      }
+    },
+  },
+
+  "session.files.preview": {
+    summary: "Previews native tracked files restored to before the latest completed turn, with a single-use confirmation lasting one minute (feature turn_file_undo). Conversation is retained.",
+    params: { session_id: "string", checkpoint_id: "string" },
+    required: ["session_id", "checkpoint_id"],
+    async handle(params, context) {
+      const source = writable(followed(context, params.session_id));
+      try {
+        return await context.gateway.sessions.previewFileUndo(source, context.caller, params.checkpoint_id as string);
+      } catch (error) {
+        if (error instanceof DeskRefused || error instanceof FileUndoRefused) throw invalidParams(error.message);
+        throw error;
+      }
+    },
+  },
+
+  "session.files.undo": {
+    summary: "Restores the reviewed native file checkpoint only with confirmed:true and its same-connection unexpired preview. Rechecks files and the native preview before changing anything; reports incomplete restoration honestly (feature turn_file_undo).",
+    params: { session_id: "string", preview_id: "string", confirmed: "boolean" },
+    required: ["session_id", "preview_id", "confirmed"],
+    async handle(params, context) {
+      const source = writable(followed(context, params.session_id));
+      if (params.confirmed !== true) throw invalidParams("Confirm the listed file changes before restoring them.");
+      try {
+        return await context.gateway.sessions.undoFiles(source, context.caller, params.preview_id as string, context.afterReply);
+      } catch (error) {
+        if (error instanceof FileUndoRefused && error.reason === "files_changed") throw new RpcError(ErrorCode.invalidParams, error.message, { reason: error.reason });
+        if (error instanceof DeskRefused || error instanceof FileUndoRefused) throw invalidParams(error.message);
+        throw error;
       }
     },
   },

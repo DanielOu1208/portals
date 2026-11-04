@@ -19,6 +19,9 @@ struct TurnView: View {
     var offersMessageFork = false
     var canForkMessage = false
     var onForkMessage: (UserMessage, MessageCheckpoint, Bool) -> Void = { _, _, _ in }
+    var offersFileUndo = false
+    var canUndoFiles = false
+    var onUndoFiles: (MessageCheckpoint) -> Void = { _ in }
     /// On the latest ended turn: its footer lists the threads the agent started.
     var startedThreads: StartedThreadsLink?
 
@@ -171,20 +174,28 @@ struct TurnView: View {
         } else {
             VStack(alignment: .trailing, spacing: Theme.grid / 2) {
                 WorkItemView(item: item)
-                if offersMessageFork, !turn.isRunning,
+                if !turn.isRunning,
                    item.id == turn.items.first(where: \.isUserMessage)?.id,
                    case let .user(message) = item.content,
-                   let checkpoint = message.checkpoint, checkpoint.canFork || checkpoint.canEdit {
+                   let checkpoint = message.checkpoint,
+                   (offersMessageFork && (checkpoint.canFork || checkpoint.canEdit)) || (offersFileUndo && checkpoint.canUndoFiles) {
                     Menu {
-                        if checkpoint.canFork {
+                        if offersMessageFork && checkpoint.canFork {
                             Button("Fork from here", systemImage: "arrow.triangle.branch") {
                                 onForkMessage(message, checkpoint, false)
                             }
+                            .disabled(!canForkMessage)
                         }
-                        if checkpoint.canEdit {
+                        if offersMessageFork && checkpoint.canEdit {
                             Button("Edit and send again", systemImage: "square.and.pencil") {
                                 onForkMessage(message, checkpoint, true)
                             }
+                            .disabled(!canForkMessage)
+                        }
+                        if offersFileUndo && checkpoint.canUndoFiles {
+                            Button("Undo file changes…", systemImage: "arrow.uturn.backward") { onUndoFiles(checkpoint) }
+                                .disabled(!canUndoFiles)
+                                .accessibilityIdentifier("message-file-undo")
                         }
                     } label: {
                         Image(systemName: "ellipsis")
@@ -193,9 +204,9 @@ struct TurnView: View {
                             .frame(minWidth: 44, minHeight: 32)
                             .contentShape(.rect)
                     }
-                    .disabled(!canForkMessage)
+                    .disabled(!canForkMessage && !canUndoFiles)
                     .accessibilityLabel("Message actions")
-                    .accessibilityHint(canForkMessage ? "Creates a new thread from this message" : "Available when this thread is idle and connected")
+                    .accessibilityHint("Available actions for this turn when its folder is idle and connected")
                     .accessibilityIdentifier("message-fork-actions")
                 }
             }
@@ -260,6 +271,7 @@ extension TurnView: Equatable {
     static func == (lhs: TurnView, rhs: TurnView) -> Bool {
         lhs.turn == rhs.turn && lhs.status == rhs.status && lhs.plan == rhs.plan && lhs.canRetry == rhs.canRetry
             && lhs.offersMessageFork == rhs.offersMessageFork && lhs.canForkMessage == rhs.canForkMessage
+            && lhs.offersFileUndo == rhs.offersFileUndo && lhs.canUndoFiles == rhs.canUndoFiles
             && (lhs.startedThreads == nil) == (rhs.startedThreads == nil)
     }
 }

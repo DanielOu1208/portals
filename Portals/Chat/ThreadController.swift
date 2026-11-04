@@ -149,6 +149,15 @@ final class ThreadController: Identifiable {
     private(set) var takesFileMentions = false
     /// Message-level forks are offered only by a host that explicitly lists them.
     private(set) var offersMessageFork = false
+    private(set) var offersTurnFileUndo = false
+    var fileUndoTurn: Turn? {
+        guard offersTurnFileUndo, agent.kind == "claude", thread?.isReadOnly == false else { return nil }
+        return state.transcript.latestFileUndoTurn
+    }
+    var hasFileWork: Bool {
+        isAtWork || isSending || !state.pending.isEmpty || !state.queued.isEmpty || state.subagents.contains(where: \.isWorking)
+    }
+    var fileUndoFolder: String? { thread?.workingDirectory ?? folder?.path }
     var canForkMessage: Bool { isAtRest && !isSending && !isLoadingHistory && !isClosed }
     /// Counts what was sent from here (a message, a command, a retry): the chat keeps to its
     /// end from each, to show what it becomes (`ChatScreen`).
@@ -665,6 +674,7 @@ final class ThreadController: Identifiable {
 
     /// Asks the host what it takes, once it is connected: files of any kind, or images only.
     func checkHost() async {
+        offersTurnFileUndo = await (backend as? any TurnFileUndoing)?.offersTurnFileUndo ?? false
         offersMessageFork = await (backend as? any MessageForking)?.offersMessageFork ?? false
         takesFiles = await (backend as? any FileAttaching)?.attachesFiles ?? false
         readsFiles = await (backend as? any FileReading)?.readsFiles ?? false
@@ -952,6 +962,10 @@ final class ThreadController: Identifiable {
         applyHeldPieces()
         state.commandFailed(command.text, reason: reason)
         if thread != nil { onPersist?(self) }
+    }
+
+    func fileUndoFinished(_ result: TurnFileUndoResult) {
+        say(result.message, result.isComplete ? .info : .warning)
     }
 
     /// A line of the app's own in the transcript.

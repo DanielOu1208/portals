@@ -156,6 +156,7 @@ public actor HermesBackend: AgentBackend, ThreadCatchingUp, HistoryPaging, Route
     private var fallback = RelayFallback()
 
     private var connection: HermesConnection?
+    var fileUndoPreviews: [UUID: FileUndoPermit] = [:]
     /// The way out the connection went by: the attempt's that opened it.
     private var connectionWay = WayOut(nil)
     /// Whether the connection goes to the host's address or through the relay.
@@ -592,6 +593,7 @@ public actor HermesBackend: AgentBackend, ThreadCatchingUp, HistoryPaging, Route
         checking = nil
         guard let connection else { return }
         self.connection = nil
+        fileUndoPreviews.removeAll()
         clearMCPAuth()
         pump?.cancel()
         pump = nil
@@ -606,6 +608,7 @@ public actor HermesBackend: AgentBackend, ThreadCatchingUp, HistoryPaging, Route
         // Ignore the end of a connection that was already replaced or closed on purpose.
         guard let connection, connection.peer === peer else { return }
         self.connection = nil
+        fileUndoPreviews.removeAll()
         clearMCPAuth()
         pump = nil
         tryingDirect?.cancel()

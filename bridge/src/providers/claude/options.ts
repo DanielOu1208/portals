@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { closeSync, constants, fstatSync, openSync, readSync, realpathSync, statSync, type BigIntStats } from "node:fs";
 import type { CanUseTool, EffortLevel, Options, PermissionMode } from "@anthropic-ai/claude-agent-sdk";
 import { counters } from "../../counters.ts";
 import { programVersion } from "../program.ts";
@@ -177,8 +178,57 @@ export function threadModeFor(mode: string | undefined | null): Exclude<ThreadMo
 }
 
 /** `claude --version`, as "2.1.292"; null when it cannot be run. */
-export function claudeVersion(claudePath: string, env: Record<string, string | undefined>): Promise<string | null> {
-  return programVersion(claudePath, env as NodeJS.ProcessEnv);
+export function claudeVersion(claudePath: string, env: Record<string, string | undefined>, strict = false): Promise<string | null> {
+  return strict
+    ? programVersion(claudePath, env as NodeJS.ProcessEnv, /^(\d+\.\d+\.\d+)(?: \(Claude Code\))?\s*$/)
+    : programVersion(claudePath, env as NodeJS.ProcessEnv);
+}
+
+/** Proof for one new query launched directly from this exact native executable. */
+export interface ClaudeLaunchProof {
+  path: string;
+  version: string | null;
+  identity: Pick<BigIntStats, "dev" | "ino" | "size" | "mtimeNs" | "ctimeNs" | "mode">;
+}
+
+/** Throws when an updater or path replacement invalidated this query's launch proof. */
+export function checkClaudeLaunch(proof: ClaudeLaunchProof): void {
+  try {
+    if (realpathSync(proof.path) !== proof.path) throw new Error("path changed");
+    const now = statSync(proof.path, { bigint: true });
+    const before = proof.identity;
+    if (!now.isFile() || now.dev !== before.dev || now.ino !== before.ino || now.size !== before.size || now.mtimeNs !== before.mtimeNs || now.ctimeNs !== before.ctimeNs || now.mode !== before.mode) throw new Error("executable changed");
+  } catch {
+    throw new Error("The Claude Code executable changed after its version was verified. File undo was refused.");
+  }
+}
+
+/**
+ * Probe the exact direct-spawn target, never a script that delegates to another program.
+ * The SDK launches JS suffixes through a runtime, so those cannot use this proof either.
+ */
+export async function verifyClaudeLaunch(path: string, version: (resolvedPath: string) => Promise<string | null>): Promise<ClaudeLaunchProof | undefined> {
+  let resolved: string;
+  let identity: BigIntStats;
+  let handle: number | undefined;
+  try {
+    resolved = realpathSync(path);
+    if (/\.(?:js|mjs|tsx|ts|jsx)$/.test(resolved)) return;
+    handle = openSync(resolved, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    identity = fstatSync(handle, { bigint: true });
+    if (!identity.isFile() || (identity.mode & 0o111n) === 0n) return;
+    const header = Buffer.alloc(4);
+    if (readSync(handle, header, 0, header.length, 0) !== header.length) return;
+    const magic = header.readUInt32BE();
+    if (![0x7f454c46, 0xfeedface, 0xcefaedfe, 0xfeedfacf, 0xcffaedfe, 0xcafebabe, 0xbebafeca, 0xcafebabf, 0xbfbafeca].includes(magic)) return;
+  } catch {
+    return;
+  } finally {
+    if (handle !== undefined) closeSync(handle);
+  }
+  const proof: ClaudeLaunchProof = { path: resolved, identity, version: await version(resolved) };
+  checkClaudeLaunch(proof);
+  return proof;
 }
 
 /**

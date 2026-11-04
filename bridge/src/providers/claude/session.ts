@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { statSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
 import type {
   CanUseTool,
   EffortLevel,
@@ -15,6 +15,7 @@ import { log } from "../../log.ts";
 import { machineWord } from "../../platform.ts";
 import { imageType, skippedImagesText } from "../images.ts";
 import type {
+  FileRewindResult,
   ModeState,
   ModelChangeResult,
   Prompt,
@@ -30,7 +31,7 @@ import type { ClaudeCheckpoints } from "./checkpoints.ts";
 import { historyFromSession } from "./history.ts";
 import { ClaudeTodos } from "./todos.ts";
 import { InputQueue } from "./input.ts";
-import { claudeEffort, permissionModeFor, queryOptions, thinkingBudget, threadModeFor } from "./options.ts";
+import { checkClaudeLaunch, claudeEffort, claudeVersion, permissionModeFor, queryOptions, thinkingBudget, threadModeFor, verifyClaudeLaunch, type ClaudeLaunchProof } from "./options.ts";
 import { permissionRequest, permissionResult } from "./permissions.ts";
 import type { ClaudeSignIn } from "./signIn.ts";
 import type { CommandAccess } from "../../portals/access.ts";
@@ -84,6 +85,8 @@ export interface QueryLike extends AsyncIterable<SDKMessage> {
    * Code may refuse it.
    */
   getContextUsage?(options?: { detail?: "summary" | "full" }): Promise<{ model: string; rawMaxTokens: number }>;
+  /** Native file-only restore; never changes the conversation. Absent on older SDKs. */
+  rewindFiles?(userMessageId: string, options: { dryRun: boolean }): Promise<FileRewindResult>;
   close(): void;
 }
 
@@ -139,6 +142,7 @@ export interface SessionFiles {
 /** What a session needs from its provider. */
 export interface ClaudeHost {
   readonly claudePath: string;
+  readonly launchVersion?: (path: string) => Promise<string | null>;
   readonly env: Record<string, string | undefined>;
   /** The `portals` command, when the bridge offers it to its agents. */
   readonly portals?: CommandAccess;
@@ -171,8 +175,22 @@ export interface ClaudeHost {
   readonly signIn: ClaudeSignIn;
 }
 
+/** Versions before this floor have not been verified to honor read-only dryRun. */
+function supportsFileUndo(version: string | null): boolean {
+  if (!version || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) return false;
+  const [major, minor, patch] = version.split(".").map(Number);
+  return major > 2 || (major === 2 && (minor > 1 || (minor === 1 && patch >= 318)));
+}
+
 interface Live {
   query: QueryLike;
+  /** Version from this query's own system/init, never an installed binary probe. */
+  nativeVersion: string | null;
+  initSeen: boolean;
+  launchProof?: ClaudeLaunchProof;
+  initHeard: Promise<void>;
+  heardInit(): void;
+  fileCheckpointing: boolean;
   input: InputQueue;
   stream: ClaudeStream;
   /** Controls on this query finish before its next prompt, never another query's. */
@@ -268,6 +286,9 @@ export class ClaudeSession implements ProviderSession, Warmable {
   private starting: Promise<Live> | null = null;
   private closed = false;
   private turnOpen = false;
+  private rewinding = false;
+  /** Allows read-only postflight after consumption, never another real restore. */
+  private lastFileRestore: string | null = null;
   /** How many turns have opened, so what was meant for one turn never acts on the next. */
   private turns = 0;
   private asking = 0;
@@ -301,7 +322,7 @@ export class ClaudeSession implements ProviderSession, Warmable {
   }
 
   get busy(): boolean {
-    return this.turnOpen || this.asking > 0 || this.starting !== null || this.hasBackgroundWork();
+    return this.rewinding || this.turnOpen || this.asking > 0 || this.starting !== null || this.hasBackgroundWork();
   }
 
   /** Background commands, subagents or workflows still run in Claude's process: they stop if it does. */
@@ -337,6 +358,88 @@ export class ClaudeSession implements ProviderSession, Warmable {
   async reload(): Promise<StoredMessage[]> {
     const messages = await this.host.files.messages(this.id, this.cwd);
     return historyFromSession(messages, this.cwd, this.host.checkpoints?.forSession(this.id, messages));
+  }
+
+  /** Restores native file snapshots for the latest completed turn, without a prompt. */
+  async rewindFiles(checkpointId: string, dryRun: boolean): Promise<FileRewindResult> {
+    if (this.busy || this.closed) throw new Error("Wait for Claude Code and its background work to finish before undoing files.");
+    if (!dryRun && this.lastFileRestore === checkpointId) throw new Error("This file undo checkpoint has already been used.");
+    this.rewinding = true;
+    const turn = this.turns;
+    const postflight = dryRun && this.lastFileRestore === checkpointId;
+    try {
+      await this.checkFileUndo(checkpointId, turn, postflight);
+      const launchProof = this.live ? undefined : await verifyClaudeLaunch(this.host.claudePath, (path) => this.host.launchVersion ? this.host.launchVersion(path) : claudeVersion(path, this.host.env, true));
+      this.checkFileUndoIdle(turn);
+      const live = await this.warm(launchProof);
+      this.checkFileUndoIdle(turn, live);
+      await live.query.initializationResult();
+      this.checkFileUndoIdle(turn, live);
+      if (!live.launchProof) {
+        let timer: NodeJS.Timeout | undefined;
+        try {
+          await Promise.race([live.initHeard, new Promise<void>((resolve) => { timer = setTimeout(resolve, 5000); })]);
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+      this.checkFileUndoIdle(turn, live);
+      this.checkFileUndoVersion(live);
+      for (;;) {
+        const controls = live.controls;
+        const permission = live.permission;
+        await controls;
+        this.checkFileUndoIdle(turn, live);
+        await permission;
+        this.checkFileUndoIdle(turn, live);
+        if (controls === live.controls && permission === live.permission) break;
+      }
+      if (!live.query.rewindFiles) throw new Error("This Claude Code SDK does not support native file undo.");
+      await this.checkFileUndo(checkpointId, turn, postflight);
+      this.checkFileUndoIdle(turn, live);
+      this.checkFileUndoVersion(live);
+      const preview = await live.query.rewindFiles(checkpointId, { dryRun: true });
+      this.checkFileUndoIdle(turn, live);
+      if (dryRun || !preview.canRewind || (preview.skippedLinks ?? 0) > 0) return preview;
+      await this.checkFileUndo(checkpointId, turn, false);
+      this.checkFileUndoIdle(turn, live);
+      this.checkFileUndoVersion(live);
+      this.host.checkpoints!.consumeFiles(this.id, checkpointId);
+      this.lastFileRestore = checkpointId;
+      return await live.query.rewindFiles(checkpointId, { dryRun: false });
+    } finally {
+      this.rewinding = false;
+      this.host.pool.touch(this);
+    }
+  }
+
+  private checkFileUndoVersion(live: Live): void {
+    if (live.launchProof) checkClaudeLaunch(live.launchProof);
+    const version = live.initSeen ? live.nativeVersion : live.launchProof?.version ?? null;
+    if (!supportsFileUndo(version)) throw new Error("Native file undo requires this Claude Code query to report version 2.1.318 or newer, or a verified launch of that exact native executable. Its version is unknown or unsupported.");
+  }
+
+  private checkFileUndoIdle(turn: number, live?: Live): void {
+    if (this.closed || this.turnOpen || this.asking > 0 || this.turns !== turn || this.hasBackgroundWork() || (live && (this.live !== live || live.closing))) throw new Error("Claude Code changed or started work while file undo was being checked. Try again when it is idle.");
+  }
+
+  private async checkFileUndo(checkpointId: string, turn: number, postflight: boolean): Promise<void> {
+    this.checkFileUndoIdle(turn);
+    const session = await this.host.files.info(this.id);
+    this.checkFileUndoIdle(turn);
+    try {
+      if (session?.sessionId !== this.id || !session.cwd || realpathSync(session.cwd) !== realpathSync(this.cwd)) throw new Error("folder changed");
+    } catch {
+      throw new Error("The native Claude Code session's folder no longer matches this Portals thread. File undo was refused.");
+    }
+    const messages = await this.host.files.messages(this.id, this.cwd);
+    this.checkFileUndoIdle(turn);
+    const checkpoints = this.host.checkpoints;
+    const eligible = postflight ? checkpoints?.isLatest(this.id, checkpointId, messages) : checkpoints?.canUndoFiles(this.id, checkpointId, messages);
+    if (!eligible) throw new Error("File undo is available only for the latest completed turn with native file snapshots. This checkpoint is unknown, stale, or unavailable.");
+    const open = await this.host.isOpenInTerminal(this.id);
+    this.checkFileUndoIdle(turn);
+    if (open) throw new Error("Close this Claude Code session in the terminal before undoing its files.");
   }
 
   // MARK: Turns
@@ -392,7 +495,7 @@ export class ClaudeSession implements ProviderSession, Warmable {
     if (steering) live.steers.set(uuid, prompt);
     try {
       live.input.push(message);
-      if (steering || !prompt.text.trimStart().startsWith("/")) this.host.checkpoints?.sent(this.id, uuid, steering);
+      if (steering || !prompt.text.trimStart().startsWith("/")) this.host.checkpoints?.sent(this.id, uuid, steering, live.fileCheckpointing);
     } catch (error) {
       if (!steering) this.endTurn({ type: "turn.end", status: "error", error: (error as Error).message });
       return "refused";
@@ -546,17 +649,17 @@ export class ClaudeSession implements ProviderSession, Warmable {
 
   // MARK: The process
 
-  private warm(): Promise<Live> {
+  private warm(launchProof?: ClaudeLaunchProof): Promise<Live> {
     // While it starts, everything waits for it, so messages keep their order.
     if (this.starting) return this.starting;
     if (this.live && !this.live.input.isEnded) return Promise.resolve(this.live);
-    this.starting = this.start().finally(() => {
+    this.starting = this.start(launchProof).finally(() => {
       this.starting = null;
     });
     return this.starting;
   }
 
-  private async start(): Promise<Live> {
+  private async start(launchProof?: ClaudeLaunchProof): Promise<Live> {
     // Resuming a session a terminal has open writes to it behind the terminal's back
     // (docs/bridge-spikes.md, S2).
     if (this.desk && (await this.host.isOpenInTerminal(this.id))) {
@@ -575,7 +678,7 @@ export class ClaudeSession implements ProviderSession, Warmable {
     this.stderr.length = 0;
     const input = new InputQueue();
     const options = queryOptions({
-      claudePath: this.host.claudePath,
+      claudePath: launchProof?.path ?? this.host.claudePath,
       cwd: this.cwd,
       // The thread says who it is when it uses the `portals` command.
       env: this.host.portals ? { ...this.host.env, PORTALS_THREAD: this.id } : this.host.env,
@@ -592,10 +695,20 @@ export class ClaudeSession implements ProviderSession, Warmable {
         if (this.stderr.length > 20) this.stderr.shift();
       },
     });
+    options.enableFileCheckpointing = true;
     if (counters.on) counters.spawned("claude");
+    if (launchProof) checkClaudeLaunch(launchProof);
     const query = this.host.query(input, options);
+    let heardInit!: () => void;
+    const initHeard = new Promise<void>((resolve) => { heardInit = resolve; });
     const live: Live = {
       query,
+      nativeVersion: null,
+      initSeen: false,
+      launchProof,
+      initHeard,
+      heardInit,
+      fileCheckpointing: options.enableFileCheckpointing === true && typeof query.rewindFiles === "function",
       input,
       stream: new ClaudeStream({
         cwd: this.cwd,
@@ -633,6 +746,7 @@ export class ClaudeSession implements ProviderSession, Warmable {
       // After an interrupt the SDK throws the last error result once the process exits.
       if (!live.closing) failure = (error as Error).message;
     }
+    live.heardInit();
     if (this.live === live) this.live = null;
     // A process cooled while a message was on its way may exit after the next one has
     // started: that one is still warm.
@@ -661,6 +775,12 @@ export class ClaudeSession implements ProviderSession, Warmable {
 
   private receive(live: Live, message: SDKMessage): void {
     if (this.live !== live) return;
+    if (message.type === "system" && (message as { subtype?: unknown }).subtype === "init") {
+      const version = (message as { claude_code_version?: unknown }).claude_code_version;
+      live.initSeen = true;
+      live.nativeVersion = typeof version === "string" ? version : null;
+      live.heardInit();
+    }
     if (message.type === "rate_limit_event") this.host.limitsHeard(message.rate_limit_info as Record<string, unknown>);
     if (message.type === "system" && message.subtype === "init") this.host.version.runningIs(message.claude_code_version);
     // Claude Code also sends `api_retry` after a turn's result, as a heartbeat while a
@@ -675,7 +795,7 @@ export class ClaudeSession implements ProviderSession, Warmable {
     for (const event of live.stream.map(message)) {
       if (event.type === "turn.end") {
         try {
-          const checkpoint = this.host.checkpoints?.finish(this.id);
+          const checkpoint = this.host.checkpoints?.finish(this.id, event.status === "complete" && supportsFileUndo(live.nativeVersion));
           if (checkpoint) this.sink.emit({ type: "checkpoint", checkpoint });
         } catch (error) {
           log.warn("could not save Claude message checkpoints", { session: this.id, error: (error as Error).message });
