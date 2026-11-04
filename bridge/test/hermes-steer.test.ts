@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { HermesError, type Frame } from "../src/providers/hermes/client.ts";
 import { HermesHost as HermesProviderHost } from "../src/providers/hermes/provider.ts";
-import { HermesSession, noticeText, type HermesHost, type Loaded } from "../src/providers/hermes/session.ts";
+import { HermesSession, noticeText, storedMessages, type HermesHost, type Loaded } from "../src/providers/hermes/session.ts";
+import { TypedCommands } from "../src/providers/hermes/typed.ts";
 import type { ProviderEvent, ThreadMode } from "../src/providers/types.ts";
 import type { Registry, ThreadRecord } from "../src/sessions/registry.ts";
 import { Session } from "../src/sessions/session.ts";
@@ -237,3 +238,52 @@ for (const after of ["a restart of the bridge", "a reconnect that lost events"] 
     }
   });
 }
+
+test("every command made a message of reads back as typed after a restart of the bridge, past fifty of them, while Hermes still has their rows", () => {
+  const state = mkdtempSync(join(tmpdir(), "portals-hermes-typed-"));
+  try {
+    const path = join(state, "hermes-commands.json");
+    const typed = new TypedCommands(path);
+    const messages: unknown[] = [];
+    for (let row = 1; row <= 120; row++) {
+      typed.keep("stored", row, `/plan step ${row}`);
+      messages.push({ role: "user", text: `Write a plan for: step ${row}`, timestamp: row, row_id: row });
+    }
+    const users = storedMessages(messages, new TypedCommands(path).of("stored")).map((message) => (message as { text: string }).text);
+    assert.equal(users.length, 120);
+    assert.deepEqual(users.filter((text) => !text.startsWith("/plan")), []);
+    assert.equal(users[0], "/plan step 1");
+  } finally { rmSync(state, { recursive: true, force: true }); }
+});
+
+test("what was typed for a command is let go of once Hermes no longer has its row, and kept for a row stored after the read", async () => {
+  const state = mkdtempSync(join(tmpdir(), "portals-hermes-typed-"));
+  try {
+    const kept = new HermesProviderHost({
+      settings: { path: "/nonexistent/hermes", start: false, folder: state, logPath: join(state, "hermes-serve.log") },
+      cachePath: join(state, "hermes.json"),
+      connect: async () => { throw new Error("no Hermes here"); },
+    });
+    kept.keepTyped("stored", 3, "/plan compacted away");
+    kept.keepTyped("stored", 5, "/plan still there");
+    kept.keepTyped("stored", 9, "/plan stored after the read");
+    // Compressing summarised row 3 away: Hermes's copy has rows 5 and 6.
+    const loaded: Loaded = { session_id: "runtime", running: false, messages: [{ role: "compaction", text: "Summary", timestamp: 0 } as never, { role: "user", text: "Write a plan for: still there", timestamp: 1, row_id: 5 } as never, { role: "assistant", text: "Planned.", timestamp: 2, row_id: 6 } as never] };
+    const record: ThreadRecord = { id: "stored", agent: "hermes", cwd: "/tmp", title: null, ...settings, createdAt: 0, updatedAt: 0, origin: "phone", ongoing: true };
+    const core = new Session(record, { has: () => false } as unknown as Registry);
+    const host: HermesHost = {
+      call: async <T>() => ({}) as T,
+      bind() {}, forget() {}, respond() {}, respondError() {},
+      botChatMark: async () => "mark",
+      typedCommands: (id) => kept.typedCommands(id),
+      keepTyped: (id, row, text) => kept.keepTyped(id, row, text),
+      forgetTyped: (id, rows) => kept.forgetTyped(id, rows),
+    };
+    await core.attach(new HermesSession({ id: "stored", cwd: "/tmp", settings, ongoing: true }, "default", core.sink, host, loaded, "mark"));
+    await step();
+    try {
+      assert.deepEqual(core.messages.filter((message) => message.role === "user").map((message) => message.text), ["/plan still there"]);
+      assert.deepEqual([...new TypedCommands(join(state, "hermes-commands.json")).of("stored")], [[5, "/plan still there"], [9, "/plan stored after the read"]]);
+    } finally { await core.close(); }
+  } finally { rmSync(state, { recursive: true, force: true }); }
+});

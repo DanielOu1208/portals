@@ -392,6 +392,10 @@ export class HermesHost {
     this.typed.keep(thread, row, text);
   }
 
+  forgetTyped(thread: string, rows: readonly number[]): void {
+    this.typed.forget(thread, rows);
+  }
+
   /** Whether `/name` is a command Hermes makes a message of for the profile: one of the app's (`hermesCommands`) or a skill. */
   async turnCommand(profile: string, name: string): Promise<boolean> {
     try {

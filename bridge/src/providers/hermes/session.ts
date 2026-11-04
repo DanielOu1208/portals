@@ -20,6 +20,7 @@ import { SettingRefused } from "../types.ts";
 import { machineWord } from "../../platform.ts";
 import { HermesError, type Frame } from "./client.ts";
 import { HermesSubagents } from "./subagents.ts";
+import { rowsGone } from "./typed.ts";
 
 // One Hermes session as a thread of the bridge.
 //
@@ -59,6 +60,8 @@ export interface HermesHost {
   typedCommands?(thread: string): Map<number, string>;
   /** Keeps what the user typed for the thread's message Hermes stored as row `row`, after a restart too. */
   keepTyped?(thread: string, row: number, text: string): void;
+  /** Lets go of what was typed for the thread's stored rows `rows`, which Hermes no longer has. */
+  forgetTyped?(thread: string, rows: readonly number[]): void;
 }
 
 /** Hermes's answer to `session.resume` and `session.create`, as far as it is read here. */
@@ -225,9 +228,22 @@ export class HermesSession implements ProviderSession {
     }
   }
 
+  /**
+   * Hermes's stored copy of the conversation, read back (`storedMessages`). What was typed
+   * for a row it no longer has (one compressing summarised away) is let go of.
+   */
+  private readStored(messages: unknown[]): StoredMessage[] {
+    const gone = rowsGone(this.typed.keys(), messages);
+    if (gone.length > 0) {
+      for (const row of gone) this.typed.delete(row);
+      this.host.forgetTyped?.(this.id, gone);
+    }
+    return storedMessages(messages, this.typed);
+  }
+
   /** What `session.resume` (or `session.create`) said: the conversation, a turn under way, the settings. */
   private take(loaded: Loaded): void {
-    this.stored = Array.isArray(loaded.messages) ? storedMessages(loaded.messages, this.typed) : [];
+    this.stored = Array.isArray(loaded.messages) ? this.readStored(loaded.messages) : [];
     const info = loaded.info ?? {};
     if (typeof info.model === "string" && info.model !== "") this.current.model = info.model;
     if (typeof info.provider === "string" && info.provider !== "") this.current.provider = info.provider;
@@ -439,7 +455,7 @@ export class HermesSession implements ProviderSession {
     // what compressing it summarised away. A failed look is tried again with the next change.
     const loaded = await this.call<Loaded>("session.resume", { session_id: this.id, inline_images: false }, 120_000);
     if (stale() || loaded?.running === true || loaded?.session_id !== this.runtimeID || !Array.isArray(loaded.messages)) return null;
-    const messages = storedMessages(loaded.messages, this.typed);
+    const messages = this.readStored(loaded.messages);
     const own = ownWrites(this.stored, messages, this.unwritten);
     const read = () => {
       this.mark = mark;
