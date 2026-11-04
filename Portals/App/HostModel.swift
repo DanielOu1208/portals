@@ -484,6 +484,10 @@ final class HostModel: Identifiable {
 
     var isConnected: Bool { connection == .connected }
 
+    var threadSearcher: (any ThreadSearching)? {
+        isConnected ? backend as? any ThreadSearching : nil
+    }
+
     /// The host's side of the net, for a bridge that offers it (`Net`).
     var netHost: (any NetReporting)? {
         backend as? any NetReporting

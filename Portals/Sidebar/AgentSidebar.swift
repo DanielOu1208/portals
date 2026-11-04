@@ -86,7 +86,6 @@ struct AgentSidebar: View {
     /// The pointer over the thread rows of the groups on top and of a search's results, on
     /// a Mac (`RowHover`).
     @State private var groupsHover = RowHover()
-    @State private var searchHover = RowHover()
     /// The thread being renamed, and its title as typed so far.
     @State private var renaming: ThreadRecord?
     @State private var newTitle = ""
@@ -417,14 +416,14 @@ struct AgentSidebar: View {
     /// thread, place and state are what they were is not drawn again when anything
     /// else in the sidebar changes. `closes`: under Finished or Recent, where the row closes its
     /// thread's tab, or dismisses a thread that is no tab.
-    func threadRow(_ record: ThreadRecord, as kind: ThreadRowKind, height: CGFloat? = nil, closes: Bool = false) -> some View {
+    func threadRow(_ record: ThreadRecord, as kind: ThreadRowKind, height: CGFloat? = nil, closes: Bool = false, searchHit: ThreadSearchHit? = nil) -> some View {
         let activity = fleet.activity(of: record.key)
         let isTab = fleet.tabs.contains(record.key)
         let style = fleet.style(for: record.ref.agent)
         return ThreadRow(
             record: record,
             kind: kind,
-            height: height ?? (kind == .apart ? RowMetrics.tallHeight : RowMetrics.threadHeight),
+            height: height ?? (kind == .apart ? RowMetrics.tallHeight : RowMetrics.threadHeight) + (searchHit == nil ? 0 : 20),
             current: fleet.currentRows.flag(for: record.key),
             activity: activity,
             style: style,
@@ -436,7 +435,8 @@ struct AgentSidebar: View {
             isBot: kind == .apart && fleet.isBot(record.ref.agent),
             fleet: fleet,
             onOpen: onOpen,
-            onRename: rename
+            onRename: rename,
+            searchHit: searchHit
         )
         .equatable()
         .returnProbe("thread:\(kind):\(record.id.rawValue)")
@@ -574,33 +574,24 @@ struct AgentSidebar: View {
     /// A search's results, from every host, in place of both halves of the sidebar; the
     /// unsent drafts that match too.
     private func searchResults(drafts: [RecoverableDraft]) -> some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: RowMetrics.spacing) {
-                if !drafts.isEmpty {
-                    RecoverableDraftsSection(
-                        drafts: drafts, caption: draftCaption,
-                        onOpen: onOpenRecoverableDraft, onDiscard: onDiscardRecoverableDraft
-                    )
-                }
-                let matches = SidebarSections.search(query, in: fleet.allThreads)
-                if matches.isEmpty {
-                    if drafts.isEmpty {
-                        ContentUnavailableView.search(text: query)
-                            .padding(.top, Theme.grid * 4)
-                    }
-                } else {
-                    ForEach(matches, id: \.key) { record in
-                        threadRow(record, as: .apart)
-                    }
-                }
+        let threads = fleet.allThreads
+        let matches = SidebarSections.search(query, in: threads)
+        return SidebarMessageMatches(
+            query: query, fleet: fleet, threads: threads, titles: Set(matches.map(\.key)),
+            showsEmpty: matches.isEmpty && drafts.isEmpty
+        ) {
+            if !drafts.isEmpty {
+                RecoverableDraftsSection(
+                    drafts: drafts, caption: draftCaption,
+                    onOpen: onOpenRecoverableDraft, onDiscard: onDiscardRecoverableDraft
+                )
             }
-            .threadRowHover(searchHover)
-            .padding(.horizontal, RowMetrics.inset)
-            .padding(.top, RowMetrics.blockGap)
-            .padding(.bottom, Theme.grid * 2)
+            ForEach(matches, id: \.key) { record in
+                threadRow(record, as: .apart)
+            }
+        } row: { record, hit in
+            threadRow(record, as: .apart, searchHit: hit)
         }
-        .scrollDismissesKeyboard(.immediately)
-        .frame(maxHeight: .infinity, alignment: .top)
     }
 
     private var searchField: some View {
