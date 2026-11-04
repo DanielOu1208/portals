@@ -251,13 +251,14 @@
 //   since, are their card again for the first device that keeps such cards and resumes
 //   the thread.
 // - `background_commands`: a command an agent left running in the background after its
-//   turn moved on (Claude Code's `run_in_background`, Codex's background terminals) is a
-//   `subagent.*` entry of `kind` `command`: `goal` what it runs, `summary` its last line
-//   of output, `output` the end of its output so far (at most 8 KB and 200 lines, with
-//   `output_truncated` when its start was left out), `can_stop` where its agent can stop
-//   it; at most one `subagent.progress` a second for it, of which the replay log keeps
-//   the latest only. Running commands' output also comes as `tool.progress` from Codex,
-//   Pi and Cursor, as from Droid (no feature: that event is older than the list).
+//   turn moved on (Claude Code's `run_in_background`, Codex's background terminals, Droid's
+//   background commands) is a `subagent.*` entry of `kind` `command`: `goal` what it
+//   runs, `summary` its last line of output, `output` the end of its output so far (at
+//   most 8 KB and 200 lines, with `output_truncated` when its start was left out),
+//   `can_stop` where its agent can stop it; at most one `subagent.progress` a second for
+//   it, of which the replay log keeps the latest only. Running commands' output also comes
+//   as `tool.progress` from Codex, Pi and Cursor, as from Droid (no feature: that event is
+//   older than the list).
 // - `net`: the Macs and devices that pair once and reach every Mac (src/net/net.ts,
 //   docs/net-plan.md). Every bridge keeps a copy of the member list, which `net.list`
 //   gives (without the tokens' hashes) and `net.sync` copies between the Macs. A member
@@ -347,9 +348,25 @@
 //   that cannot say. An agent is asked at most once a minute, whoever asks, a failure
 //   standing for that minute too. A window kept from an earlier answer has its own
 //   `heard_at` (milliseconds since 1970).
+// - `disk_space`: `gateway.ready`'s `bridge` block and the `sessions.activity` answer carry
+//   `disk`, the free space on the volume the bridge keeps its folder on: `free` and `total`
+//   in bytes, and `level`, `ok`, `low` (under 5 GB, or a tenth of a small volume) or
+//   `critical` (under 1 GB, or a fiftieth), once it has been read. The bridge reads it as it
+//   starts, every five minutes, and as a write fails for want of space (src/disk.ts);
+//   `poll.now` tells the devices that ask as the level changes, or the free space by a
+//   quarter of a gigabyte. As space runs low, each thread at work, and each that starts a
+//   turn, is told once with a warning notice; a write of a thread's that fails for want of
+//   space tells it too.
 // - `open_on_host`: `host.apps` lists the apps on the host a thread's folder opens in (the
 //   Finder, the editors and terminals installed), and `folder.open` opens the thread's
 //   folder in one, on the host's own screen (src/openers.ts).
+// - `steer_withdrawn`: a message handed to the running turn that a Stop took back before
+//   the agent read it (Claude Code: it would have run once the turn had stopped, as a turn
+//   of its own) is told with a `status.update` `warn`, as before, carrying `withdrawn`:
+//   `{text, message_id?}`, the message as stored and the id its device gave it. The app
+//   takes it out of the turn it was shown in, and the device that sent it puts it back in
+//   its composer; an app without the feature shows the notice, which quotes the message
+//   whole. The conversation no longer has it, after a resume too.
 // - `subagent_read`: `subagent.read` gives what one subagent did, read only: its own
 //   messages, as `session.resume` gives a thread's, so far for one still at work. A
 //   subagent that can be read says so (`can_read` in `subagent.*` events and
@@ -358,6 +375,8 @@
 //   workflows or commands.
 
 export const bridgeFeatures = [
+  "turn_file_undo",
+  "message_fork",
   "mcp_auth",
   "folders",
   "model_levels",
@@ -428,6 +447,8 @@ export const bridgeFeatures = [
   "git_status",
   "usage_read",
   "open_on_host",
+  "steer_withdrawn",
+  "disk_space",
   "subagent_read",
 ] as const;
 

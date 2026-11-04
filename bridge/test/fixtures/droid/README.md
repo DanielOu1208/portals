@@ -1,31 +1,70 @@
 # Real Droid SDK recordings
 
-## Recorded on 1.0.0, 2026-10-29
+## Recorded on 1.3.0, 2026-11-04
 
-All 13 scenarios were recorded afresh with CLI 1.0.0 and SDK 0.10.0. Direct-tool
-scenarios use Haiku 5.5 (`claude-haiku-5-5`, multiplier 0.04, effort medium), including
-the fixed-model children; `script` and `script-background` use `gpt-6.1-sol`.
-The raw protocol is 1.286.0; the pinned SDK handles it.
+The scenarios were recorded afresh with CLI 1.3.0 and SDK 0.10.0 (still npm's latest),
+each once: direct-tool scenarios on Haiku 5.5 (`claude-haiku-5-5`, multiplier 0.04,
+effort medium), including the fixed-model children; `script` and `script-background`
+on `gpt-6.1-sol`. `task-stop-idle` is its second take: in the first, the child replied
+with more than its word. The raw protocol is 1.294.0; the SDK speaks 1.269.0.
 
-`task-background-late-approval-0.247.jsonl` keeps the earlier 0.247.0 recording as
-a separate regression fixture: its child asks for approval after the parent turn ends.
-The fresh 1.0.0 `task-background` asks before that end, so it cannot prove the late case.
+Three recordings are kept from 1.0.0, each for a reason:
 
-The prior CLI 0.245.0 / SDK 0.9.1 and 0.247.0 / SDK 0.10.0 recordings are in
-commit `28236e75` (their observations below are historical).
-The prior CLI 0.236.0 / Haiku 4.5 baseline is preserved in commit `39d9b28`.
+- `meter.jsonl`: its test checks the numbers in it, and the meter's maximum is being
+  changed to Droid's own budget. A 1.3.0 take had the same shape (`get_context_stats`
+  limit 872,000, `get_context_breakdown` `contextBudget` 200,000), other numbers.
+- `task-stop-background.jsonl`: on 1.3.0 the parent's turn ended about a second after
+  launching the Task, before the probe's stop two seconds in, in both takes. The stop
+  then met an idle parent, as `task-stop-idle` does; nothing stopped an active one.
+- `oversized-background.jsonl`: 1.0.0 never ended the refused message's turn, the case
+  the bridge's refusal handling exists for. 1.3.0 ends it itself, with
+  `agent_turn_completed` reason `error` right after the `user_only` note:
+  `oversized-background-1.3.jsonl` is that recording.
+
+`task-background-late-approval-0.247.jsonl` keeps the 0.247.0 recording as a separate
+regression fixture: its child asks for approval after the parent turn ends. The 1.0.0
+`task-background` asked before that end; the 1.3.0 one asks after it again.
+
+Earlier recordings (1.0.0 for every scenario, 0.247.0, 0.245.0 with SDK 0.9.1, and the
+0.236.0 / Haiku 4.5 baseline) are in this folder's git history; their observations
+below are historical.
 
 ```sh
 cd bridge
-DROID_RECORD_PATH=/tmp/droid-1.0.0/droid DROID_RECORD_MODEL=claude-haiku-5-5 \
+DROID_RECORD_PATH=~/.local/bin/droid DROID_RECORD_MODEL=claude-haiku-5-5 \
   DROID_RECORD_SCRIPT_MODEL=gpt-6.1-sol node scripts/record-droid.ts [scenario…]
 ```
 
 Each JSONL line is a recorder envelope with `kind` and elapsed `at` milliseconds.
-`event` is the raw high-level SDK event. `notification` is the **full raw JSON-RPC
-envelope**, so its payload is `notification.params.notification`. Other kinds
+`event` is the raw high-level SDK event. `notification` is the JSON-RPC envelope as the
+pinned SDK parsed it, so its payload is `notification.params.notification`, and fields
+the SDK does not know are left out. `dropped` (from 1.3.0) is a whole frame the SDK
+could not parse and so dropped before any handler, kept as Droid sent it. Other kinds
 record metadata, permissions/questions and answers, control calls, and context.
-Paths and injected environment context are sanitized, not event shapes.
+Paths, the person's MCP server names and hook commands, and injected environment
+context are sanitized, not event shapes.
+
+### What 1.3.0 sends that SDK 0.10.0 does not read
+
+- Dropped whole: `child_session_settled` (`childSessionId`, `toolUseId`, `status`) when
+  a Task's child finishes, in every Task recording; and `background_processes_changed`
+  (`processes[]` with `id`, `pid`, `command`, `startedAtMs`, `toolUseId`, `outputFile`)
+  when a background command starts and ends, in `oversized-background-1.3`.
+- Fields left out of frames it does parse: `backgroundWork` on
+  `droid_working_state_changed`, `hasPendingStandardRestore` in `settings_updated`,
+  `selectedColor` and `selectedPrefix` on approval options, and `type` in
+  `hookCommands`.
+
+No turn end, approval or question was dropped. All turn-end reasons were known ones.
+
+### Other changes seen from 1.0.0
+
+- `kill_worker_session` while the parent waits on `TaskOutput` (`task-stop-foreground`)
+  cancels that tool ("Error: Tool execution cancelled by user") and the parent's turn
+  ends as `completed`, with no "Request interrupted by user" message. The child still
+  runs on and completes, as on 1.0.0.
+- After `/compact`, Droid still answers first and says `session_compacted` after it
+  (here in the same millisecond).
 
 ## Earlier direct-tool recordings (CLI 0.245.0)
 
@@ -45,7 +84,7 @@ Important observed behavior:
 - Haiku 5.5 emits thinking events in AskUser, Spec, and interrupt scenarios.
   Context stats remain estimated, now with limit 872000 rather than 180000.
 
-## Recorded on the MBP16, 2026-10-27 (n14)
+## Recorded 2026-10-27 (n14)
 
 `meter`, `script`, `script-background` and `task-background` were recorded with CLI
 0.247.0 and SDK 0.10.0:
@@ -108,3 +147,7 @@ the session. That timeout also makes the final context read fail. The fixture
 keeps that observed failure, not a fabricated result. The RPC regression replays
 this exact tail through the pinned SDK, remapping only the rejected RPC id to
 the test's fresh id.
+
+`oversized-background-1.3.jsonl` is the same scenario on CLI 1.3.0. Droid's note comes
+at 27.951 s, and with it an `agent_turn_completed` with reason `error`, so the SDK's
+stream ends there with `error_during_execution`; the background turn ends 3 ms later.

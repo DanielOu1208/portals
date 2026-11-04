@@ -118,6 +118,8 @@ import Testing
         #expect(subset["methods"]?[BridgeWire.Method.foldersRemove] == nil)
         let features = Set(try #require(subset["bridge"]?["features"]?.arrayValue).compactMap(\.stringValue))
         #expect(features == [
+            BridgeWire.Feature.turnFileUndo,
+            BridgeWire.Feature.messageFork,
             BridgeWire.Feature.folders, BridgeWire.Feature.modelLevels, BridgeWire.Feature.pushHost, BridgeWire.Feature.deskSessions,
             BridgeWire.Feature.modelNames, BridgeWire.Feature.compaction, BridgeWire.Feature.rename, BridgeWire.Feature.activity,
             BridgeWire.Feature.modelDefaultLevels, BridgeWire.Feature.questionDetails, BridgeWire.Feature.modes,
@@ -138,7 +140,8 @@ import Testing
             BridgeWire.Feature.answerOwner, BridgeWire.Feature.netRename, BridgeWire.Feature.netRenameDevices,
             BridgeWire.Feature.botChat, BridgeWire.Feature.historyPages, BridgeWire.Feature.updateNotice, BridgeWire.Feature.mcpAuth,
             BridgeWire.Feature.messageReconciliation,
-            BridgeWire.Feature.gitStatus, BridgeWire.Feature.usageRead, BridgeWire.Feature.openOnHost,
+            BridgeWire.Feature.gitStatus, BridgeWire.Feature.usageRead, BridgeWire.Feature.openOnHost, BridgeWire.Feature.diskSpace,
+            BridgeWire.Feature.steerWithdrawn,
             BridgeWire.Feature.subagentRead,
         ])
         // What one subagent did: named as Stop names it, and never sent to Hermes.
@@ -250,6 +253,12 @@ import Testing
             #expect(Set(encoded.keys) == allowed, "\(method)")
             #expect(subset["methods"]?[method] == nil)
         }
+        let fork = try #require(subset["bridge"]?["methods"]?[BridgeWire.Method.sessionFork])
+        #expect(fork["feature"]?.stringValue == BridgeWire.Feature.messageFork)
+        let forkKeys = try #require(try JSONValue(encoding: BridgeWire.SessionForkParams(sessionID: "s1", checkpointID: "native-position", before: true)).objectValue)
+        #expect(Set(forkKeys.keys) == Set(try #require(fork["params"]?.arrayValue).compactMap(\.stringValue)))
+        #expect(subset["methods"]?[BridgeWire.Method.sessionFork] == nil)
+        #expect(subset["bridge"]?["events"]?["message.checkpoint"]?["feature"]?.stringValue == BridgeWire.Feature.messageFork)
         let rename = try #require(subset["bridge"]?["methods"]?[BridgeWire.Method.sessionRename])
         #expect(rename["feature"]?.stringValue == BridgeWire.Feature.rename)
         let renameKeys = try #require(try JSONValue(encoding: BridgeWire.SessionRenameParams(sessionID: "s1", title: "t", profile: "claude")).objectValue)

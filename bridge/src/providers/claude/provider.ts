@@ -1,4 +1,5 @@
-import { constants, statSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { constants, realpathSync, statSync } from "node:fs";
 import { open, stat, type FileHandle } from "node:fs/promises";
 import { homedir } from "node:os";
 import { normalize } from "node:path";
@@ -25,6 +26,7 @@ import {
   type AgentProfile,
   type DeskAdoption,
   type DeskSession,
+  type ModeOption,
   type ModelCatalog,
   type Provider,
   type ProviderSession,
@@ -34,6 +36,7 @@ import {
   type UsageReport,
 } from "../types.ts";
 import { machineWord } from "../../platform.ts";
+import { ClaudeCheckpoints } from "./checkpoints.ts";
 import { historyFromSession, turnCutOff } from "./history.ts";
 import { ClaudeSettingsEnv } from "./settingsEnv.ts";
 import { ClaudeSessionFiles } from "../../search/locate.ts";
@@ -41,14 +44,16 @@ import type { SearchFile } from "../../search/readers.ts";
 import { fromAgentLog, fromJournal, pastSubagents, type PastSubagent } from "./tasks.ts";
 import { InputQueue } from "./input.ts";
 import { claudeModels } from "./models.ts";
-import { childEnvironment, claudeVersion, desktopAgents, queryOptions, testedClaudeVersion, threadModeFor } from "./options.ts";
+import { childEnvironment, claudeAuthStatus, claudeVersion, desktopAgents, queryOptions, testedClaudeVersion, threadModeFor } from "./options.ts";
 import { onPath, type CommandAccess } from "../../portals/access.ts";
 import { WarmPool } from "../pool.ts";
-import { reportVersion } from "../program.ts";
+import { VersionCheck } from "../program.ts";
 import { ClaudeSession, terminalHasIt, titleWatch, type ClaudeHost, type PlanUsage, type QueryFactory, type QueryLike, type SessionFiles, type StoredSession } from "./session.ts";
+import { ClaudeSignIn } from "./signIn.ts";
 import { ContextWindows } from "./stream.ts";
 import { hasLimits, HeardLimits, KnownModelWindows, planDisplayName, planUsageReport, stillStanding } from "./usage.ts";
 import { claudeMentionLimit, type MentionLimit } from "../../sessions/mentions.ts";
+import { mcpCommand, mcpFolderGone, mcpStatusText, type McpServer, type McpServerState } from "../mcpStatus.ts";
 
 // Claude Code as an agent of the bridge (`claude` in profiles.list). It runs the
 // installed `claude` through the Agent SDK, one process per thread in use, with
@@ -67,6 +72,8 @@ export interface ClaudeSettings {
   maxWarm: number;
   /** A fallback for when the Claude login cannot be used; null (the default) uses the login. */
   apiKey: string | null;
+  /** A long-lived token from `claude setup-token`, used instead of the login; null or absent uses the login. */
+  oauthToken?: string | null;
   /** Claude Code summarises each run of its tool calls (`claude.toolSummaries`); on unless false. */
   toolSummaries?: boolean;
   /** Where the startup check runs. */
@@ -83,8 +90,14 @@ export interface ClaudeProviderOptions {
   env?: NodeJS.ProcessEnv;
   /** Claude Code's managed settings file (tests). */
   managedSettings?: string;
+  /** Bridge-owned UUID membership for exact message forks across restarts. */
+  checkpointPath?: string;
+  /** Read-only version probe for an exact cold-query launch target (tests). */
+  launchVersion?: (path: string, env: Record<string, string | undefined>) => Promise<string | null>;
   /** What `claude agents --json` lists: the sessions running on the Mac now, the bridge's own left out. */
   agents?: () => Promise<unknown>;
+  /** What `claude auth status --json` says. */
+  authStatus?: () => Promise<unknown>;
   /** The clock, in milliseconds. */
   now?: () => number;
   /** How long a turn may take to end after Stop before its process is stopped; 15 s unless a test says otherwise. */
@@ -105,14 +118,16 @@ const checkMaxAgeMs = 10 * 60_000;
 /**
  * Commands of Claude Code's own that are not offered: ones that would leave the thread
  * (`/clear` starts a new session), change the user's settings for every session, need a
- * terminal, or have the app's or the bridge's own command in their place.
+ * terminal, or have the app's or the bridge's own command in their place. Those Claude
+ * Code itself says need a terminal (`terminal_slash_commands`) are left out too; this
+ * list holds them as well, for before a session has said, and for an older Claude Code.
  */
 const withheld = new Set([
   "clear", "model", "effort", "fast", "config", "output-style", "color", "focus", "theme", "vim", "statusline", "terminal-setup",
   "keybindings", "permissions", "hooks", "mcp", "plugin", "plugins", "reload-plugins", "reload-skills", "login", "logout",
   "resume", "exit", "quit", "heapdump", "ide", "agents", "autocompact", "advisor", "auto-mode-setup", "usage-credits",
   "extra-usage", "design", "design-consent", "design-revoke", "workflow-launch-exec", "import", "privacy-settings", "upgrade",
-  "install-github-app", "add-dir", "remote-control",
+  "install-github-app", "add-dir", "remote-control", "doctor", "send-to-project",
   "status", "mode", "help", "new", "stop", "retry", "reasoning",
 ]);
 
@@ -139,7 +154,7 @@ export const sdkSessionFiles: SessionFiles = {
   // Direct lookup echoes filesystem aliases; the index keeps the exact stored ids.
   info: async (id) => (await listSessions({ includeProgrammatic: true })).find((session) => session.sessionId === id),
   // A copy with the same history under a new id; the original is not touched.
-  fork: async (id, cwd) => (await forkSession(id, { dir: cwd })).sessionId,
+  fork: async (id, cwd, upToMessageId) => (await forkSession(id, { dir: cwd, ...(upToMessageId ? { upToMessageId } : {}) })).sessionId,
   // A custom title, as `/rename` gives one; `title` reads it back.
   rename: (id, cwd, title) => renameSession(id, title, { dir: cwd }),
   journal: (path) => readJournal(path),
@@ -199,6 +214,37 @@ function within<T>(promise: Promise<T> | undefined, ms: number): Promise<T | und
   return Promise.race([promise, new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), ms).unref())]);
 }
 
+/** How long a Claude Code started for `/mcp` gives its servers to connect, and how often it is asked meanwhile. */
+const mcpConnectMs = 15_000;
+const mcpPollMs = 500;
+
+type ClaudeMcpServer = Awaited<ReturnType<NonNullable<QueryLike["mcpServerStatus"]>>>[number];
+
+/** Claude Code's MCP servers, asked again while one is still connecting, for up to `waitMs`. */
+async function mcpServers(query: QueryLike, waitMs: number): Promise<ClaudeMcpServer[]> {
+  const until = Date.now() + waitMs;
+  for (;;) {
+    const servers = await within(query.mcpServerStatus?.(), 10_000);
+    if (!servers) throw new Error("Claude Code did not say how its MCP servers are.");
+    if (!servers.some((server) => server.status === "pending") || Date.now() >= until) return servers;
+    await new Promise((resolve) => setTimeout(resolve, mcpPollMs));
+  }
+}
+
+/** `/mcp` from what Claude Code says of each server (`McpServerStatus`). */
+export function claudeMcpText(servers: ClaudeMcpServer[]): string {
+  const states: Record<string, McpServerState> = { connected: "connected", pending: "starting", failed: "failed", "needs-auth": "signIn", disabled: "off" };
+  return mcpStatusText("Claude Code", servers.map((server): McpServer => {
+    const state = states[server.status] ?? "unknown";
+    return {
+      name: server.name,
+      state,
+      ...(state === "connected" && Array.isArray(server.tools) ? { tools: server.tools.length } : {}),
+      ...(state === "failed" ? { detail: server.error } : state === "unknown" ? { detail: server.status } : {}),
+    };
+  }), { signIn: "To sign in to one, run /mcp in Claude Code on the host." });
+}
+
 /** How long Claude Code is given to say how much is used. */
 const usageWaitMs = 15_000;
 
@@ -239,6 +285,23 @@ export class ClaudeProvider implements Provider, ClaudeHost {
     provider: "anthropic",
   };
   readonly supportsModes = true;
+  /** Its command the bridge runs itself: `/mcp`, in place of Claude Code's own, which needs a terminal. */
+  readonly executes = ["mcp"] as const;
+  /**
+   * The app's five, in its own words and order, and Claude Code's auto mode as `medium`:
+   * a step between asking before everything and asking before nothing.
+   */
+  readonly modeOptions = [
+    { id: "full", label: "Full access", description: "Edits files and runs commands without asking" },
+    { id: "medium", label: "Auto", description: "Runs safe actions without asking, and asks when unsure" },
+    { id: "edits", label: "Accept edits", description: "Edits files without asking, and asks before running commands" },
+    { id: "ask", label: "Ask first", description: "Asks before editing files or running commands" },
+    { id: "plan", label: "Plan", description: "Plans first, and asks before carrying the plan out" },
+    { id: "default", label: "Your settings", description: "As the agent's own settings at the desk say" },
+  ] satisfies ModeOption[];
+  readonly modeMeanings = {
+    medium: "uses Claude Code's auto mode: it runs safe actions without asking, blocks risky ones, and asks when unsure",
+  };
   /**
    * Claude Code reads a message's mentions in itself, up to its limit, which its settings'
    * `env` sets for a session in `cwd` over the environment it runs in (`ClaudeSettingsEnv`).
@@ -252,12 +315,14 @@ export class ClaudeProvider implements Provider, ClaudeHost {
     return threadModeFor(this.settingsMode);
   }
   readonly claudePath: string;
+  readonly launchVersion: (path: string) => Promise<string | null>;
   readonly env: Record<string, string | undefined>;
   /** What Claude Code's settings files put in its environment. */
   private readonly settingsEnv: ClaudeSettingsEnv;
   readonly portals: CommandAccess | undefined;
   readonly query: QueryFactory;
   readonly files: SessionFiles;
+  readonly checkpoints: ClaudeCheckpoints;
   readonly pool: WarmPool;
   readonly interruptGraceMs: number;
   readonly titleWatchMs: readonly number[];
@@ -272,6 +337,8 @@ export class ClaudeProvider implements Provider, ClaudeHost {
   /** The model a thread on `default` runs on, as the last check found it; null when Claude Code did not say. */
   private defaultModel: string | null = null;
   private commandList: SlashCommand[] | null = null;
+  /** The commands the last session's Claude Code said need a terminal (`terminalCommands`). */
+  private terminalOnly = new Set<string>();
   private defaultEffort = "";
   /** The effort each model runs at when a thread names none, as the last check found it. */
   private defaultLevels: Record<string, string> = {};
@@ -291,12 +358,17 @@ export class ClaudeProvider implements Provider, ClaudeHost {
   private nextUsageStart = Number.NEGATIVE_INFINITY;
   /** How many of those in a row read no limits. */
   private usageMisses = 0;
+  /** Which Claude Code runs: `claude --version` at start, then what each process says in its `system/init`. */
+  readonly version: VersionCheck;
   /** The last answer to how much is used, which stands between those starts. */
   private lastUsage: AskedUsage | undefined;
   /** The last answer that had limits to read, for when one since has not: an old number with its age over none. Forgotten when the sign-in is one with no plan limits. */
   private lastLimits: AskedUsage | undefined;
   /** The window each model's context fills, as its processes have said: a thread's next process shows the context use from its first request. */
   readonly windows = new ContextWindows();
+  /** When the sign-in ends, as `claude auth status` and the processes have said, and what threads say of it. */
+  readonly signIn: ClaudeSignIn;
+  private readonly authStatus: () => Promise<unknown>;
 
   constructor(options: ClaudeProviderOptions) {
     this.settings = options.settings;
@@ -304,28 +376,49 @@ export class ClaudeProvider implements Provider, ClaudeHost {
     this.heard = new HeardLimits(this.now);
     this.modelWindows = new KnownModelWindows(this.now);
     this.claudePath = options.settings.path;
-    const env = childEnvironment(options.env ?? process.env, { clientApp: "portals-bridge", apiKey: options.settings.apiKey, toolSummaries: options.settings.toolSummaries !== false });
+    const { apiKey, oauthToken = null } = options.settings;
+    const env = childEnvironment(options.env ?? process.env, { clientApp: "portals-bridge", apiKey, oauthToken, toolSummaries: options.settings.toolSummaries !== false });
+    this.signIn = new ClaudeSignIn({ credential: apiKey ? "apiKey" : oauthToken ? "oauthToken" : "login", now: this.now });
     this.portals = options.settings.portals;
     this.env = this.portals ? onPath(env, this.portals.bin) : env;
+    this.launchVersion = (path) => options.launchVersion ? options.launchVersion(path, this.env) : claudeVersion(path, this.env, true);
     this.settingsEnv = new ClaudeSettingsEnv(this.env, options.managedSettings);
     this.query = options.query ?? ((prompt, queryOptions) => sdkQuery({ prompt, options: queryOptions }) as QueryLike);
     this.files = options.files ?? sdkSessionFiles;
+    this.checkpoints = new ClaudeCheckpoints(options.checkpointPath);
     this.agents = options.agents ?? (() => desktopAgents(this.claudePath, this.env));
+    this.authStatus = options.authStatus ?? (() => claudeAuthStatus(this.claudePath, this.env));
     this.pool = new WarmPool({ maxWarm: options.settings.maxWarm, idleMs: options.settings.idleMinutes * 60_000 });
     this.interruptGraceMs = options.interruptGraceMs ?? 15_000;
     this.titleWatchMs = options.titleWatchMs ?? titleWatch;
+    this.version = new VersionCheck({ name: "Claude Code", tested: testedClaudeVersion, path: this.claudePath, setting: "claude.path" });
   }
 
-  /** Starts the idle sweep, checks the installed version and learns the models. */
+  /** Starts the idle sweep, checks the installed version and learns the models, and when the sign-in ends. */
   start(): void {
     this.pool.start();
     void this.checkVersion();
     void this.catalogReady();
+    void this.checkSignIn();
   }
 
   private async checkVersion(): Promise<void> {
-    const version = await claudeVersion(this.claudePath, this.env);
-    reportVersion({ name: "Claude Code", version, tested: testedClaudeVersion, path: this.claudePath, setting: "claude.path" });
+    this.version.installedIs(await claudeVersion(this.claudePath, this.env));
+  }
+
+  /**
+   * When the login ends (`loginExpiresAt`, Claude Code 2.1.318), known before any thread
+   * runs: a turn the ended login refuses says so from the first. A key or a token in
+   * config.json has no such date.
+   */
+  async checkSignIn(): Promise<void> {
+    if (this.settings.apiKey || this.settings.oauthToken) return;
+    try {
+      const status = await this.authStatus();
+      if (status && typeof status === "object") this.signIn.heard((status as { loginExpiresAt?: unknown }).loginExpiresAt);
+    } catch (error) {
+      log.debug("could not ask Claude Code when its sign-in ends", { error: (error as Error).message });
+    }
   }
 
   // MARK: Models and commands
@@ -651,19 +744,89 @@ export class ClaudeProvider implements Provider, ClaudeHost {
     }
   }
 
+  /** Forks a known bridge opener, retaining the entire native chain prefix. */
+  async forkAt(id: string, checkpointId: string, before: boolean, expectedCwd: string): Promise<DeskAdoption> {
+    const session = await this.files.info(id);
+    if (!session?.cwd || session.sessionId !== id) throw new DeskRefused("Claude Code has no session by that exact id.");
+    try {
+      if (realpathSync(session.cwd) !== realpathSync(expectedCwd)) throw new Error("folder changed");
+    } catch {
+      throw new DeskRefused("The Claude Code session's folder no longer matches this Portals thread. Branching was refused.");
+    }
+    if ([...this.sessions].some((session) => session.id === id && session.busy) || await this.isOpenInTerminal(id)) throw new DeskRefused("Wait for this Claude Code session to finish before branching it.");
+    const cwd = expectedCwd;
+    const messages = await this.files.messages(id, cwd);
+    if (turnCutOff(messages) && !this.checkpoints.completedAtEnd(id, messages)) throw new DeskRefused("This Claude Code turn has not finished, so it cannot be branched yet.");
+    const history = historyFromSession(messages, cwd, this.checkpoints.forSession(id, messages));
+    const checkpoint = history.find((message) => message.role === "user" && message.checkpoint?.id === checkpointId);
+    if (checkpoint?.role !== "user" || !(before ? checkpoint.checkpoint?.can_edit : checkpoint.checkpoint?.can_fork)) throw new DeskRefused("Claude Code has no safe message boundary at this checkpoint.");
+    const boundary = this.checkpoints.boundary(id, checkpointId, messages);
+    const cut = boundary ? (before ? boundary.before : boundary.after) : -1;
+    const settings = [...this.sessions].find((session) => session.id === id)?.settings() ?? { model: "default", provider: "anthropic", reasoningEffort: (await this.models()).reasoning };
+    const title = `${deskTitle(session)} (fork)`;
+    // There is no prior chain entry before the first prompt: start an empty native
+    // session under a fresh UUID, as startSession does, never copy the original prompt.
+    if (cut < 0) return { id: randomUUID(), cwd, title, settings };
+    const native = messages[cut] as { uuid?: unknown };
+    if (typeof native?.uuid !== "string") throw new DeskRefused("Claude Code could not identify the retained native boundary.");
+    let fork: string;
+    try {
+      fork = await this.files.fork(id, cwd, native.uuid);
+    } catch (error) {
+      throw new DeskRefused(`Claude Code could not fork at this checkpoint: ${(error as Error).message}`);
+    }
+    if (!fork || fork === id) throw new DeskRefused("Claude Code did not create a separate fork, so it was not adopted.");
+    const copied = await this.files.messages(fork, cwd);
+    try {
+      this.checkpoints.copied(id, fork, messages.slice(0, cut + 1), copied);
+    } catch (error) {
+      log.warn("could not save forked Claude message checkpoints", { session: fork, error: (error as Error).message });
+    }
+    return { id: fork, cwd, title, settings };
+  }
+
   modelInfo(model: string): ModelInfo | undefined {
     return this.modelList?.find((entry) => entry.value === model) ?? this.modelList?.find((entry) => entry.resolvedModel === model);
   }
 
-  async commands(): Promise<AgentCommand[]> {
+  async commands(thread?: { id: string; cwd: string }, name?: string): Promise<AgentCommand[]> {
+    const mcp = mcpCommand(() => this.mcpStatus(thread));
+    // The bridge's own: not waiting for the check to run it.
+    if (name === mcp.name) return [mcp];
     await this.catalogReady();
-    const seen = new Set<string>();
-    return (this.commandList ?? []).flatMap((command) => {
+    const seen = new Set<string>([mcp.name]);
+    return [mcp, ...(this.commandList ?? []).flatMap((command) => {
       const name = command.name.toLowerCase();
-      if (withheld.has(name) || name.startsWith("_") || seen.has(name)) return [];
+      if (withheld.has(name) || this.terminalOnly.has(name) || name.startsWith("_") || seen.has(name)) return [];
       seen.add(name);
       return [{ name, description: command.description, usage: command.argumentHint ?? "", skill: command.builtin !== true }];
-    });
+    })];
+  }
+
+  /**
+   * How the thread's MCP servers are (`/mcp`), as its running Claude Code says. With none
+   * running, a Claude Code started in the thread's folder only to say, given a while for
+   * its servers to connect: what the thread's next message would find. A thread whose
+   * folder is gone has none to show (`mcpFolderGone`); the startup check's folder is for
+   * a call with no thread.
+   */
+  private async mcpStatus(thread: { id: string; cwd: string } | undefined): Promise<string> {
+    const running = thread ? [...this.sessions].find((session) => session.id === thread.id)?.liveQuery : undefined;
+    if (running) return claudeMcpText(await mcpServers(running, 0));
+    if (thread && !isDirectory(thread.cwd)) throw mcpFolderGone("Claude Code", thread.cwd);
+    const { query, input, ready } = this.checkQuery(thread ? { cwd: thread.cwd } : {});
+    try {
+      await ready;
+      return claudeMcpText(await mcpServers(query, mcpConnectMs));
+    } finally {
+      input.end();
+      query.close();
+    }
+  }
+
+  terminalCommands(names: unknown): void {
+    // Left out when none needs one, and by a Claude Code from before the list.
+    this.terminalOnly = new Set(Array.isArray(names) ? names.filter((name): name is string => typeof name === "string").map((name) => name.toLowerCase()) : []);
   }
 
   learn(query: QueryLike, reported: { permissionMode: string | null; effort: string | null }, overridden: boolean): void {
@@ -687,7 +850,8 @@ export class ClaudeProvider implements Provider, ClaudeHost {
   async resumeSession(options: SessionOptions, sink: SessionSink): Promise<ProviderSession> {
     // History is read from Claude's own files; no process starts until a message is sent.
     const messages = await this.files.messages(options.id, options.cwd);
-    return this.track(new ClaudeSession(options, sink, this, historyFromSession(messages, options.cwd), await this.withJournals(pastSubagents(messages)), turnCutOff(messages)));
+    const cutOff = turnCutOff(messages) && !this.checkpoints.completedAtEnd(options.id, messages);
+    return this.track(new ClaudeSession(options, sink, this, historyFromSession(messages, options.cwd, this.checkpoints.forSession(options.id, messages)), await this.withJournals(pastSubagents(messages)), cutOff));
   }
 
   /**

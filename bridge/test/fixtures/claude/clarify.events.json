@@ -1,7 +1,7 @@
 [
  {
   "type": "tool.start",
-  "id": "toolu_01TmSDfyH97nwLmkAZZFetua",
+  "id": "toolu_01AMQaDqATQ5i5xKWD99jSre",
   "name": "clarify",
   "args": {
    "questions": [
@@ -17,7 +17,7 @@
  },
  {
   "type": "tool.end",
-  "id": "toolu_01TmSDfyH97nwLmkAZZFetua",
+  "id": "toolu_01AMQaDqATQ5i5xKWD99jSre",
   "name": "clarify",
   "args": {
    "questions": [
@@ -41,24 +41,19 @@
   "durationSeconds": 0
  },
  {
-  "type": "reasoning",
-  "text": "I have the tool result now, so I'll just give the one-sentence answer as instructed, without using any other tools.\n\n",
-  "pieces": 10
- },
- {
   "type": "text",
-  "text": "You prefer Swift.",
-  "pieces": 2
+  "text": "Swift.",
+  "pieces": 1
  },
  {
   "type": "turn.end",
   "status": "complete",
   "usage": {
-   "used": 27454,
+   "used": 28408,
    "max": 1000000
   },
   "spent": {
-   "tokens": 52975
+   "tokens": 53419
   }
  }
 ]

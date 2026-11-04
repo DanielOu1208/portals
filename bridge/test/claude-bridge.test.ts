@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { machineWord } from "../src/platform.ts";
 import type { ClaudeProvider } from "../src/providers/claude/provider.ts";
-import { fakeClaude, FakeFiles, FakeQuery, inFolder, maxPlanUsage, planUsage, play, playEntries, processes, recordedHistory, tinyCheckJournal } from "./claude-fixtures.ts";
+import { fakeClaude, FakeFiles, FakeQuery, fixture, inFolder, maxPlanUsage, mcpStatus, planUsage, play, playEntries, processes, recordedHistory, tinyCheckJournal } from "./claude-fixtures.ts";
 import { pastSubagents } from "../src/providers/claude/tasks.ts";
 import { isEvent, RpcFailure, startTestBridge, streamedText, TestClient, unspent, type Frame, type TestBridge } from "./helpers.ts";
 
@@ -116,7 +116,16 @@ test("with a Claude Code that cannot say its window, the meter waits for the tur
 test("profiles.list and model.options describe Claude Code from what a running Claude Code says", async () => {
   const profiles = (await client.call("profiles.list")).profiles;
   assert.deepEqual(profiles, [
-    { name: "claude", kind: "claude", display_name: "Claude Code", description: `Claude Code on this ${machineWord()}, with your own settings and sign-in.`, model: "default", provider: "anthropic", is_default: true, adopt_modes: ["continue", "fork", "read"] },
+    { name: "claude", kind: "claude", display_name: "Claude Code", description: `Claude Code on this ${machineWord()}, with your own settings and sign-in.`, model: "default", provider: "anthropic", is_default: true, adopt_modes: ["continue", "fork", "read"], mode_options: provider.modeOptions },
+  ]);
+  // The app's five in its own words, and Claude Code's auto mode as Medium.
+  assert.deepEqual(profiles[0].mode_options.map((mode: Frame) => [mode.id, mode.label]), [
+    ["full", "Full access"],
+    ["medium", "Auto"],
+    ["edits", "Accept edits"],
+    ["ask", "Ask first"],
+    ["plan", "Plan"],
+    ["default", "Your settings"],
   ]);
   assert.deepEqual(await client.call("model.options", { profile: "claude" }), {
     // `opus` runs what `default` does, so only the default is listed.
@@ -137,6 +146,7 @@ test("profiles.list and model.options describe Claude Code from what a running C
     model_default_levels: { default: "xhigh", opus: "xhigh", sonnet: "medium", "claude-opus-4-6": "high" },
     // Its threads take a mode; Dana's settings come to full access (bypassPermissions).
     modes: { default: "full" },
+    mode_options: provider.modeOptions,
   });
   assert.deepEqual(await client.call("config.get", { key: "reasoning", profile: "claude" }), { value: "xhigh" });
   // The startup check ran without a session and asked nothing.
@@ -194,9 +204,9 @@ test("a chat with tools: the first message starts Claude with the thread id; row
   const edit = events.find((event) => event.type === "tool.complete" && event.payload.name === "patch").payload;
   assert.equal(edit.result.diff, "--- a/hello.txt\n+++ b/hello.txt\n@@ -1 +1 @@\n-hi\n+hello\n");
   // What it spent (feature turn_usage): the bridge's time for it, and Claude's result's tokens.
-  assert.equal(done.payload.turn_usage.tokens, 108_407);
+  assert.equal(done.payload.turn_usage.tokens, 82_277);
   const { turn_diff: changed, ...ended } = unspent(done.payload);
-  assert.deepEqual(ended, { status: "complete", text: 'I changed "hi" to "hello" in hello.txt, and `cat` confirms the file now reads "hello".', usage: { context_used: 27725, context_max: 1_000_000 } });
+  assert.deepEqual(ended, { status: "complete", text: 'I changed "hi" to "hello" in hello.txt, and `cat` confirms the file now reads "hello".', usage: { context_used: 28752, context_max: 1_000_000 } });
   // What the turn changed, from its edit's own diff (feature turn_diff).
   assert.deepEqual(changed, {
     files: [{ path: "hello.txt", status: "modified", added: 1, removed: 1, diff: "--- a/hello.txt\n+++ b/hello.txt\n@@ -1 +1 @@\n-hi\n+hello\n" }],
@@ -214,7 +224,7 @@ test("a chat with tools: the first message starts Claude with the thread id; row
   assert.equal(resumed.info.title, "hello.txt edit and verify");
   assert.deepEqual(
     resumed.messages.map((message: Frame) => message.role),
-    ["user", "assistant", "tool", "tool", "tool", "assistant"],
+    ["user", "tool", "assistant", "tool", "tool", "assistant"],
   );
 });
 
@@ -293,13 +303,13 @@ test("AskUserQuestion is a clarify card, and the answer goes back to Claude keye
       choices: ["Python", "Swift"],
       multi_select: false,
       header: "Language",
-      descriptions: { Python: "Prefer Python for this work", Swift: "Prefer Swift for this work" },
+      descriptions: { Python: "Python as your preferred language", Swift: "Swift as your preferred language" },
     },
   ]);
   client.answer(request.id, { answers: { q0: "Swift" } });
   const done = await completed(session, start);
   await playing;
-  assert.equal(done.payload.text, "You prefer Swift.");
+  assert.equal(done.payload.text, "Swift.");
   assert.deepEqual((answered[0] as { updatedInput: { answers: unknown } }).updatedInput.answers, { "Which language do you prefer?": "Swift" });
 });
 
@@ -308,7 +318,7 @@ test("/mode plan: the plan is a plan card; Start carries it out in the mode the 
   let start = client.frames.length;
   assert.equal((await client.call("slash.exec", { session_id: session, command: "mode plan" })).output, "This thread now plans first, and asks before carrying the plan out.");
   // The thread's followers hear the change (feature modes).
-  assert.deepEqual((await client.from(start, (frame) => isEvent(frame, "session.mode", session))).params.payload, { mode: "plan", mode_default: "full" });
+  assert.deepEqual((await client.from(start, (frame) => isEvent(frame, "session.mode", session))).params.payload, { mode: "plan", mode_default: "full", mode_options: provider.modeOptions });
   start = client.frames.length;
   const query = await send(session, "Plan a file.");
   assert.equal(query.options.permissionMode, "plan");
@@ -341,8 +351,8 @@ test("session.set_mode changes a thread's mode as /mode does, and info says it",
   assert.equal(before.mode, "default");
   assert.equal(before.mode_default, "full");
   const start = client.frames.length;
-  assert.deepEqual(await client.call("session.set_mode", { session_id: session, mode: "edits" }), { mode: "edits", mode_default: "full" });
-  assert.deepEqual((await client.from(start, (frame) => isEvent(frame, "session.mode", session))).params.payload, { mode: "edits", mode_default: "full" });
+  assert.deepEqual(await client.call("session.set_mode", { session_id: session, mode: "edits" }), { mode: "edits", mode_default: "full", mode_options: provider.modeOptions });
+  assert.deepEqual((await client.from(start, (frame) => isEvent(frame, "session.mode", session))).params.payload, { mode: "edits", mode_default: "full", mode_options: provider.modeOptions });
   assert.equal((await client.call("session.resume", { session_id: session })).info.mode, "edits");
   await assert.rejects(client.call("session.set_mode", { session_id: session, mode: "yolo" }), (error: RpcFailure) => error.code === -32602);
 });
@@ -351,9 +361,9 @@ test("/mode with no argument, a wrong one, and default (Dana's own settings)", a
   const session = await createThread();
   assert.equal(
     (await client.call("slash.exec", { session_id: session, command: "mode" })).output,
-    "Mode: default. This thread follows your Claude Code settings: it edits files and runs commands without asking.\nChange it with /mode ask, edits, plan, full or default.",
+    "Mode: default. This thread follows your Claude Code settings: it edits files and runs commands without asking.\nChange it with /mode full, medium, edits, ask, plan or default.",
   );
-  await assert.rejects(client.call("slash.exec", { session_id: session, command: "mode careful" }), (error: RpcFailure) => error.code === -32602 && error.message === "Use /mode ask, edits, plan, full or default.");
+  await assert.rejects(client.call("slash.exec", { session_id: session, command: "mode careful" }), (error: RpcFailure) => error.code === -32602 && error.message === "Use /mode full, medium, edits, ask, plan or default.");
   await client.call("slash.exec", { session_id: session, command: "mode full" });
 
   // On a warm thread the mode changes at once; default goes back to what Dana's settings said.
@@ -373,6 +383,70 @@ test("/mode with no argument, a wrong one, and default (Dana's own settings)", a
   );
 });
 
+test("/mode medium is Claude Code's auto mode, at start and on a warm thread; Claude reporting auto is Medium", async () => {
+  const session = await createThread();
+  assert.equal(
+    (await client.call("slash.exec", { session_id: session, command: "mode medium" })).output,
+    "This thread now uses Claude Code's auto mode: it runs safe actions without asking, blocks risky ones, and asks when unsure.",
+  );
+  const query = await send(session, "Hello.");
+  assert.equal(query.options.permissionMode, "auto");
+  let start = client.frames.length;
+  void play(query, "plain");
+  await completed(session, start);
+  await client.call("session.set_mode", { session_id: session, mode: "ask" });
+  await client.call("session.set_mode", { session_id: session, mode: "medium" });
+  assert.deepEqual(
+    query.calls.filter((call) => call[0] === "setPermissionMode"),
+    [
+      ["setPermissionMode", "default"],
+      ["setPermissionMode", "auto"],
+    ],
+  );
+
+  // A thread on Dana's settings that Claude moves into auto mode by itself shows Medium.
+  const other = await createThread();
+  const next = await send(other, "Hello.");
+  start = client.frames.length;
+  next.emit({ type: "system", subtype: "init", model: "claude-haiku-5-5", permissionMode: "bypassPermissions", session_id: other });
+  next.emit({ type: "system", subtype: "status", status: null, permissionMode: "auto", session_id: other });
+  assert.equal((await client.from(start, (frame) => isEvent(frame, "session.mode", other))).params.payload.mode, "medium");
+  next.emit({ type: "result", subtype: "success", is_error: false, user_message_uuids: [next.received[0].uuid], usage: {}, session_id: other });
+  await completed(other, start);
+});
+
+test("commands: what Claude Code says needs a terminal leaves the menu; without its word, the bridge's own list holds", async (t) => {
+  const own = fakeClaude();
+  const other = await startTestBridge({ providers: new Map([["claude", own.provider]]), config: { generalFolder: cwd } });
+  const phone = await TestClient.open(other);
+  t.after(async () => {
+    await phone.close();
+    await other.dispose();
+  });
+  const offered = async () => ((await phone.call("commands.catalog", { profile: "claude" })).pairs as string[][]).map(([key]) => key);
+  // Before any session has said: the list alone keeps /doctor and /send-to-project out.
+  assert.deepEqual(await offered(), ["/status", "/mode", "/usage", "/mcp", "/compact", "/context", "/grill-me"]);
+
+  const session = (await phone.call("session.create", { profile: "claude", cwd })).session_id as string;
+  const start = phone.frames.length;
+  await phone.call("prompt.submit", { session_id: session, text: "Hello." });
+  const query = own.queries.find((entry) => entry.options.persistSession !== false)!;
+  await until(() => query.received.length === 1);
+  query.emit({ type: "system", subtype: "init", model: "claude-haiku-5-5", permissionMode: "bypassPermissions", terminal_slash_commands: ["doctor", "Context"], session_id: session });
+  query.emit({ type: "result", subtype: "success", is_error: false, user_message_uuids: [query.received[0].uuid], usage: {}, session_id: session });
+  await phone.from(start, (frame) => isEvent(frame, "message.complete", session));
+  assert.deepEqual(await offered(), ["/status", "/mode", "/usage", "/mcp", "/compact", "/grill-me"]);
+
+  // A Claude Code that lists none (or predates the list) leaves only the bridge's own out.
+  const again = phone.frames.length;
+  await phone.call("prompt.submit", { session_id: session, text: "And again." });
+  await until(() => query.received.length === 2);
+  query.emit({ type: "system", subtype: "init", model: "claude-haiku-5-5", permissionMode: "bypassPermissions", session_id: session });
+  query.emit({ type: "result", subtype: "success", is_error: false, user_message_uuids: [query.received[1].uuid], usage: {}, session_id: session });
+  await phone.from(again, (frame) => isEvent(frame, "message.complete", session));
+  assert.deepEqual(await offered(), ["/status", "/mode", "/usage", "/mcp", "/compact", "/context", "/grill-me"]);
+});
+
 test("commands: Claude's own and the user's skills are offered and sent as messages; some are withheld", async () => {
   const catalog = await client.call("commands.catalog", { profile: "claude" });
   assert.deepEqual(catalog.categories, [
@@ -380,13 +454,14 @@ test("commands: Claude's own and the user's skills are offered and sent as messa
       name: "Bridge",
       pairs: [
         ["/status", "Show this thread's agent, folder, branch and model"],
-        ["/mode", "Show or change how much this thread asks before acting (usage: /mode [ask|edits|plan|full|default])"],
+        ["/mode", "Show or change how much this thread asks before acting (usage: /mode [full|medium|edits|ask|plan|default])"],
         ["/usage", "Show how much of your plan's usage limits is used, and when each resets"],
       ],
     },
     {
       name: "Claude Code",
       pairs: [
+        ["/mcp", "Show your MCP servers and whether each is connected"],
         ["/compact", "Free up context by summarizing the conversation so far (usage: /compact <optional custom summarization instructions>)"],
         ["/context", "Show current context usage"],
       ],
@@ -542,6 +617,84 @@ test("/usage asks the thread's running Claude Code, else one started only to ask
   }
 });
 
+test("/mcp asks the thread's running Claude Code, else one started in the thread's folder that is given time to connect its servers", async (t) => {
+  // The thread's folder, not the one the startup check runs in.
+  const folder = realpathSync(mkdtempSync(join(tmpdir(), "portals-claude-mcp-")));
+  const { provider: own, queries } = fakeClaude();
+  const other = await startTestBridge({ providers: new Map([["claude", own]]), config: { generalFolder: folder } });
+  const client = await TestClient.open(other);
+  t.after(async () => {
+    await client.close();
+    await other.dispose();
+    rmSync(folder, { recursive: true, force: true });
+  });
+  const session = (await client.call("session.create", { profile: "claude", cwd: folder })).session_id as string;
+  const checks = () => queries.filter((query) => query.options.persistSession === false && query.calls.some((call) => call[0] === "mcpServerStatus"));
+  const mcp = async () => (await client.call("slash.exec", { session_id: session, command: "mcp", profile: "claude" })).output as string;
+  try {
+    // No thread runs: one started in the thread's folder, asked again while a server connects, and closed.
+    mcpStatus.answers = [
+      [{ name: "docs", status: "pending" }, { name: "github", status: "needs-auth" }],
+      [{ name: "docs", status: "connected", tools: [{ name: "search" }] }, { name: "github", status: "needs-auth" }, { name: "db", status: "failed", error: "spawn db-server ENOENT" }, { name: "old", status: "disabled" }],
+    ];
+    assert.equal(await mcp(), [
+      "Claude Code MCP servers:",
+      "db: failed (spawn db-server ENOENT)",
+      "docs: connected, 1 tool",
+      "github: needs sign-in",
+      "old: off",
+      "To sign in to one, run /mcp in Claude Code on the host.",
+    ].join("\n"));
+    assert.equal(checks().length, 1);
+    assert.equal(checks()[0].options.cwd, folder);
+    assert.deepEqual(checks()[0].calls.filter((call) => call[0] === "mcpServerStatus" || call[0] === "close"), [["mcpServerStatus"], ["mcpServerStatus"], ["close"]]);
+    assert.equal(checks()[0].received.length, 0);
+
+    // The thread's own running Claude Code is asked, once, and nothing more is started.
+    mcpStatus.answers = [[]];
+    const start = client.frames.length;
+    assert.equal((await client.call("prompt.submit", { session_id: session, text: "Count to 60.", profile: "claude" })).status, "streaming");
+    await until(() => queries.some((query) => query.options.persistSession !== false && query.received.length > 0));
+    const query = queries.find((query) => query.options.persistSession !== false)!;
+    const playing = play(query, "interrupt");
+    await client.from(start, (frame) => isEvent(frame, "message.delta", session));
+    assert.equal(await mcp(), "Claude Code MCP servers:\nNone set up.");
+    assert.equal(checks().length, 1);
+    assert.deepEqual(query.calls.filter((call) => call[0] === "mcpServerStatus"), [["mcpServerStatus"]]);
+    await client.call("session.interrupt", { session_id: session });
+    await client.from(start, (frame) => isEvent(frame, "message.complete", session));
+    await playing;
+  } finally {
+    mcpStatus.answers = [[]];
+  }
+});
+
+test("/mcp in a thread whose folder is gone says so, and starts no Claude Code elsewhere to answer", async (t) => {
+  const folder = realpathSync(mkdtempSync(join(tmpdir(), "portals-claude-mcp-gone-")));
+  const { provider: own, queries } = fakeClaude();
+  const other = await startTestBridge({ providers: new Map([["claude", own]]), config: { generalFolder: folder } });
+  const client = await TestClient.open(other);
+  t.after(async () => {
+    await client.close();
+    await other.dispose();
+    rmSync(folder, { recursive: true, force: true });
+  });
+  const session = (await client.call("session.create", { profile: "claude", cwd: folder })).session_id as string;
+  rmSync(folder, { recursive: true, force: true });
+  // A server only the startup check's folder has: never shown for this thread.
+  mcpStatus.answers = [[{ name: "elsewhere", status: "connected", tools: [] }]];
+  try {
+    const started = queries.length;
+    await assert.rejects(
+      client.call("slash.exec", { session_id: session, command: "mcp", profile: "claude" }),
+      (error: RpcFailure) => error.message === `The thread's folder, ${folder}, is no longer there, so Claude Code cannot show its MCP servers.`,
+    );
+    assert.equal(queries.slice(started).filter((query) => query.calls.some((call) => call[0] === "mcpServerStatus")).length, 0);
+  } finally {
+    mcpStatus.answers = [[]];
+  }
+});
+
 test("interrupting stops Claude, and the turn ends interrupted", async () => {
   const session = await createThread();
   const start = client.frames.length;
@@ -636,6 +789,131 @@ test("a message sent while Claude works is steered into the running turn, which 
   );
 });
 
+/** What the steer recording has Claude Code say, by kind and subtype ("result", "system/init"), in order. */
+function steerSays(): string[] {
+  return fixture("steer").map((entry) => {
+    const message = entry.message as { type?: string; subtype?: string } | undefined;
+    return entry.kind === "message" ? [message?.type, message?.subtype].filter(Boolean).join("/") : entry.kind;
+  });
+}
+
+/**
+ * Plays the steer recording up to its entry `stop`, Dana steering "Then say banana." in,
+ * with the id her device gave it, once Claude has begun its reply.
+ */
+async function steerUntil(session: string, start: number, stop: number): Promise<{ query: FakeQuery; messageID: string }> {
+  const query = await send(session, "Count to 25.");
+  const playing = playEntries(query, fixture("steer").slice(0, stop));
+  await client.from(start, (frame) => isEvent(frame, "message.delta", session));
+  const messageID = "6B1D2C9E-7A41-4E57-9C0B-3F8A2D5E1C44";
+  assert.deepEqual(await client.call("prompt.submit", { session_id: session, text: "Then say banana.", message_id: messageID }), { status: "steered" });
+  await playing;
+  return { query, messageID };
+}
+
+for (const order of ["before", "after"] as const) {
+  test(`Stop with a message steered in that Claude has not read: Claude Code takes it back, it never runs, and the devices are told to give it back (feature steer_withdrawn), its receipt ${order} the turn's end`, async () => {
+    const session = await createThread();
+    const start = client.frames.length;
+    // Stopped while Claude still answers the first message: the second waits in its queue.
+    const { query, messageID } = await steerUntil(session, start, steerSays().indexOf("assistant"));
+    const [stopped] = fixture("interrupt").filter((entry) => entry.kind === "message" && (entry.message as { type?: string }).type === "result");
+    const result = { ...(stopped.message as object), user_message_uuids: [query.received[0].uuid] };
+    query.interrupt = async (options) => {
+      query.calls.push(["interrupt", options]);
+      // Claude Code writes its receipt before the stopped turn's result; the SDK may hand them on in either order.
+      if (order === "before") setImmediate(() => query.emit(result));
+      else {
+        query.emit(result);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      return { still_queued: [], cancelled: [query.received[1].uuid] };
+    };
+    assert.deepEqual(await client.call("session.interrupt", { session_id: session }), { status: "interrupted" });
+    const done = await completed(session, start);
+    assert.equal(done.payload.status, "interrupted");
+    assert.deepEqual(query.calls.filter((call) => call[0] === "interrupt"), [["interrupt", { cancelQueued: true }]]);
+    await client.from(start, (frame) => isEvent(frame, "status.update", session) && frame.params.payload.withdrawn !== undefined);
+    const notice = turnEvents(session, start).find((event) => event.type === "status.update");
+    assert.deepEqual(notice?.payload, {
+      kind: "warn", text: "Stop took back a message before the agent read it, so it was not sent: “Then say banana.”",
+      withdrawn: { text: "Then say banana.", message_id: messageID },
+    });
+    // The conversation is as if it had not been sent, and no turn runs it.
+    const resumed = await client.call("session.resume", { session_id: session });
+    assert.deepEqual(resumed.messages.filter((message: Frame) => message.role === "user").map((message: Frame) => message.text), ["Count to 25."]);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(turnEvents(session, start).filter((event) => event.type === "message.start").length, 1);
+  });
+}
+
+test("Stop between Claude's turns, before the one for a message steered in: it is taken back and the turn ends at once, its process kept", async () => {
+  const session = await createThread();
+  const start = client.frames.length;
+  // Claude has answered the first message; the second's turn is still to begin.
+  const { query } = await steerUntil(session, start, steerSays().lastIndexOf("system/init"));
+  query.interruptReceipt = { still_queued: [], cancelled: [query.received[1].uuid] };
+  assert.deepEqual(await client.call("session.interrupt", { session_id: session }), { status: "interrupted" });
+  const done = await completed(session, start);
+  assert.equal(done.payload.status, "interrupted");
+  assert.equal(query.isRunning, true);
+  assert.deepEqual(query.calls.filter((call) => call[0] === "close"), []);
+  assert.equal(turnEvents(session, start).filter((event) => event.type === "status.update" && event.payload.withdrawn).length, 1);
+});
+
+test("Stop with a message steered in that still waits on a setting change: it is taken back, the devices are told, and it is never sent", async () => {
+  const session = await createThread();
+  const start = client.frames.length;
+  const query = await send(session, "Count to 25.");
+  // Claude has begun its reply; the recording's next entry is the steered message reaching it.
+  const says = steerSays();
+  await playEntries(query, fixture("steer").slice(0, says.indexOf("send", says.indexOf("send") + 1)));
+  await client.from(start, (frame) => isEvent(frame, "message.delta", session));
+  // A mode change Claude Code has not answered yet holds every message sent after it.
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  query.setPermissionMode = async (mode) => {
+    query.calls.push(["setPermissionMode", mode]);
+    await held;
+  };
+  const moved = client.call("session.set_mode", { session_id: session, mode: "edits" });
+  await until(() => query.calls.some((call) => call[0] === "setPermissionMode"));
+  const messageID = "0E4C7B21-5D3A-4F86-A9B2-71C6E8D04F13";
+  assert.deepEqual(await client.call("prompt.submit", { session_id: session, text: "Then say banana.", message_id: messageID }), { status: "steered" });
+  const [stopped] = fixture("interrupt").filter((entry) => entry.kind === "message" && (entry.message as { type?: string }).type === "result");
+  query.interrupt = async (options) => {
+    query.calls.push(options ? ["interrupt", options] : ["interrupt"]);
+    setImmediate(() => query.emit({ ...(stopped.message as object), user_message_uuids: [query.received[0].uuid] }));
+    return { still_queued: [], cancelled: [] };
+  };
+  assert.deepEqual(await client.call("session.interrupt", { session_id: session }), { status: "interrupted" });
+  assert.equal((await completed(session, start)).payload.status, "interrupted");
+  const notice = (await client.from(start, (frame) => isEvent(frame, "status.update", session) && frame.params.payload.withdrawn !== undefined)).params;
+  assert.deepEqual(notice.payload.withdrawn, { text: "Then say banana.", message_id: messageID });
+  release();
+  await moved;
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  // Claude Code never had it: nothing for it to take back, and nothing written after the Stop.
+  assert.equal(query.received.length, 1);
+  assert.deepEqual(query.calls.filter((call) => call[0] === "interrupt"), [["interrupt"]]);
+  assert.equal(turnEvents(session, start).filter((event) => event.type === "message.start").length, 1);
+  const resumed = await client.call("session.resume", { session_id: session });
+  assert.deepEqual(resumed.messages.filter((message: Frame) => message.role === "user").map((message: Frame) => message.text), ["Count to 25."]);
+});
+
+test("Stop with nothing steered in asks Claude Code to take nothing back", async () => {
+  const session = await createThread();
+  const start = client.frames.length;
+  const query = await send(session, "Count to 60.");
+  const playing = play(query, "interrupt");
+  await client.from(start, (frame) => isEvent(frame, "message.delta", session));
+  await client.call("session.interrupt", { session_id: session });
+  await completed(session, start);
+  await playing;
+  assert.deepEqual(query.calls.filter((call) => call[0] === "interrupt"), [["interrupt"]]);
+  assert.equal(turnEvents(session, start).some((event) => event.type === "status.update"), false);
+});
+
 test("/compact: with nothing to compact its turn fails with Claude Code's reason; later it marks where it compacted, which resume and replay keep", async () => {
   const session = await createThread();
   let start = client.frames.length;
@@ -659,9 +937,9 @@ test("/compact: with nothing to compact its turn fails with Claude Code's reason
     ["message.start", "thinking.delta", "thinking.delta", "session.compacted", "session.usage", "message.complete"],
   );
   const compacted = events.find((event) => event.type === "session.compacted");
-  assert.deepEqual(compacted.payload, { trigger: "manual", tokens_before: 25473 });
+  assert.deepEqual(compacted.payload, { trigger: "manual", tokens_before: 24966 });
   // Nothing was said: the summary and Claude Code's "Compacted" are not the reply.
-  assert.deepEqual(unspent(done.payload), { status: "complete", text: "", usage: { context_used: 2807, context_max: 1_000_000 } });
+  assert.deepEqual(unspent(done.payload), { status: "complete", text: "", usage: { context_used: 8584, context_max: 1_000_000 } });
 
   const resumed = await client.call("session.resume", { session_id: session });
   assert.deepEqual(
@@ -672,7 +950,7 @@ test("/compact: with nothing to compact its turn fails with Claude Code's reason
       ["user", "Reply with the single word hello. Do not use any tools.", undefined],
       ["assistant", "hello", undefined],
       ["user", "/compact", undefined],
-      ["compaction", "manual", 25473],
+      ["compaction", "manual", 24966],
     ],
   );
   const replayed = await client.call("session.events.since", { session_id: session, last_seen: compacted.seq - 1 });
@@ -805,6 +1083,36 @@ test("a crash ends the running turn with an error the app shows; the next messag
   assert.equal((await completed(session, start)).payload.status, "complete");
 });
 
+test("a thread whose folder is gone: its turn fails at once and says so, and no Claude Code is started", async (t) => {
+  const folder = realpathSync(mkdtempSync(join(tmpdir(), "portals-claude-gone-")));
+  const own = fakeClaude();
+  const other = await startTestBridge({ providers: new Map([["claude", own.provider]]), config: { generalFolder: folder } });
+  const phone = await TestClient.open(other);
+  t.after(async () => {
+    await phone.close();
+    await other.dispose();
+  });
+  const session = (await phone.call("session.create", { profile: "claude", cwd: folder })).session_id as string;
+  rmSync(folder, { recursive: true });
+  const start = phone.frames.length;
+  assert.equal((await phone.call("prompt.submit", { session_id: session, text: "Hello." })).status, "streaming");
+  const done = (await phone.from(start, (frame) => isEvent(frame, "message.complete", session))).params;
+  assert.equal(done.payload.status, "error");
+  assert.equal(done.payload.text, `The thread's folder, ${folder}, is no longer there.`);
+  assert.deepEqual(done.payload.error_surface, { retryable: false });
+  assert.deepEqual(sessionQueries(own.queries), []);
+});
+
+test("a program Claude Code's SDK cannot find at claude.path: the turn says to check claude.path, not an option of the SDK's", async () => {
+  const session = await createThread();
+  const start = client.frames.length;
+  const query = await send(session, "Hello.");
+  query.crash("Claude Code executable not found at /nonexistent/claude. Is options.pathToClaudeCodeExecutable set?");
+  const done = await completed(session, start);
+  assert.equal(done.payload.status, "error");
+  assert.equal(done.payload.text, "Claude Code could not be started at /nonexistent/claude. Check claude.path in config.json.");
+});
+
 test("an idle thread goes cold after its idle time, and the next message resumes it", async () => {
   const session = await createThread();
   let start = client.frames.length;
@@ -875,12 +1183,12 @@ test("background work keeps the process up past the idle time; the turn Claude b
   start = client.frames.length;
   await playEntries(query, entries.slice(ended), { from: 1, uuids });
   const done = await completed(session, start);
-  const line = 'Background command "Sleep for 3 seconds in background" completed (exit code 0)';
+  const line = 'Background command "Sleep 3 seconds in background" completed (exit code 0)';
   // The command's row on the subagents line ended with it (feature background_commands).
   const row = turnEvents(session, start).find((event) => event.type === "subagent.complete");
   assert.equal(row?.payload.kind, "command");
   assert.equal(row?.payload.status, "completed");
-  assert.equal(row?.payload.goal, "Sleep for 3 seconds in background");
+  assert.equal(row?.payload.goal, "Sleep 3 seconds in background");
   assert.deepEqual(
     turnEvents(session, start)
       .filter((event) => !event.type.startsWith("subagent."))
@@ -1208,7 +1516,7 @@ test("a thread whose process stopped while work ran in the background: the next 
   // Claude first says what did not finish, with an empty result of no turn.
   await playEntries(again, second);
   const done = await completed(session, start);
-  assert.match(done.payload.text, /^No, it isn't running anymore/);
+  assert.match(done.payload.text, /^Probably not: the notification says the task stopped/);
   assert.equal(turnEvents(session, start).filter((event) => event.type === "message.complete").length, 1);
 });
 
@@ -1247,6 +1555,38 @@ test("at most maxWarm processes: the least recently used idle one goes cold firs
   assert.equal(small.provider.pool.size, 1);
 });
 
+test("Claude Code saying, as its process exits, that a full disk kept it from saving is told in the thread, also after the process went cold", async (t) => {
+  const small = fakeClaude({ maxWarm: 1 });
+  const other = await startTestBridge({ providers: new Map([["claude", small.provider]]), config: { generalFolder: cwd } });
+  const phone = await TestClient.open(other);
+  t.after(async () => {
+    await phone.close();
+    await other.dispose();
+  });
+  const create = async () => (await phone.call("session.create", { profile: "claude", cwd })).session_id;
+  const first = await create();
+  await phone.call("prompt.submit", { session_id: first, text: "one" });
+  await until(() => sessionQueries(small.queries).length === 1);
+  const [one] = sessionQueries(small.queries);
+  await until(() => one.received.length === 1);
+  // Its stdin closed, Claude Code says what it lost, then exits.
+  const exit = one.end.bind(one);
+  one.end = () => {
+    one.emit({ type: "system", subtype: "session_writes_lost", error_code: "ENOSPC", lost: ["transcript"], transcript_session_ids: [first], uuid: "u-lost", session_id: first });
+    exit();
+  };
+  void play(one, "plain");
+  await phone.find((frame) => isEvent(frame, "message.complete", first));
+  const start = phone.frames.length;
+
+  // Another thread warming up pushes the first out: the bridge has let its process go as it says it.
+  const second = await create();
+  await phone.call("prompt.submit", { session_id: second, text: "two" });
+  const notice = await phone.from(start, (frame) => isEvent(frame, "status.update", first));
+  assert.deepEqual(notice.params.payload, { kind: "warn", text: "The disk is full, so Claude Code could not save all of this conversation. Its history may come back short." });
+  assert.equal(one.isRunning, false);
+});
+
 test("after a restart a cold thread comes back from Claude's stored history, with no process started", async () => {
   const shared = new FakeFiles();
   const firstRun = fakeClaude({ files: shared });
@@ -1268,7 +1608,7 @@ test("after a restart a cold thread comes back from Claude's stored history, wit
     assert.equal(resumed.info.title, "Edit hello");
     assert.deepEqual(
       resumed.messages.map((message: Frame) => (message.role === "tool" ? message.name : message.role)),
-      ["user", "assistant", "read_file", "patch", "terminal", "assistant"],
+      ["user", "read_file", "assistant", "patch", "terminal", "assistant"],
     );
     assert.equal(JSON.parse(resumed.messages[3].content).diff, "--- a/hello.txt\n+++ b/hello.txt\n-hi\n+hello\n");
     assert.equal(sessionQueries(secondRun.queries).length, 0);
@@ -1533,4 +1873,46 @@ test("Claude Code's API retry heartbeat after a turn's end (a background agent w
   assert.deepEqual(shown.payload, { text: "Claude's API did not answer; trying again (attempt 1 of 10)…" });
   await play(query, "plain", { from: 1 });
   await completed(session, next);
+});
+
+test("Claude's sign-in through a whole bridge: the end claude auth status says is told from ten days before, and a turn the ended sign-in refuses names what to run on the host", async (t) => {
+  let now = Date.parse("2026-11-20T09:00:00Z");
+  const own = fakeClaude({ now: () => now, authStatus: async () => ({ loggedIn: true, authMethod: "claude.ai", loginExpiresAt: "2026-11-27T08:00:00.000Z" }) });
+  const folder = realpathSync(mkdtempSync(join(tmpdir(), "portals-claude-signin-test-")));
+  const ownBridge = await startTestBridge({ providers: new Map([["claude", own.provider]]), config: { generalFolder: folder } });
+  const phone = await TestClient.open(ownBridge);
+  t.after(async () => {
+    await phone.close();
+    await ownBridge.dispose();
+    rmSync(folder, { recursive: true, force: true });
+  });
+  await own.provider.checkSignIn();
+  const session = (await phone.call("session.create", { profile: "claude", source: "tui", cwd: folder })).session_id;
+  const turn = async (text: string, said: (query: FakeQuery) => void) => {
+    const start = phone.frames.length;
+    await phone.call("prompt.submit", { session_id: session, text, profile: "claude" });
+    await until(() => own.queries.some((query) => query.options.persistSession !== false && query.received.some((message) => message.message?.content === text)));
+    said(own.queries.at(-1)!);
+    await phone.from(start, (frame) => isEvent(frame, "message.complete", session));
+    return phone.frames.slice(start).filter((frame) => frame.method === "event" && frame.params.session_id === session).map((frame) => frame.params);
+  };
+
+  // A week before, with no result yet that said the date.
+  const first = await turn("Hello.", (query) => {
+    query.emit({ type: "system", subtype: "init", model: "claude-sign-in-test", permissionMode: "bypassPermissions", session_id: session });
+    query.emit({ type: "result", subtype: "success", is_error: false, user_message_uuids: [query.received.at(-1)!.uuid], usage: {}, session_id: session });
+  });
+  assert.deepEqual(first.filter((event) => event.type === "status.update").map((event) => event.payload), [
+    { kind: "warn", text: `Claude Code's sign-in on this ${machineWord()} ends on Fri, Nov 27. Run \`claude auth login\` in a terminal there before then to keep its threads working.` },
+  ]);
+
+  // Past its end, Claude Code refuses it with words that name its /login.
+  now = Date.parse("2026-11-28T09:00:00Z");
+  const refused = await turn("Hello again.", (query) => {
+    query.emit({ type: "assistant", error: "authentication_failed", is_api_error_message: true, message: { id: "e", model: "<synthetic>", role: "assistant", content: [{ type: "text", text: "Not logged in · Please run /login" }] }, user_message_uuids: [query.received.at(-1)!.uuid], session_id: session });
+    query.emit({ type: "result", subtype: "success", is_error: true, result: "Not logged in · Please run /login", user_message_uuids: [query.received.at(-1)!.uuid], usage: {}, session_id: session });
+  });
+  const end = refused.at(-1)!.payload;
+  assert.deepEqual([end.status, end.text, end.error_surface?.retryable], ["error", `Claude Code's sign-in on this ${machineWord()} has ended. Run \`claude auth login\` in a terminal there, then try again.`, true]);
+  assert.equal(JSON.stringify(refused).includes("/login"), false);
 });

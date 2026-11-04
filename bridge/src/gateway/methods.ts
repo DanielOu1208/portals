@@ -1,4 +1,5 @@
 import { basename, extname } from "node:path";
+import { FileUndoRefused } from "../sessions/fileUndo.ts";
 import type { Config } from "../config.ts";
 import { defaultDeskLimit, type DeskSessions } from "../desk.ts";
 import { checkLevel, chooseModel, defaultWaitMs, isThreadState, readOnlyText, threadStates, type Fleet, type Sender } from "../fleet/fleet.ts";
@@ -26,6 +27,7 @@ import { ErrorCode, invalidParams, RpcError } from "./errors.ts";
 import type { PollNow, PollNowPeer } from "./pollNow.ts";
 import { McpAuthSettling, type McpAuthAction } from "../providers/mcpAuth.ts";
 import { SettingRefused } from "../providers/types.ts";
+import { diskFields, type DiskReading } from "../disk.ts";
 
 // Every method the app calls (docs/gateway-protocol.md, section 5), with the params the
 // bridge reads. Params not listed are ignored, never rejected: Hermes rejects them, but
@@ -68,6 +70,8 @@ export interface GatewayContext {
   readonly search: ThreadSearch;
   /** Whether a later portals-host is out (feature update_notice); absent when the bridge does not ask (`updates.check` off). */
   readonly updates?: { readonly latest: string | undefined };
+  /** The free space on the bridge's disk, once it has been read (feature disk_space). */
+  readonly disk?: { readonly now: DiskReading | undefined };
   /** The apps a thread's folder opens in on this computer (feature open_on_host); this computer's own when absent. */
   readonly openers?: Openers;
 }
@@ -742,12 +746,12 @@ export const methods: Record<string, MethodSpec> = {
   },
 
   "sessions.activity": {
-    summary: "The bridge's threads that are running or waiting on an answer now, followed here or not (feature activity), the id and revision of its list of threads (feature thread_sync), of its agents' looks (feature agent_looks) and of the sidebar's order (feature sidebar_order), and `latest`, a later portals-host that is out, only when there is one (feature update_notice).",
+    summary: "The bridge's threads that are running or waiting on an answer now, followed here or not (feature activity), the id and revision of its list of threads (feature thread_sync), of its agents' looks (feature agent_looks) and of the sidebar's order (feature sidebar_order), `latest`, a later portals-host that is out, only when there is one (feature update_notice), and `disk`, the free space on the bridge's disk (feature disk_space).",
     params: {},
     handle(_params, { gateway }) {
-      // `thread_list`, `looks`, `order` and `latest` go to every client: an app without the feature never reads them.
+      // `thread_list`, `looks`, `order`, `latest` and `disk` go to every client: an app without the feature never reads them.
       const latest = gateway.updates?.latest;
-      return { sessions: gateway.sessions.activity(), thread_list: gateway.sessions.list(), looks: gateway.looks.revision(), order: gateway.order.revision(), ...(latest ? { latest } : {}) };
+      return { sessions: gateway.sessions.activity(), thread_list: gateway.sessions.list(), looks: gateway.looks.revision(), order: gateway.order.revision(), ...(latest ? { latest } : {}), ...diskFields(gateway.disk?.now) };
     },
   },
 
@@ -861,6 +865,59 @@ export const methods: Record<string, MethodSpec> = {
       } catch (error) {
         throw new RpcError(ErrorCode.internal, (error as Error).message);
       }
+    },
+  },
+
+  "session.files.preview": {
+    summary: "Previews native tracked files restored to before the latest completed turn, with a single-use confirmation lasting one minute (feature turn_file_undo). Conversation is retained.",
+    params: { session_id: "string", checkpoint_id: "string" },
+    required: ["session_id", "checkpoint_id"],
+    async handle(params, context) {
+      const source = writable(followed(context, params.session_id));
+      try {
+        return await context.gateway.sessions.previewFileUndo(source, context.caller, params.checkpoint_id as string);
+      } catch (error) {
+        if (error instanceof DeskRefused || error instanceof FileUndoRefused) throw invalidParams(error.message);
+        throw error;
+      }
+    },
+  },
+
+  "session.files.undo": {
+    summary: "Restores the reviewed native file checkpoint only with confirmed:true and its same-connection unexpired preview. Rechecks files and the native preview before changing anything; reports incomplete restoration honestly (feature turn_file_undo).",
+    params: { session_id: "string", preview_id: "string", confirmed: "boolean" },
+    required: ["session_id", "preview_id", "confirmed"],
+    async handle(params, context) {
+      const source = writable(followed(context, params.session_id));
+      if (params.confirmed !== true) throw invalidParams("Confirm the listed file changes before restoring them.");
+      try {
+        return await context.gateway.sessions.undoFiles(source, context.caller, params.preview_id as string, context.afterReply);
+      } catch (error) {
+        if (error instanceof FileUndoRefused && error.reason === "files_changed") throw new RpcError(ErrorCode.invalidParams, error.message, { reason: error.reason });
+        if (error instanceof DeskRefused || error instanceof FileUndoRefused) throw invalidParams(error.message);
+        throw error;
+      }
+    },
+  },
+
+  "session.fork": {
+    summary: "Creates and follows a new thread through a completed turn, or before it for editing (feature message_fork). Uses the same folder and current files; leaves the source conversation unchanged.",
+    params: { session_id: "string", checkpoint_id: "string", before: "boolean" },
+    required: ["session_id", "checkpoint_id", "before"],
+    async handle(params, context) {
+      const source = writable(followed(context, params.session_id));
+      let session: Session;
+      try {
+        session = await context.gateway.sessions.fork(source, params.checkpoint_id as string, params.before as boolean);
+      } catch (error) {
+        if (error instanceof DeskRefused) throw invalidParams(error.message);
+        throw error;
+      }
+      return new Atomic(() => {
+        const now = present(context.gateway, session);
+        now.follow(context.caller);
+        return { session_id: now.id, stored_session_id: now.id, info: now.info() };
+      });
     },
   },
 
