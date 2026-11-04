@@ -1,4 +1,5 @@
 import { CodexError } from "./client.ts";
+import { reviewOwnStillOlder } from "./history.ts";
 import type { CodexCalls } from "./session.ts";
 import type { Thread, Turn } from "./types/index.ts";
 
@@ -15,16 +16,21 @@ export interface ReadOptions {
 }
 
 /**
- * Codex refused to list a thread's turns as it has none yet (0.166, on `thread/read` with
- * its turns and on `thread/resume`, while it has the thread loaded).
+ * Codex refused to list a thread's turns as it has none yet, while it has the thread
+ * loaded (0.166): `thread/turns/list` says the thread is not materialized; `thread/read`
+ * with its turns and `thread/resume` say `list_turns` is not supported, and once that has
+ * been asked `thread/turns/list` says so too.
  */
 export function noTurnsYet(error: unknown): boolean {
-  return /list_turns is not supported/i.test((error as Error)?.message ?? "");
+  if (!(error instanceof CodexError)) return false;
+  return (error.code === -32601 && /^list_turns is not supported( yet)?$/.test(error.message))
+    || (error.code === -32600 && /^thread \S+ is not materialized yet; thread\/turns\/list is unavailable before first user message$/.test(error.message));
 }
 
 /**
  * Persisted turns, oldest first, without full-history hydration. Catch-up stops once
- * every turn it needs has been found; opening a thread still reads all of its history.
+ * every turn it needs has been found, with the own turn of a review among them; opening
+ * a thread still reads all of its history.
  * Older app-servers and legacy stores may not support paging.
  */
 export async function readThread(client: Pick<CodexCalls, "call">, threadId: string, options: ReadOptions = {}): Promise<Thread> {
@@ -55,7 +61,7 @@ export async function readThread(client: Pick<CodexCalls, "call">, threadId: str
     for (;;) {
       turns.push(...page.data);
       for (const turn of page.data) wanted.delete(turn.id);
-      if (options.latest || (options.through?.length && wanted.size === 0) || page.nextCursor === null) break;
+      if (options.latest || (options.through?.length && wanted.size === 0 && !reviewOwnStillOlder(turns)) || page.nextCursor === null) break;
       if (cursors.has(page.nextCursor)) throw new Error("Codex repeated a history cursor.");
       cursors.add(page.nextCursor);
       page = await pageAt(page.nextCursor);
@@ -67,14 +73,14 @@ export async function readThread(client: Pick<CodexCalls, "call">, threadId: str
       || (error.code === -32600 && /unknown variant [`'"]thread\/turns\/list[`'"]/.test(error.message)));
     if (!unsupported) {
       // A thread with no turn yet that Codex still has loaded has none to list (0.166):
-      // read without them, it is empty.
-      if (noTurnsYet(error)) return empty(client, threadId);
+      // read without them, it is empty. Pages already read say otherwise.
+      if (turns.length === 0 && noTurnsYet(error)) return empty(client, threadId);
       throw error;
     }
     try {
       return (await client.call<{ thread: Thread }>("thread/read", { threadId, includeTurns: true })).thread;
     } catch (fallback) {
-      if (!noTurnsYet(fallback)) throw fallback;
+      if (turns.length > 0 || !noTurnsYet(fallback)) throw fallback;
       return empty(client, threadId);
     }
   }

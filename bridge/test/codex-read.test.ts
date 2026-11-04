@@ -56,6 +56,36 @@ test("catch-up stops after all requested turns, including an older background co
   assert.equal(background.calls.filter((call) => call.method === "thread/turns/list").length, 2);
 });
 
+test("catch-up reads one more page for a review's own turn when the review is the oldest on its page", async () => {
+  const review = (id: string, own?: string): Turn[] => [
+    ...(own ? [{ id: own, rootTurnId: id, status: "interrupted", itemsView: "full", items: [{ type: "commandExecution", id: `run-${own}` }] }] : []),
+    { id, rootTurnId: id, status: "completed", itemsView: "full", items: [{ type: "enteredReviewMode", id: `in-${id}`, review: "current changes" }] },
+  ] as never;
+  const plain = (id: string): Turn => ({ id, rootTurnId: id, status: "completed", itemsView: "full", items: [] }) as never;
+  const lists = (calls: { method: string }[]) => calls.filter((call) => call.method === "thread/turns/list").length;
+  const ids = (thread: Thread) => (thread.turns as Turn[]).map((turn) => turn.id);
+
+  // Pages of two, newest first: [later, review], then [own, older].
+  const edge = pages([plain("oldest"), plain("older"), ...review("review", "own"), plain("later")]);
+  assert.deepEqual(ids(await readThread(edge.client, "thread", { through: ["later"] })), ["older", "own", "review", "later"]);
+  assert.equal(lists(edge.calls), 2);
+
+  // Its own turn on the same page: nothing more.
+  const inside = pages([plain("older"), ...review("review", "own")]);
+  assert.deepEqual(ids(await readThread(inside.client, "thread", { through: ["review"] })), ["own", "review"]);
+  assert.equal(lists(inside.calls), 1);
+
+  // A turn before it that is not its own, and a review that has none: one page, not all of them.
+  const none = pages([plain("a"), plain("b"), plain("c"), plain("d"), ...review("review"), plain("later")]);
+  assert.deepEqual(ids(await readThread(none.client, "thread", { through: ["later"] })), ["c", "d", "review", "later"]);
+  assert.equal(lists(none.calls), 2);
+
+  // At the oldest end of the thread there is no more to read.
+  const first = pages([...review("review"), plain("later")]);
+  assert.deepEqual(ids(await readThread(first.client, "thread", { through: ["later"] })), ["review", "later"]);
+  assert.equal(lists(first.calls), 1);
+});
+
 test("an absent catch-up anchor exhausts history; an empty thread still reads its metadata", async () => {
   const turns = history();
   const missing = pages(turns);
@@ -89,6 +119,57 @@ for (const error of [new CodexError(-32601, "list_turns is not supported yet"), 
     assert.deepEqual(calls, ["thread/turns/list", "thread/read"]);
   });
 }
+
+test("a loaded thread with no turn, whose listing Codex 0.166 refuses as not materialized, reads as empty with its metadata", async () => {
+  const calls: { method: string; params: any }[] = [];
+  const client = reader(async (method, params) => {
+    calls.push({ method, params });
+    if (method === "thread/turns/list") throw new CodexError(-32600, "thread abc is not materialized yet; thread/turns/list is unavailable before first user message");
+    return { thread: { id: "abc", status: { type: "idle" }, turns: [] } };
+  });
+  const thread = await readThread(client, "abc");
+  assert.deepEqual(thread, { id: "abc", status: { type: "idle" }, turns: [] });
+  assert.deepEqual(calls.map((call) => [call.method, call.params.includeTurns]), [["thread/turns/list", undefined], ["thread/read", false]]);
+});
+
+test("an unrelated failure that only mentions the refusal's words stays visible", async () => {
+  for (const error of [
+    new CodexError(-32603, "EACCES: /tmp/thread abc is not materialized yet/rollout.jsonl"),
+    new CodexError(-32600, "could not read: thread abc is not materialized yet"),
+    new Error("list_turns is not supported yet"),
+  ]) {
+    const client = reader(async (method) => {
+      if (method === "thread/turns/list") throw error;
+      return { thread: { id: "abc", status: { type: "idle" }, turns: [] } };
+    });
+    await assert.rejects(readThread(client, "abc"), error);
+  }
+});
+
+test("a thread whose first page was read does not become empty when a later page is refused", async () => {
+  const thread = recordedHistory("compact");
+  const refusal = new CodexError(-32600, "thread abc is not materialized yet; thread/turns/list is unavailable before first user message");
+  let reads = 0;
+  const client = reader(async (method) => {
+    if (method === "thread/read") return { thread };
+    if (reads++ === 0) return { data: [thread.turns.at(-1)], nextCursor: "older" };
+    throw refusal;
+  });
+  await assert.rejects(readThread(client, "abc"), refusal);
+});
+
+test("a thread whose first page was read does not become empty when paging and its full read are both refused", async () => {
+  const thread = recordedHistory("compact");
+  const refusal = new CodexError(-32601, "list_turns is not supported yet");
+  let reads = 0;
+  const client = reader(async (method, params) => {
+    if (method === "thread/read" && !params.includeTurns) return { thread };
+    if (method === "thread/read") throw refusal;
+    if (reads++ === 0) return { data: [thread.turns.at(-1)], nextCursor: "older" };
+    throw refusal;
+  });
+  await assert.rejects(readThread(client, "abc"), refusal);
+});
 
 test("unsupported paging after one page discards the partial history before falling back", async () => {
   const thread = recordedHistory("compact");

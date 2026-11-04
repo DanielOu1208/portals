@@ -16,8 +16,14 @@ import { fixture, fixtureCwd, recordedThread, rewrite } from "./codex-fixtures.t
 
 type Json = any;
 
-/** What Codex (0.166) says when asked for the turns of a thread it has loaded that has none yet. */
+/**
+ * What Codex (0.166) says when asked for the turns of a thread it has loaded that has none
+ * yet: `thread/read` with its turns says this, and from then on so do `thread/turns/list`
+ * and `thread/resume`, which until then answer as `notMaterialized` and `noRollout` do.
+ */
 const noTurnsYet = "list_turns is not supported yet";
+const notMaterialized = (id: string) => `thread ${id} is not materialized yet; thread/turns/list is unavailable before first user message`;
+const noRollout = (id: string) => `no rollout found for thread id ${id}`;
 
 export class DaemonConnection {
   readonly socket: WebSocket;
@@ -54,6 +60,8 @@ interface ThreadState {
   preview: string;
   parentThreadId: string | null;
   source: Json;
+  /** With no turn yet, `thread/read` has been asked for its turns (`noTurnsYet`). */
+  turnsAsked?: boolean;
 }
 
 interface OpenRequest {
@@ -483,7 +491,7 @@ export class FakeDaemon {
       case "thread/resume": {
         await this.onResume(params);
         const thread = this.thread(params.threadId);
-        if (thread.turns.length === 0) throw new Error(thread.loaded ? noTurnsYet : `no rollout found for thread id ${thread.id}`);
+        if (thread.turns.length === 0) throw thread.turnsAsked ? new CodexError(-32601, noTurnsYet) : new Error(noRollout(thread.id));
         thread.loaded = true;
         if (thread.status.type === "notLoaded") thread.status = { type: "idle" };
         connection.subscribed.add(thread.id);
@@ -499,7 +507,9 @@ export class FakeDaemon {
       }
       case "thread/turns/list": {
         if (!this.pagedHistory) throw new CodexError(-32601, "Method not found: thread/turns/list");
-        const turns = this.threadJSON(this.thread(params.threadId), true).turns.reverse();
+        const listed = this.thread(params.threadId);
+        if (listed.turns.length === 0 && listed.loaded) throw listed.turnsAsked ? new CodexError(-32601, noTurnsYet) : new Error(notMaterialized(listed.id));
+        const turns = this.threadJSON(listed, true).turns.reverse();
         const start = Number(params.cursor ?? 0);
         const limit = Math.min(params.limit ?? 50, this.historyPageSize);
         const data = turns.slice(start, start + limit);
@@ -510,12 +520,15 @@ export class FakeDaemon {
       case "thread/read": {
         await this.onRead(params);
         const thread = this.thread(params.threadId);
-        if (params.includeTurns === true && thread.turns.length === 0 && thread.loaded) throw new Error(noTurnsYet);
+        if (params.includeTurns === true && thread.turns.length === 0 && thread.loaded) {
+          thread.turnsAsked = true;
+          throw new CodexError(-32601, noTurnsYet);
+        }
         return { thread: this.threadJSON(thread, params.includeTurns === true) };
       }
       case "thread/fork": {
         const from = this.thread(params.threadId);
-        if (from.turns.length === 0) throw new Error(`no rollout found for thread id ${from.id}`);
+        if (from.turns.length === 0) throw new Error(noRollout(from.id));
         const id = this.addThread(from.cwd, structuredClone(from.turns.filter((turn) => turn.status !== "inProgress")), {
           loaded: true,
           preview: from.preview,
