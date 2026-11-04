@@ -40,13 +40,17 @@ final class MessageSearchUITests: XCTestCase {
                 Thread.sleep(forTimeInterval: 0.2)
             }
         }
+        let header = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", "Fake agent, Release decisions")).firstMatch
+        XCTAssertFalse(header.exists, "the fixture must start on a different thread")
         message.tap()
         let composer = app.descendants(matching: .any)["composer-field"].firstMatch
         XCTAssertTrue(composer.waitForExistence(timeout: 10))
-        let header = app.descendants(matching: .any)["chat-header"].firstMatch
-        let selectedThread = NSPredicate(format: "label CONTAINS %@", "Release decisions")
-        expectation(for: selectedThread, evaluatedWith: header)
-        waitForExpectations(timeout: 10)
+        let openedThread = header.waitForExistence(timeout: 10)
+        if !openedThread, lines.count > 2 {
+            try app.debugDescription.write(toFile: lines[2] + "/missing-header.txt", atomically: true, encoding: .utf8)
+        }
+        XCTAssertTrue(openedThread)
         if UIDevice.current.userInterfaceIdiom == .phone {
             XCTAssertLessThan(composer.frame.minX, app.frame.width / 3)
         }
