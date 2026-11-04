@@ -375,6 +375,8 @@ export class Session {
    * and no message of its own for it.
    */
   private readonly cardAnswerOf = new WeakMap<Prompt, string>();
+  /** The id its device gave each message handed to the running turn, which a Stop may take back from the agent (`steer.withdrawn`). */
+  private readonly steeredIDs = new WeakMap<Prompt, string>();
   /**
    * The notes given with a no that go to the agent a step later (`ask`), until they have:
    * a close in between says them at once (to disk, `sayNote` while closing), since the
@@ -1067,6 +1069,7 @@ export class Session {
     this.withdrawAsked("replied");
     // The answers given on a card (feature async_questions): their row shows them.
     const cardAnswer = this.cardAnswerOf.get(prompt);
+    if (messageID !== undefined) this.steeredIDs.set(prompt, messageID);
     this.transcript.steer(storedUserText(prompt), messageID, cardAnswer);
     if (told) this.emit("message.steered", messageFields(storedUserText(prompt), told.sender, told.messageID, this.fromOf(storedUserText(prompt)), cardAnswer));
     const cleared = this.endedToClear(prompt);
@@ -2302,6 +2305,20 @@ export class Session {
         // Taken after the turn had ended (Droid takes a steering message still queued once
         // its loop is idle): the messages waiting behind it go on, as after one that failed.
         if (!this.running) this.startNext();
+        return;
+      }
+      case "steer.withdrawn": {
+        // Stopped before the agent read it: it leaves the turn it was shown in, and goes
+        // back to the composer of the device that sent it (feature steer_withdrawn). An app
+        // without the feature shows the notice, with the whole message, so that it is not
+        // lost unseen.
+        const text = storedUserText(event.prompt);
+        const messageID = this.steeredIDs.get(event.prompt);
+        this.transcript.withdraw(text, messageID);
+        this.emit("status.update", {
+          kind: "warn", text: `Stop took back a message before the agent read it, so it was not sent: “${text}”`,
+          withdrawn: { text, ...(messageID !== undefined ? { message_id: messageID } : {}) },
+        });
         return;
       }
       case "queue.failed": {

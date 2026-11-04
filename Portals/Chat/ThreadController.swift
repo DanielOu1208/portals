@@ -1032,17 +1032,8 @@ final class ThreadController: Identifiable {
         if original == nil, asked.images.isEmpty, asked.files.isEmpty, SlashInput(asked.text) != nil {
             return submit(asked.text, images: [], files: [], announced: true)
         }
-        // What this device holds in memory goes at once: bytes still being written to
-        // the journal, and the files sent lately (`SentFileBytes`).
-        var images: [UUID: ImageAttachment] = [:], files: [UUID: FileAttachment] = [:]
-        for staged in unstagedPayloads.values {
-            for image in staged.images { images[image.id] = image }
-            for file in staged.files { files[file.id] = file }
-        }
-        for file in asked.files where files[file.id] == nil {
-            // Under its own id: a Mac that has it waiting already from a send that failed half way does not take it twice.
-            if let data = sentFiles.data(for: file.id) { files[file.id] = FileAttachment(id: file.id, data: data, filename: file.filename) }
-        }
+        // What this device holds in memory goes at once.
+        let (images, files) = heldAttachments(of: asked)
         let unread = (images: asked.images.filter { images[$0.id] == nil }, files: asked.files.filter { files[$0.id] == nil })
         guard !unread.images.isEmpty || !unread.files.isEmpty else {
             return resend(asked, original: original, mentions: mentions, images: images, files: files)
@@ -1062,6 +1053,64 @@ final class ThreadController: Identifiable {
             for file in read.files { files[file.id] = file }
             resend(asked, original: original, mentions: mentions, images: images, files: files)
         }
+    }
+
+    /// What this device holds in memory of what was attached to `asked`, by id: bytes still
+    /// being written to the journal, and the files sent lately (`SentFileBytes`). The rest
+    /// is on disk (`SubmissionStore.attachmentsInBackground`).
+    private func heldAttachments(of asked: UserMessage) -> (images: [UUID: ImageAttachment], files: [UUID: FileAttachment]) {
+        var images: [UUID: ImageAttachment] = [:], files: [UUID: FileAttachment] = [:]
+        for staged in unstagedPayloads.values {
+            for image in staged.images { images[image.id] = image }
+            for file in staged.files { files[file.id] = file }
+        }
+        for file in asked.files where files[file.id] == nil {
+            // Under its own id: a Mac that has it waiting already from a send that failed half way does not take it twice.
+            if let data = sentFiles.data(for: file.id) { files[file.id] = FileAttachment(id: file.id, data: data, filename: file.filename) }
+        }
+        return (images, files)
+    }
+
+    /// A message of this device's steered into a run that a Stop took back before the
+    /// agent read it (a bridge's `steer_withdrawn`): it goes back to the composer, ahead of
+    /// anything written there since, with what was attached to it that this device still
+    /// has, so nothing typed is lost (2026-11-03: "the text goes back in the composer so
+    /// nothing typed is lost"). `asked`: the message as the transcript showed it, when it
+    /// still did; else `stored`, its words as the host keeps them, are all there is.
+    private func giveBack(_ asked: UserMessage?, id: UUID, stored: String) {
+        let original = savedConversation?.submissions.first { $0.id == id }
+        let words = original?.text ?? asked?.text ?? SentText.parse(stored).text
+        composer.text = [words, composer.text].filter { !$0.isEmpty }.joined(separator: "\n\n")
+        if let mentions = original?.mentions { composer.mentions = mentions + composer.mentions.filter { !mentions.contains($0) } }
+        say("Stopped before the agent read your message. It is back in the composer.")
+        guard let asked, !asked.images.isEmpty || !asked.files.isEmpty else { return }
+        let held = heldAttachments(of: asked)
+        let unread = (images: asked.images.filter { held.images[$0.id] == nil }, files: asked.files.filter { held.files[$0.id] == nil })
+        Task {
+            var read: (images: [ImageAttachment], files: [FileAttachment]) = ([], [])
+            if !unread.images.isEmpty || !unread.files.isEmpty {
+                read = await submissionStore.attachmentsInBackground(images: unread.images, files: unread.files, in: localID, copies: imageStore)
+            }
+            guard !isClosed else { return }
+            var images = held.images, files = held.files
+            for image in read.images { images[image.id] = image }
+            for file in read.files { files[file.id] = file }
+            // In the order they were attached, before any attached since.
+            let given = (images: asked.images.compactMap { images[$0.id] }, files: asked.files.compactMap { files[$0.id] })
+            composer.images = given.images + composer.images.filter { image in !given.images.contains { $0.id == image.id } }
+            composer.files = given.files + composer.files.filter { file in !given.files.contains { $0.id == file.id } }
+            if given.images.count < asked.images.count || given.files.count < asked.files.count {
+                say("This device no longer has all that was attached to it. Attach it again, then send.", .warning)
+            }
+        }
+    }
+
+    /// The message with `id` as the transcript shows it, the latest turns first.
+    private func shownMessage(_ id: UUID) -> UserMessage? {
+        for turn in state.transcript.turns.reversed() {
+            if let item = turn.items.first(where: { $0.id == id }), case let .user(message) = item.content { return message }
+        }
+        return nil
     }
 
     /// Sends again what `asked` carried, with the bytes found for it, by id.
@@ -1489,6 +1538,9 @@ final class ThreadController: Identifiable {
     /// Applies one event the thread's stream brought.
     private func take(_ event: ThreadEvent, from thread: ThreadRef) {
             let wasRunning = state.isRunning
+            // A message of this device's that a Stop took back, as shown, before the state lets go of it.
+            var withdrawn: UserMessage?
+            if case let .ownMessageWithdrawn(id, _) = event { withdrawn = shownMessage(id) }
             state.apply(event)
             if case let .turnListed(turn) = event { endedTurn = turn } else if !wasRunning, state.isRunning { endedTurn = nil }
             switch event {
@@ -1538,6 +1590,9 @@ final class ThreadController: Identifiable {
                 // The host's word that it took a message of this device's settles its
                 // submission, also when the send's answer was lost.
                 if savedConversation?.hostTook(id) == true { onPersist?(self) }
+            case let .ownMessageWithdrawn(id, text):
+                giveBack(withdrawn, id: id, stored: text)
+                onPersist?(self)
             default:
                 break
             }

@@ -50,6 +50,8 @@ export class Transcript {
   private opener: string | null = null;
   /** Why, when the agent opened it by itself. */
   private openerNote: HostNote | null = null;
+  /** Why for the turn's first message, which a message steered in since stands in for as `opener`. */
+  private fromNote: HostNote | null = null;
   /** Where the running turn's messages start (its opener's index); null between turns (feature `turn_diff`). */
   private from: number | null = null;
   /** The id the device gave the message that opened it, when one did (feature `message_ids`). */
@@ -107,6 +109,7 @@ export class Transcript {
     this.messages.push(message);
     this.opener = userText;
     this.openerNote = host ?? null;
+    this.fromNote = this.openerNote;
     this.openerID = messageID;
     this.openerAnswers = cardAnswer;
   }
@@ -121,6 +124,7 @@ export class Transcript {
     this.from = opened >= 0 ? opened : this.messages.length;
     this.opener = userText;
     this.openerNote = null;
+    this.fromNote = null;
     this.openerID = undefined;
     const stored = this.messages[opened];
     this.openerAnswers = stored?.role === "user" && stored.text === userText ? stored.card_answer : undefined;
@@ -153,6 +157,32 @@ export class Transcript {
     this.openerNote = null;
     this.openerID = messageID;
     this.openerAnswers = cardAnswer;
+  }
+
+  /**
+   * Takes out a message steered in that the agent never read (a Stop took it back): the
+   * conversation is as if it had not been sent, and the turn's last message before it is
+   * what `inflight.user` names again. False when it is not there.
+   */
+  withdraw(userText: string, messageID?: string): boolean {
+    const index = this.messages.findLastIndex((message) => message.role === "user" && message.display_kind === "steer" && message.text === userText &&
+      (messageID === undefined || message.message_id === messageID));
+    if (index === -1) return false;
+    this.messages.splice(index, 1);
+    const from = this.from;
+    if (from === null) return true;
+    if (index < from) {
+      this.from = from - 1;
+      return true;
+    }
+    const last = this.messages.findLastIndex((message, at) => at >= from && message.role === "user");
+    const said = this.messages[last];
+    if (said?.role !== "user") return true;
+    this.opener = said.text;
+    this.openerNote = last === from ? this.fromNote : null;
+    this.openerID = said.message_id;
+    this.openerAnswers = said.card_answer;
+    return true;
   }
 
   apply(event: ProviderEvent): void {

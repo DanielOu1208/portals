@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { machineWord } from "../src/platform.ts";
 import type { ClaudeProvider } from "../src/providers/claude/provider.ts";
-import { fakeClaude, FakeFiles, FakeQuery, inFolder, maxPlanUsage, planUsage, play, playEntries, processes, recordedHistory, tinyCheckJournal } from "./claude-fixtures.ts";
+import { fakeClaude, FakeFiles, FakeQuery, fixture, inFolder, maxPlanUsage, planUsage, play, playEntries, processes, recordedHistory, tinyCheckJournal } from "./claude-fixtures.ts";
 import { pastSubagents } from "../src/providers/claude/tasks.ts";
 import { isEvent, RpcFailure, startTestBridge, streamedText, TestClient, unspent, type Frame, type TestBridge } from "./helpers.ts";
 
@@ -636,6 +636,91 @@ test("a message sent while Claude works is steered into the running turn, which 
   );
 });
 
+/** What the steer recording has Claude Code say, by kind and subtype ("result", "system/init"), in order. */
+function steerSays(): string[] {
+  return fixture("steer").map((entry) => {
+    const message = entry.message as { type?: string; subtype?: string } | undefined;
+    return entry.kind === "message" ? [message?.type, message?.subtype].filter(Boolean).join("/") : entry.kind;
+  });
+}
+
+/**
+ * Plays the steer recording up to its entry `stop`, Dana steering "Then say banana." in,
+ * with the id her device gave it, once Claude has begun its reply.
+ */
+async function steerUntil(session: string, start: number, stop: number): Promise<{ query: FakeQuery; messageID: string }> {
+  const query = await send(session, "Count to 25.");
+  const playing = playEntries(query, fixture("steer").slice(0, stop));
+  await client.from(start, (frame) => isEvent(frame, "message.delta", session));
+  const messageID = "6B1D2C9E-7A41-4E57-9C0B-3F8A2D5E1C44";
+  assert.deepEqual(await client.call("prompt.submit", { session_id: session, text: "Then say banana.", message_id: messageID }), { status: "steered" });
+  await playing;
+  return { query, messageID };
+}
+
+for (const order of ["before", "after"] as const) {
+  test(`Stop with a message steered in that Claude has not read: Claude Code takes it back, it never runs, and the devices are told to give it back (feature steer_withdrawn), its receipt ${order} the turn's end`, async () => {
+    const session = await createThread();
+    const start = client.frames.length;
+    // Stopped while Claude still answers the first message: the second waits in its queue.
+    const { query, messageID } = await steerUntil(session, start, steerSays().indexOf("assistant"));
+    const [stopped] = fixture("interrupt").filter((entry) => entry.kind === "message" && (entry.message as { type?: string }).type === "result");
+    const result = { ...(stopped.message as object), user_message_uuids: [query.received[0].uuid] };
+    query.interrupt = async (options) => {
+      query.calls.push(["interrupt", options]);
+      // Claude Code writes its receipt before the stopped turn's result; the SDK may hand them on in either order.
+      if (order === "before") setImmediate(() => query.emit(result));
+      else {
+        query.emit(result);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      return { still_queued: [], cancelled: [query.received[1].uuid] };
+    };
+    assert.deepEqual(await client.call("session.interrupt", { session_id: session }), { status: "interrupted" });
+    const done = await completed(session, start);
+    assert.equal(done.payload.status, "interrupted");
+    assert.deepEqual(query.calls.filter((call) => call[0] === "interrupt"), [["interrupt", { cancelQueued: true }]]);
+    await client.from(start, (frame) => isEvent(frame, "status.update", session) && frame.params.payload.withdrawn !== undefined);
+    const notice = turnEvents(session, start).find((event) => event.type === "status.update");
+    assert.deepEqual(notice?.payload, {
+      kind: "warn", text: "Stop took back a message before the agent read it, so it was not sent: “Then say banana.”",
+      withdrawn: { text: "Then say banana.", message_id: messageID },
+    });
+    // The conversation is as if it had not been sent, and no turn runs it.
+    const resumed = await client.call("session.resume", { session_id: session });
+    assert.deepEqual(resumed.messages.filter((message: Frame) => message.role === "user").map((message: Frame) => message.text), ["Count to 25."]);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(turnEvents(session, start).filter((event) => event.type === "message.start").length, 1);
+  });
+}
+
+test("Stop between Claude's turns, before the one for a message steered in: it is taken back and the turn ends at once, its process kept", async () => {
+  const session = await createThread();
+  const start = client.frames.length;
+  // Claude has answered the first message; the second's turn is still to begin.
+  const { query } = await steerUntil(session, start, steerSays().lastIndexOf("system/init"));
+  query.interruptReceipt = { still_queued: [], cancelled: [query.received[1].uuid] };
+  assert.deepEqual(await client.call("session.interrupt", { session_id: session }), { status: "interrupted" });
+  const done = await completed(session, start);
+  assert.equal(done.payload.status, "interrupted");
+  assert.equal(query.isRunning, true);
+  assert.deepEqual(query.calls.filter((call) => call[0] === "close"), []);
+  assert.equal(turnEvents(session, start).filter((event) => event.type === "status.update" && event.payload.withdrawn).length, 1);
+});
+
+test("Stop with nothing steered in asks Claude Code to take nothing back", async () => {
+  const session = await createThread();
+  const start = client.frames.length;
+  const query = await send(session, "Count to 60.");
+  const playing = play(query, "interrupt");
+  await client.from(start, (frame) => isEvent(frame, "message.delta", session));
+  await client.call("session.interrupt", { session_id: session });
+  await completed(session, start);
+  await playing;
+  assert.deepEqual(query.calls.filter((call) => call[0] === "interrupt"), [["interrupt"]]);
+  assert.equal(turnEvents(session, start).some((event) => event.type === "status.update"), false);
+});
+
 test("/compact: with nothing to compact its turn fails with Claude Code's reason; later it marks where it compacted, which resume and replay keep", async () => {
   const session = await createThread();
   let start = client.frames.length;
@@ -803,6 +888,36 @@ test("a crash ends the running turn with an error the app shows; the next messag
   assert.equal(again.options.sessionId, undefined);
   void play(again, "plain");
   assert.equal((await completed(session, start)).payload.status, "complete");
+});
+
+test("a thread whose folder is gone: its turn fails at once and says so, and no Claude Code is started", async (t) => {
+  const folder = realpathSync(mkdtempSync(join(tmpdir(), "portals-claude-gone-")));
+  const own = fakeClaude();
+  const other = await startTestBridge({ providers: new Map([["claude", own.provider]]), config: { generalFolder: folder } });
+  const phone = await TestClient.open(other);
+  t.after(async () => {
+    await phone.close();
+    await other.dispose();
+  });
+  const session = (await phone.call("session.create", { profile: "claude", cwd: folder })).session_id as string;
+  rmSync(folder, { recursive: true });
+  const start = phone.frames.length;
+  assert.equal((await phone.call("prompt.submit", { session_id: session, text: "Hello." })).status, "streaming");
+  const done = (await phone.from(start, (frame) => isEvent(frame, "message.complete", session))).params;
+  assert.equal(done.payload.status, "error");
+  assert.equal(done.payload.text, `The thread's folder, ${folder}, is no longer there.`);
+  assert.deepEqual(done.payload.error_surface, { retryable: false });
+  assert.deepEqual(sessionQueries(own.queries), []);
+});
+
+test("a program Claude Code's SDK cannot find at claude.path: the turn says to check claude.path, not an option of the SDK's", async () => {
+  const session = await createThread();
+  const start = client.frames.length;
+  const query = await send(session, "Hello.");
+  query.crash("Claude Code executable not found at /nonexistent/claude. Is options.pathToClaudeCodeExecutable set?");
+  const done = await completed(session, start);
+  assert.equal(done.payload.status, "error");
+  assert.equal(done.payload.text, "Claude Code could not be started at /nonexistent/claude. Check claude.path in config.json.");
 });
 
 test("an idle thread goes cold after its idle time, and the next message resumes it", async () => {

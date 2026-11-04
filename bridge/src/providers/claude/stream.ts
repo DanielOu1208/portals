@@ -175,6 +175,24 @@ export class ClaudeStream {
     this.interruptRequested = true;
   }
 
+  /** Whether a result is still to answer the message sent with this uuid. */
+  awaits(uuid: string): boolean {
+    return this.unanswered.has(uuid);
+  }
+
+  /**
+   * Claude Code took back messages sent with these uuids at a Stop, before it read them
+   * (`interrupt` with `cancelQueued`): no result answers them. Stopped between two of
+   * Claude's turns, the one to come was for them, so the app's turn ends here.
+   */
+  withdraw(uuids: readonly string[]): ProviderEvent[] {
+    for (const uuid of uuids) this.unanswered.delete(uuid);
+    if (!this.interruptRequested || this.running !== null || this.unanswered.size > 0) return [];
+    this.interruptRequested = false;
+    this.openText = "";
+    return [{ type: "turn.end", status: "interrupted", usage: this.usage, ...this.spentSoFar() }];
+  }
+
   get isInterrupting(): boolean {
     return this.interruptRequested;
   }

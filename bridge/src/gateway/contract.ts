@@ -22,7 +22,7 @@ const events: [string, string][] = [
   ["reasoning.delta", "A piece of the model's reasoning."],
   ["thinking.delta", "A passing status line; empty clears it."],
   ["status.headline", "What the agent says it is working on: text, tool_ids (the calls it sums up), until a newer one or the agent says something (feature status_headline)."],
-  ["status.update", "A warning or error worth keeping in the thread; kind process: why the agent began a turn by itself."],
+  ["status.update", "A warning or error worth keeping in the thread; kind process: why the agent began a turn by itself; withdrawn {text, message_id?}: a message steered in that a Stop took back before the agent read it (feature steer_withdrawn)."],
   ["tool.start", "A tool call started."],
   ["tool.progress", "A tool's cumulative live output or status: tool_id, output, progress, output_truncated. Replaces prior output rather than appending."],
   ["tool.complete", "A tool call finished, with its result and diff."],
