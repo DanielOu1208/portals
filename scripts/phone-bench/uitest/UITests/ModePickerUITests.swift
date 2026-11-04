@@ -5,11 +5,14 @@ final class ModePickerUITests: XCTestCase {
         let app = XCUIApplication(bundleIdentifier: "com.danielou.portals")
         app.terminate()
         app.launchEnvironment = ["PORTALS_FAKE": "plan"]
-        if !largeText { app.launchEnvironment["PORTALS_DEBUG_MODE_PICKER"] = "1" }
-        if largeText {
-            app.launchArguments = ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
-        }
+        app.launchArguments = [
+            "-UIPreferredContentSizeCategoryName",
+            largeText ? "UICTContentSizeCategoryAccessibilityXXXL" : "UICTContentSizeCategoryL",
+        ]
         app.launch()
+        let chip = app.buttons["mode-chip"]
+        XCTAssertTrue(chip.waitForExistence(timeout: 20))
+        chip.tap()
         return app
     }
 
@@ -36,9 +39,6 @@ final class ModePickerUITests: XCTestCase {
     func testLargeModeRowsScroll() {
         continueAfterFailure = false
         let app = launch(largeText: true)
-        let chip = app.buttons["mode-chip"]
-        XCTAssertTrue(chip.waitForExistence(timeout: 20))
-        chip.tap()
         let full = app.buttons["mode-full"]
         XCTAssertTrue(full.waitForExistence(timeout: 20))
         XCTAssertGreaterThanOrEqual(full.frame.height, 44)
@@ -46,7 +46,10 @@ final class ModePickerUITests: XCTestCase {
         if !settings.isHittable {
             let rows = app.scrollViews.containing(.button, identifier: "mode-full").firstMatch
             XCTAssertTrue(rows.exists, "large text scrolls where all rows cannot fit")
-            for _ in 0..<6 where !settings.isHittable { rows.swipeUp() }
+            for _ in 0..<6 where !settings.isHittable {
+                rows.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8))
+                    .press(forDuration: 0.05, thenDragTo: rows.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)))
+            }
         }
         XCTAssertTrue(settings.isHittable)
         XCTAssertEqual(settings.label, "Your settings (Full access)")

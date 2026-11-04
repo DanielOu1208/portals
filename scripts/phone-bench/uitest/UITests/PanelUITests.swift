@@ -57,7 +57,13 @@ final class PanelUITests: XCTestCase {
         ]
         app.launch()
         declineNotifications()
-        XCTAssertTrue(app.descendants(matching: .any)["thread-panel"].waitForExistence(timeout: 20))
+        let card = app.descendants(matching: .any)["thread-panel"]
+        if !card.waitForExistence(timeout: 2) {
+            let button = app.buttons["thread-panel-button"]
+            XCTAssertTrue(button.waitForExistence(timeout: 20))
+            button.tap()
+        }
+        XCTAssertTrue(card.waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["thread-panel-changes"].waitForExistence(timeout: 10))
         return app
     }
