@@ -107,6 +107,9 @@ export const testCommands: SlashCommand[] = [
   { name: "clear", description: "Start a new session with empty context", argumentHint: "", builtin: true },
   { name: "model", description: "Set the AI model for Claude Code", argumentHint: "<model>", builtin: true },
   { name: "grill-me", description: "Interview the user about a plan", argumentHint: "", builtin: false },
+  // Ones that need a terminal, which Claude Code 2.1.318 lists in `terminal_slash_commands`.
+  { name: "doctor", description: "Diagnose and verify your Claude Code installation and settings", argumentHint: "", builtin: true },
+  { name: "send-to-project", description: "Send this session to another project", argumentHint: "", builtin: true },
 ];
 
 /** What every FakeQuery answers for `/usage` (its own `/usage`), until a test says otherwise; an error is thrown. */

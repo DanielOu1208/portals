@@ -24,6 +24,7 @@ import {
   type AgentProfile,
   type DeskAdoption,
   type DeskSession,
+  type ModeOption,
   type ModelCatalog,
   type Provider,
   type ProviderSession,
@@ -104,14 +105,16 @@ const checkMaxAgeMs = 10 * 60_000;
 /**
  * Commands of Claude Code's own that are not offered: ones that would leave the thread
  * (`/clear` starts a new session), change the user's settings for every session, need a
- * terminal, or have the app's or the bridge's own command in their place.
+ * terminal, or have the app's or the bridge's own command in their place. Those Claude
+ * Code itself says need a terminal (`terminal_slash_commands`) are left out too; this
+ * list holds them as well, for before a session has said, and for an older Claude Code.
  */
 const withheld = new Set([
   "clear", "model", "effort", "fast", "config", "output-style", "color", "focus", "theme", "vim", "statusline", "terminal-setup",
   "keybindings", "permissions", "hooks", "mcp", "plugin", "plugins", "reload-plugins", "reload-skills", "login", "logout",
   "resume", "exit", "quit", "heapdump", "ide", "agents", "autocompact", "advisor", "auto-mode-setup", "usage-credits",
   "extra-usage", "design", "design-consent", "design-revoke", "workflow-launch-exec", "import", "privacy-settings", "upgrade",
-  "install-github-app", "add-dir", "remote-control",
+  "install-github-app", "add-dir", "remote-control", "doctor", "send-to-project",
   "status", "mode", "help", "new", "stop", "retry", "reasoning",
 ]);
 
@@ -238,6 +241,21 @@ export class ClaudeProvider implements Provider, ClaudeHost {
   };
   readonly supportsModes = true;
   /**
+   * The app's five, in its own words and order, and Claude Code's auto mode as `medium`:
+   * a step between asking before everything and asking before nothing.
+   */
+  readonly modeOptions = [
+    { id: "full", label: "Full access", description: "Edits files and runs commands without asking" },
+    { id: "medium", label: "Auto", description: "Runs safe actions without asking, and asks when unsure" },
+    { id: "edits", label: "Accept edits", description: "Edits files without asking, and asks before running commands" },
+    { id: "ask", label: "Ask first", description: "Asks before editing files or running commands" },
+    { id: "plan", label: "Plan", description: "Plans first, and asks before carrying the plan out" },
+    { id: "default", label: "Your settings", description: "As the agent's own settings at the desk say" },
+  ] satisfies ModeOption[];
+  readonly modeMeanings = {
+    medium: "uses Claude Code's auto mode: it runs safe actions without asking, blocks risky ones, and asks when unsure",
+  };
+  /**
    * Claude Code reads a message's mentions in itself, up to its limit, which its settings'
    * `env` sets for a session in `cwd` over the environment it runs in (`ClaudeSettingsEnv`).
    */
@@ -270,6 +288,8 @@ export class ClaudeProvider implements Provider, ClaudeHost {
   /** The model a thread on `default` runs on, as the last check found it; null when Claude Code did not say. */
   private defaultModel: string | null = null;
   private commandList: SlashCommand[] | null = null;
+  /** The commands the last session's Claude Code said need a terminal (`terminalCommands`). */
+  private terminalOnly = new Set<string>();
   private defaultEffort = "";
   /** The effort each model runs at when a thread names none, as the last check found it. */
   private defaultLevels: Record<string, string> = {};
@@ -658,10 +678,15 @@ export class ClaudeProvider implements Provider, ClaudeHost {
     const seen = new Set<string>();
     return (this.commandList ?? []).flatMap((command) => {
       const name = command.name.toLowerCase();
-      if (withheld.has(name) || name.startsWith("_") || seen.has(name)) return [];
+      if (withheld.has(name) || this.terminalOnly.has(name) || name.startsWith("_") || seen.has(name)) return [];
       seen.add(name);
       return [{ name, description: command.description, usage: command.argumentHint ?? "", skill: command.builtin !== true }];
     });
+  }
+
+  terminalCommands(names: unknown): void {
+    // Left out when none needs one, and by a Claude Code from before the list.
+    this.terminalOnly = new Set(Array.isArray(names) ? names.filter((name): name is string => typeof name === "string").map((name) => name.toLowerCase()) : []);
   }
 
   learn(query: QueryLike, reported: { permissionMode: string | null; effort: string | null }, overridden: boolean): void {

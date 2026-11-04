@@ -132,11 +132,15 @@ export function claudeEffort(level: string): EffortLevel | null {
   }
 }
 
-/** What `/mode` names, as Claude's permission modes. `default` is no override. */
+/**
+ * What `/mode` names, as Claude's permission modes. `default` is no override; `medium` is
+ * Claude Code's auto mode, in which a classifier approves or blocks each call and asks
+ * only when it cannot tell.
+ */
 export function permissionModeFor(mode: ThreadMode): PermissionMode | null {
   switch (mode) {
     case "medium":
-      throw new Error("Claude does not offer Medium autonomy.");
+      return "auto";
     case "ask":
       return "default";
     case "edits":
@@ -159,6 +163,8 @@ export function threadModeFor(mode: string | undefined | null): Exclude<ThreadMo
       return "edits";
     case "plan":
       return "plan";
+    case "auto":
+      return "medium";
     case "bypassPermissions":
       return "full";
     default:
