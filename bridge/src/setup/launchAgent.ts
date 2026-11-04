@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Service, ServiceSpec, ServiceState } from "./service.ts";
 import { programOverride, type System } from "./system.ts";
+import { checkDefinitionFields, replaceDefinition, specFromPlist, UnsupportedServiceDefinition, type DefinitionUpdate } from "./serviceDefinition.ts";
 
 // The LaunchAgent that keeps the bridge running on a Mac (service.ts): started at login,
 // started again if it stops, its output in a log under ~/Library/Logs. It runs in the
@@ -136,6 +137,15 @@ export class LaunchAgent implements Service {
   async restart(): Promise<void> {
     const result = await this.system.run(this.launchctl, ["kickstart", "-k", this.target], { timeoutMs: 30_000 });
     if (result.code !== 0) throw new Error(`launchctl kickstart failed: ${(result.stderr || result.stdout).trim()}`);
+  }
+
+  /** Do not unload a job from its own updater. launchd reads the new plist at its next bootstrap. */
+  refreshDefinition(): Promise<DefinitionUpdate> {
+    if (!existsSync(this.file)) throw new UnsupportedServiceDefinition("the service definition is missing");
+    const before = readFileSync(this.file, "utf8");
+    const next = plist(specFromPlist(before, this.label));
+    checkDefinitionFields(before, next, "plist");
+    return replaceDefinition(this.file, next);
   }
 
   /** Stops it and unloads it (`launchctl bootout`); the plist stays. */
