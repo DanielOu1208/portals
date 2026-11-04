@@ -86,6 +86,8 @@ export interface ClaudeProviderOptions {
   managedSettings?: string;
   /** Bridge-owned UUID membership for exact message forks across restarts. */
   checkpointPath?: string;
+  /** Read-only version probe for an exact cold-query launch target (tests). */
+  launchVersion?: (path: string, env: Record<string, string | undefined>) => Promise<string | null>;
   /** What `claude agents --json` lists: the sessions running on the Mac now, the bridge's own left out. */
   agents?: () => Promise<unknown>;
   /** The clock, in milliseconds. */
@@ -254,6 +256,7 @@ export class ClaudeProvider implements Provider, ClaudeHost {
     return threadModeFor(this.settingsMode);
   }
   readonly claudePath: string;
+  readonly launchVersion: (path: string) => Promise<string | null>;
   readonly env: Record<string, string | undefined>;
   /** What Claude Code's settings files put in its environment. */
   private readonly settingsEnv: ClaudeSettingsEnv;
@@ -310,6 +313,7 @@ export class ClaudeProvider implements Provider, ClaudeHost {
     const env = childEnvironment(options.env ?? process.env, { clientApp: "portals-bridge", apiKey: options.settings.apiKey, toolSummaries: options.settings.toolSummaries !== false });
     this.portals = options.settings.portals;
     this.env = this.portals ? onPath(env, this.portals.bin) : env;
+    this.launchVersion = (path) => options.launchVersion ? options.launchVersion(path, this.env) : claudeVersion(path, this.env, true);
     this.settingsEnv = new ClaudeSettingsEnv(this.env, options.managedSettings);
     this.query = options.query ?? ((prompt, queryOptions) => sdkQuery({ prompt, options: queryOptions }) as QueryLike);
     this.files = options.files ?? sdkSessionFiles;

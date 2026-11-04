@@ -107,17 +107,28 @@ public struct MessageCheckpoint: Codable, Hashable, Sendable {
     public var id: String
     public var canFork: Bool
     public var canEdit: Bool
+    public var canUndoFiles: Bool
 
-    public init(id: String, canFork: Bool, canEdit: Bool) {
+    public init(id: String, canFork: Bool, canEdit: Bool, canUndoFiles: Bool = false) {
         self.id = id
         self.canFork = canFork
         self.canEdit = canEdit
+        self.canUndoFiles = canUndoFiles
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        canFork = try values.decode(Bool.self, forKey: .canFork)
+        canEdit = try values.decode(Bool.self, forKey: .canEdit)
+        canUndoFiles = try values.decodeIfPresent(Bool.self, forKey: .canUndoFiles) ?? false
     }
 
     enum CodingKeys: String, CodingKey {
         case id
         case canFork = "can_fork"
         case canEdit = "can_edit"
+        case canUndoFiles = "can_undo_files"
     }
 }
 

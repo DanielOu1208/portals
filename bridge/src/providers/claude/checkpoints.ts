@@ -10,6 +10,8 @@ interface TurnCheckpoint {
   sent: string[];
   /** Last native chain UUID seen before the completed result, when the SDK exposed it. */
   after?: string;
+  /** Only new turns run with native file checkpointing may offer file undo. */
+  files?: boolean;
 }
 
 type Entry = Record<string, any>;
@@ -48,8 +50,8 @@ export class ClaudeCheckpoints {
     }
   }
 
-  sent(session: string, uuid: string, steering: boolean): void {
-    if (!steering) this.running.set(session, { session, opener: uuid, sent: [uuid] });
+  sent(session: string, uuid: string, steering: boolean, files = false): void {
+    if (!steering) this.running.set(session, { session, opener: uuid, sent: [uuid], ...(files ? { files: true } : {}) });
     else this.running.get(session)?.sent.push(uuid);
   }
 
@@ -70,10 +72,11 @@ export class ClaudeCheckpoints {
 
   abandon(session: string): void { this.running.delete(session); }
 
-  finish(session: string): MessageCheckpoint | undefined {
+  finish(session: string, fileUndoSupported = true): MessageCheckpoint | undefined {
     const turn = this.running.get(session);
     this.running.delete(session);
     if (!turn) return;
+    if (!fileUndoSupported) turn.files = false;
     this.keep(turn);
     try {
       this.save();
@@ -81,7 +84,7 @@ export class ClaudeCheckpoints {
       this.turns.get(session)?.delete(turn.opener);
       throw error;
     }
-    return { id: turn.opener, can_fork: turn.after !== undefined, can_edit: true };
+    return { id: turn.opener, can_fork: turn.after !== undefined, can_edit: true, ...(turn.files === true && turn.after ? { can_undo_files: true } : {}) };
   }
 
   /** A completed bridge turn, with its exact inclusive native tail resolved from history. */
@@ -90,7 +93,36 @@ export class ClaudeCheckpoints {
   }
 
   forSession(session: string, messages: readonly unknown[]): ReadonlyMap<string, MessageCheckpoint> {
-    return new Map([...this.boundaries(session, messages)].map(([id, boundary]) => [id, { id, can_fork: boundary.canFork, can_edit: true }]));
+    const boundaries = this.boundaries(session, messages);
+    const latest = this.latest(session, messages, boundaries);
+    return new Map([...boundaries].map(([id, boundary]) => [id, {
+      id, can_fork: boundary.canFork, can_edit: true,
+      ...(id === latest && this.turns.get(session)?.get(id)?.files === true ? { can_undo_files: true } : {}),
+    }]));
+  }
+
+  /** Exact latest completed bridge/native run; all accepted steering inputs must be present. */
+  canUndoFiles(session: string, opener: string, messages: readonly unknown[]): boolean {
+    return this.turns.get(session)?.get(opener)?.files === true && this.isLatest(session, opener, messages);
+  }
+
+  isLatest(session: string, opener: string, messages: readonly unknown[]): boolean {
+    return this.latest(session, messages, this.boundaries(session, messages)) === opener;
+  }
+
+  /** Persist consumption before the native destructive call, including ambiguous failures. */
+  consumeFiles(session: string, opener: string): void {
+    const turn = this.turns.get(session)?.get(opener);
+    if (!turn || turn.files !== true) throw new Error("This file undo checkpoint has already been used or is unavailable.");
+    turn.files = false;
+    this.save();
+  }
+
+  private latest(session: string, messages: readonly unknown[], boundaries: ReadonlyMap<string, { after: number; canFork: boolean }>): string | undefined {
+    if (this.running.has(session)) return;
+    const last = messages.findLastIndex((raw) => !(raw as Entry)?.parent_tool_use_id);
+    for (const [opener, boundary] of boundaries) if (boundary.canFork && boundary.after === last) return opener;
+    return undefined;
   }
 
   /** One pass over this session's native chain, including its tool-result tails. */

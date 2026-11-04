@@ -104,8 +104,8 @@ enum HermesEventMapper {
             return [.turnStarted]
 
         case "message.checkpoint":
-            guard features.contains(BridgeWire.Feature.messageFork),
-                  let checkpoint = BridgeWire.messageCheckpoint(payload["checkpoint"]) else { return [] }
+            guard (features.contains(BridgeWire.Feature.messageFork) || features.contains(BridgeWire.Feature.turnFileUndo)),
+                  let checkpoint = BridgeWire.messageCheckpoint(payload["checkpoint"], features: features) else { return [] }
             return [.messageCheckpoint(checkpoint)]
 
         case "message.steered":

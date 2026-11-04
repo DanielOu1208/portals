@@ -36,6 +36,7 @@ import { EventLog, type LoggedEvent } from "./eventLog.ts";
 import { failedKept, withFailed, type FailedMessage } from "./failed.ts";
 import { filesPerMessage, saveAttachment, withFiles } from "./files.ts";
 import { withMentions } from "./mentions.ts";
+import { FileUndo, FileUndoRefused } from "./fileUndo.ts";
 import { withKeptDiffs, type DiffStore } from "./keptDiffs.ts";
 import { lastPreview, previewOf } from "./preview.ts";
 import { applyChanges, type Registry, type ThreadChanges, type ThreadRecord } from "./registry.ts";
@@ -144,6 +145,7 @@ export interface SubmitOptions {
 }
 
 export interface SessionOptions {
+  folderLocked?: () => boolean;
   modeOptions?: ModeOption[];
   /** How many events the replay log keeps. */
   logCapacity?: number;
@@ -410,6 +412,8 @@ export class Session {
   /** Let go of for good (`retire`): it starts nothing and writes nothing again. */
   private retired = false;
   private checkpointing = false;
+  private readonly fileUndo = new FileUndo();
+  private readonly folderLocked: (() => boolean) | undefined;
   /** Closing with the bridge: a turn that ends now opens no turn for a message waiting, which waits on disk for the next start. */
   private closing = false;
   private readonly waiting: WaitingStore | undefined;
@@ -423,6 +427,7 @@ export class Session {
 
   constructor(record: ThreadRecord, registry: Registry, options: SessionOptions = {}) {
     this.record = record;
+    this.folderLocked = options.folderLocked;
     this.registry = registry;
     this.listener = options.listener;
     this.modeOptions = options.modeOptions;
@@ -1005,7 +1010,7 @@ export class Session {
 
   submit(text: string, options: SubmitOptions = {}): SubmitOutcome {
     if (this.retired) throw new Error("This thread is no longer on the bridge's list.");
-    if (this.checkpointing) throw new DeskRefused("Wait for this thread's fork to finish before sending a message.");
+    if (this.checkpointing || this.folderLocked?.()) throw new DeskRefused("Wait for the current thread action to finish before sending a message.");
     const fleet = options.fleet === true;
     // A message through the fleet takes nothing a device attached.
     const attached = fleet ? undefined : this.attached.get(options.by);
@@ -1565,7 +1570,7 @@ export class Session {
    * made and lose it (Codex's review of a6e4bd2c).
    */
   async setting<T>(work: () => Promise<T>): Promise<T> {
-    if (this.checkpointing) throw new DeskRefused("Wait for this thread's fork to finish before changing it.");
+    if (this.checkpointing) throw new DeskRefused("Wait for the current thread action to finish before changing it.");
     this.settingsOnTheWay += 1;
     try {
       return await work();
@@ -1576,14 +1581,56 @@ export class Session {
 
   /** Hold an idle source while its native conversation is copied. */
   async forkAt<T>(checkpointId: string, before: boolean, work: () => Promise<T>): Promise<T> {
-    if (this.retired || this.isReadOnly) throw new DeskRefused("Continue this thread before forking it.");
-    if (!this.atRest || this.provider?.hasBackgroundWork?.()) throw new DeskRefused("Wait until this thread has finished before forking it.");
-    const checkpoint = this.messages.flatMap((message) => message.role === "user" && message.checkpoint ? [message.checkpoint] : []).find((point) => point.id === checkpointId);
-    if (!checkpoint || !(before ? checkpoint.can_edit : checkpoint.can_fork)) throw new DeskRefused("This message cannot be forked. Open the thread again to refresh its history.");
+    return this.checkpointWork(async () => {
+      const checkpoint = this.checkpoint(checkpointId);
+      if (!checkpoint || !(before ? checkpoint.can_edit : checkpoint.can_fork)) throw new DeskRefused("This message cannot be forked. Open the thread again to refresh its history.");
+      return work();
+    });
+  }
+
+  async previewFileUndo(owner: Peer, checkpointId: string) {
+    return this.checkpointWork(async () => {
+      if (!this.checkpoint(checkpointId)?.can_undo_files) throw new FileUndoRefused("This turn has no file checkpoint available.");
+      const provider = this.requireProvider();
+      if (!provider.rewindFiles) throw new FileUndoRefused("This agent does not support file undo.");
+      return this.fileUndo.preview(owner, checkpointId, this.record.cwd, (id, dryRun) => provider.rewindFiles!(id, dryRun));
+    });
+  }
+
+  async undoFiles(owner: Peer, previewId: string, afterReply: (action: () => void) => void) {
+    return this.checkpointWork(async () => {
+      const provider = this.requireProvider();
+      if (!provider.rewindFiles) throw new FileUndoRefused("This agent does not support file undo.");
+      let attempted = false;
+      try {
+        return await this.fileUndo.undo(owner, previewId, this.record.cwd, (id, dryRun) => {
+          if (!attempted && !this.checkpoint(id)?.can_undo_files) throw new FileUndoRefused("This turn's file checkpoint is no longer available.");
+          if (!dryRun) attempted = true;
+          return provider.rewindFiles!(id, dryRun);
+        });
+      } catch (error) {
+        if (attempted) throw new FileUndoRefused("The restore could not be confirmed complete. Some files may have changed. Review the folder before continuing.");
+        throw error;
+      } finally {
+        if (attempted) {
+          for (const message of this.transcript.messages) if (message.role === "user" && message.checkpoint?.can_undo_files) message.checkpoint = { ...message.checkpoint, can_undo_files: false };
+          afterReply(() => this.invalidate());
+        }
+      }
+    });
+  }
+
+  private checkpoint(id: string): MessageCheckpoint | undefined {
+    return this.messages.flatMap((message) => message.role === "user" && message.checkpoint ? [message.checkpoint] : []).find((point) => point.id === id);
+  }
+
+  private async checkpointWork<T>(work: () => Promise<T>): Promise<T> {
+    if (this.retired || this.isReadOnly) throw new DeskRefused("Continue this thread before using this action.");
+    if (!this.atRest || this.provider?.hasBackgroundWork?.()) throw new DeskRefused("Wait until this thread has finished before using this action.");
     this.checkpointing = true;
     try {
-      if (await this.provider?.stopping?.()) throw new DeskRefused("Wait until the agent has stopped before forking this thread.");
-      if (this.retired || this.closing || this.isAtWork || this.provider?.hasBackgroundWork?.()) throw new DeskRefused("Wait until this thread has finished before forking it.");
+      if (await this.provider?.stopping?.()) throw new DeskRefused("Wait until the agent has stopped before using this action.");
+      if (this.retired || this.closing || this.isAtWork || this.provider?.hasBackgroundWork?.()) throw new DeskRefused("Wait until this thread has finished before using this action.");
       return await work();
     } finally {
       this.checkpointing = false;
@@ -1934,7 +1981,7 @@ export class Session {
   private startNext(): void {
     try {
       const next = this.queue[0];
-      if (!next || this.closing) return;
+      if (!next || this.closing || this.folderLocked?.()) return;
       if (next.failure) {
         this.queue.shift();
         this.failed = [...this.failed, { text: storedUserText(next.prompt), error: next.failure, at: Date.now() / 1000, requestId: next.failedRequestId, messageID: next.messageID }].slice(-failedKept);
@@ -1991,6 +2038,10 @@ export class Session {
     } finally {
       this.watchReach();
     }
+  }
+
+  folderAvailable(): void {
+    if (!this.running && !this.retired && !this.closing) this.startNext();
   }
 
   /**
@@ -2209,7 +2260,7 @@ export class Session {
     if (this.retired) return;
     const prompt: Prompt = { text: note, images: [] };
     if (cardAnswer !== undefined) this.cardAnswerOf.set(prompt, cardAnswer);
-    if (this.closing) {
+    if (this.closing || this.folderLocked?.()) {
       // The bridge is closing: it is not handed to an agent being let go of, but waits on
       // disk with the others, for the next start (`closeSoon`).
       this.queue.push({ id: String(++this.queued), prompt });

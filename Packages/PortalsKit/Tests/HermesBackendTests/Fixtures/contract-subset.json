@@ -163,7 +163,8 @@
    "git_status",
    "usage_read",
    "open_on_host",
-   "message_fork"
+   "message_fork",
+   "turn_file_undo"
   ],
   "events": {
    "mcp.auth": {
@@ -540,6 +541,21 @@
      "session_id",
      "checkpoint_id",
      "before"
+    ]
+   },
+   "session.files.preview": {
+    "feature": "turn_file_undo",
+    "params": [
+     "session_id",
+     "checkpoint_id"
+    ]
+   },
+   "session.files.undo": {
+    "feature": "turn_file_undo",
+    "params": [
+     "session_id",
+     "preview_id",
+     "confirmed"
     ]
    }
   }

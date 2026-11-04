@@ -23,6 +23,7 @@ public enum BridgeWire {
         public static let deskSessions = "desk_sessions"
         /// Message-level forks with provider-native positions.
         public static let messageFork = "message_fork"
+        public static let turnFileUndo = "turn_file_undo"
         /// `model.options` carries `model_names`.
         public static let modelNames = "model_names"
         /// The `session.compacted` event and the stored `compaction` message: where the
@@ -227,6 +228,8 @@ public enum BridgeWire {
         public static let deskList = "desk.list"
         public static let sessionAdopt = "session.adopt"
         public static let sessionFork = "session.fork"
+        public static let sessionFilesPreview = "session.files.preview"
+        public static let sessionFilesUndo = "session.files.undo"
         public static let sessionRename = "session.rename"
         public static let sessionLeave = "session.leave"
         public static let sessionsActivity = "sessions.activity"
@@ -1368,11 +1371,12 @@ public enum BridgeWire {
         }
     }
 
-    static func messageCheckpoint(_ value: JSONValue?) -> MessageCheckpoint? {
+    static func messageCheckpoint(_ value: JSONValue?, features: Set<String> = []) -> MessageCheckpoint? {
         guard let value, let id = value["id"]?.stringValue, !id.isEmpty,
               let canFork = value["can_fork"]?.boolValue,
               let canEdit = value["can_edit"]?.boolValue else { return nil }
-        return MessageCheckpoint(id: id, canFork: canFork, canEdit: canEdit)
+        return MessageCheckpoint(id: id, canFork: canFork, canEdit: canEdit,
+                                 canUndoFiles: features.contains(Feature.turnFileUndo) && value["can_undo_files"]?.boolValue == true)
     }
 
     // MARK: Compaction

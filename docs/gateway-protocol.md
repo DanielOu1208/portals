@@ -544,6 +544,41 @@ files; forking does not restore older file contents. Clients send this call only
 hosts advertising `message_fork`. Unsupported agents, ambiguous native boundaries,
 active work and stale checkpoint ids are refused.
 
+With feature `turn_file_undo`, a checkpoint may also carry `can_undo_files: true`.
+This is offered only for the latest successfully completed Claude run with native
+file backups. Existing sessions without backups and copied fork histories do not
+gain them retroactively. Preview requires stable Claude Code 2.1.318 or newer.
+A live query proves this with its own version report. For a newly resumed idle
+query, which reports no version before a turn, the host verifies the exact native
+executable and launches that query from its resolved path, checking its identity
+again before rewind calls. Launcher scripts receive no such fallback. An explicit
+unknown or older query report overrides any launch proof and refuses rewind.
+
+`session.files.preview` takes `{session_id, checkpoint_id}` on a followed writable
+thread and returns `{preview_id, files, insertions?, deletions?, expires_at}`. The
+files are absolute host paths, and `expires_at` is Unix seconds. It is read-only.
+The client shows every listed file, explains that current tracked edits will be
+overwritten while conversation history stays, and obtains explicit destructive
+confirmation. It then sends `session.files.undo` with
+`{session_id, preview_id, confirmed: true}` on the same connection within one minute.
+The preview is single-use, including when revalidation or native restoration fails.
+
+The host checks the native preview again and compares file contents and identity
+with the reviewed state before restoring. Files outside the thread's folder,
+symlinks, hardlinks, special files, more than 100 files, individual files over
+16 MiB, or combined files over 64 MiB are refused. Known active threads with
+overlapping folders must finish first; new messages into those folders are refused until
+the file action ends. Other tools outside Portals must be stopped by the person.
+Only native tracked changes are restored; shell edits and untracked files may remain.
+
+The result is `{restored, skipped_links}`. `restored: true` means the native restore
+reported success without skipped links and its postflight preview explicitly
+reported no remaining tracked differences. A false result or a lost/error response
+may follow partial changes: the client asks the person to inspect the folder and
+never automatically retries. Once attempted, the checkpoint loses undo eligibility.
+The host invalidates the changed capability after replying, so other devices refresh
+their history; legacy followers reconnect as for other session invalidations.
+
 Each message has `role` and `timestamp` (Unix seconds, may be fractional; a missing one
 takes the previous message's). Other roles are ignored. Every `user` message starts a turn;
 messages before the first one make a turn of their own; turns with nothing to show are

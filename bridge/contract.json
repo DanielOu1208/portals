@@ -855,6 +855,58 @@
       ]
     },
     {
+      "name": "session.files.preview",
+      "summary": "Previews native tracked files restored to before the latest completed turn, with a single-use confirmation lasting one minute (feature turn_file_undo). Conversation is retained.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "session_id": {
+                "type": "string"
+              },
+              "checkpoint_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_id",
+              "checkpoint_id"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "session.files.undo",
+      "summary": "Restores the reviewed native file checkpoint only with confirmed:true and its same-connection unexpired preview. Rechecks files and the native preview before changing anything; reports incomplete restoration honestly (feature turn_file_undo).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "session_id": {
+                "type": "string"
+              },
+              "preview_id": {
+                "type": "string"
+              },
+              "confirmed": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "session_id",
+              "preview_id",
+              "confirmed"
+            ]
+          }
+        }
+      ]
+    },
+    {
       "name": "session.fork",
       "summary": "Creates and follows a new thread through a completed turn, or before it for editing (feature message_fork). Uses the same folder and current files; leaves the source conversation unchanged.",
       "params": [
@@ -1997,6 +2049,7 @@
     }
   ],
   "x-bridge-features": [
+    "turn_file_undo",
     "message_fork",
     "mcp_auth",
     "folders",
