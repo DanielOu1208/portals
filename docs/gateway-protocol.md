@@ -1408,7 +1408,7 @@ under a new id, the way Cursor keeps the sessions its ACP opens, and Cursor open
 there and then (`session/load`): what it sends again of the conversation is the thread's
 history, its title the chat's (or the first message's first line). One Cursor cannot open
 is refused, with what Cursor said, and its copy removed. When the chat's store keeps Cursor's
-Run Everything (a chat run with `--force`), so does the copy, and Cursor then searches the
+Run Everything (a chat run with `--force`, or under Cursor's own Run Everything setting), so does the copy, and Cursor then searches the
 web and fetches pages for the thread without asking: the thread says so in a `warn`
 `status.update` as its first turn starts.
 

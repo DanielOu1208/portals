@@ -321,8 +321,9 @@ sign-in.
 - **Chats from Cursor's terminal** are listed with the sessions from your terminal, and can
   only be forked: Cursor opens a copy of the chat in the new thread, which shows the
   conversation as Cursor sends it again. The chat in the terminal is left as it was. A
-  chat run with `--force` keeps Run Everything in the copy too, so web searches there go
-  on without asking; the thread says so with its first message.
+  chat Cursor ran with Run Everything (`--force`, or Cursor's own setting) keeps it in the
+  copy too, so web searches there go on without asking; the thread says so with its first
+  message.
 - There is no context meter or `/compact`: Cursor tells of no tokens. Cursor keeps every
   session under `~/.cursor/acp-sessions/`, and nothing deletes them.
 
