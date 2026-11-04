@@ -57,6 +57,30 @@ test("Droid extra request rejects when sending fails", async () => {
   await assert.rejects(new Transport().request("droid.list_commands"), /Send failed/);
 });
 
+test("Droid's list of background processes, which the SDK drops, is told with its session; the SDK still gets the frame", async (t) => {
+  let receive!: (message: Message) => void;
+  const original = ProcessTransport.prototype.onMessage;
+  ProcessTransport.prototype.onMessage = function (handler) { receive = handler; };
+  t.after(() => { ProcessTransport.prototype.onMessage = original; });
+  class Transport extends DroidTransport { override get isConnected() { return true; } }
+  const transport = new Transport();
+  t.after(() => transport.close());
+  const sdk: Message[] = [];
+  transport.onMessage((message) => sdk.push(message));
+  const lists: [string, unknown][] = [];
+  const processes = [{ id: "toolu_1", pid: 73152, command: "sleep 12; echo done", startedAtMs: 1793763090554, toolUseId: "toolu_1" }];
+  const changed = (sessionId: unknown, list: unknown) => frame({ type: "notification", method: "droid.session_notification",
+    params: { ...(sessionId === undefined ? {} : { sessionId }), notification: { type: "background_processes_changed", processes: list } } });
+  receive(changed("session", processes));
+  transport.backgroundProcesses = (session, list) => lists.push([session, list]);
+  receive(changed("session", processes));
+  receive(changed(undefined, processes));
+  receive(frame({ type: "notification", method: "droid.session_notification", params: { sessionId: "session", notification: { type: "tool_progress_update", processes } } }));
+  receive(changed("session", []));
+  assert.deepEqual(lists, [["session", processes], ["session", []]]);
+  assert.equal(sdk.length, 5);
+});
+
 async function until(check: () => boolean): Promise<void> {
   for (let i = 0; i < 200 && !check(); i++) await new Promise((resolve) => setTimeout(resolve, 5));
   assert.ok(check(), "timed out waiting for the condition");

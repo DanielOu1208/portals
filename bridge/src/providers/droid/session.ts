@@ -23,6 +23,7 @@ import { DroidStream } from "./stream.ts";
 import { tokenTotal } from "./activity.ts";
 import { DroidQueue } from "./queue.ts";
 import { DroidWork } from "./work.ts";
+import { backgroundProcesses, DroidBackground } from "./background.ts";
 import { DroidControls } from "./controls.ts";
 import { DroidMcpAuth } from "./auth.ts";
 import type { McpAuthAction, McpAuthCard } from "../mcpAuth.ts";
@@ -155,6 +156,8 @@ export class DroidSession implements ProviderSession {
   private readonly queue: DroidQueue;
   private readonly permissions: DroidPermissions;
   private readonly work: DroidWork;
+  /** The commands Droid runs in the background, as its footer lists them: rows of their own, each with a Stop. */
+  private readonly background: DroidBackground;
   private autonomousWorking = false;
   private autonomousAt = 0;
   /** Background work of the thread's own that ended between turns: the next turn Droid begins by itself answers it (`beginOwn`). */
@@ -206,6 +209,7 @@ export class DroidSession implements ProviderSession {
     this.host = host;
     this.state = state;
     this.title = options.title ?? null;
+    this.background = new DroidBackground((event) => this.sink.emit(event), { now: host.now, atWork: () => this.droidAtWork || !!this.turn });
     this.work = new DroidWork(() => this.state?.session, (event) => {
       if (this.state) {
         this.state.subagents = this.work.snapshot();
@@ -218,7 +222,7 @@ export class DroidSession implements ProviderSession {
       this.host.pool.touch(this);
       this.sink.emit(event);
       queueMicrotask(() => this.checkHandoff());
-    }, state?.subagents, { holdMs: host.backgroundHoldMs, now: host.now });
+    }, state?.subagents, { holdMs: host.backgroundHoldMs, now: host.now, commandEnded: (id, status) => this.background.finished(id, status) });
     if (state?.subagents?.some((child) => child.status === "running")) {
       state.subagents = this.work.snapshot();
       this.save();
@@ -486,6 +490,10 @@ export class DroidSession implements ProviderSession {
     // Droid's pick lists, as its questions: on the turn's card, while one runs.
     handle.onPickOptions?.((params) => this.turn && !this.turn.ended
       ? pickOptions(params, this.sink, this.turn.abort.signal) : Promise.resolve({ cancelled: true, selectedIds: [] }));
+    handle.onBackgroundProcesses?.((session, processes) => {
+      const listed = backgroundProcesses(processes);
+      if (this.handle === handle && session === this.state?.session && listed) this.background.list(listed);
+    });
     const offNotifications = handle.onNotification((raw) => {
       if (this.handle !== handle) return;
       const params = raw.params;
@@ -1198,6 +1206,16 @@ export class DroidSession implements ProviderSession {
     return true;
   }
 
+  /** Stops one command Droid runs in the background (`DroidBackground`), as its footer's Stop does; the turn, if any, goes on. */
+  async stopSubagent(id: string): Promise<boolean> {
+    const target = this.background.target(id);
+    const handle = this.handle;
+    if (!target || !handle?.killBackgroundProcess || !handle.connected()) return false;
+    const killed = await handle.killBackgroundProcess(target);
+    if (killed && this.handle === handle) this.background.stopping(id);
+    return killed;
+  }
+
   async enqueue(prompt: Prompt, requestId: string): Promise<boolean> {
     if (!this.turn?.streaming || this.turn.ended || this.turn.interrupted || !this.handle?.connected()) return false;
     const turn = this.turn, handle = this.handle;
@@ -1390,6 +1408,7 @@ export class DroidSession implements ProviderSession {
     this.lifetime = null;
     this.autonomousWorking = this.droidAtWork = false;
     this.work.stopped(trackingEnded);
+    this.background.close();
     this.host.pool.cooled(this);
     this.ending = this.ending.then(async () => {
       await handle?.close().catch((error: Error) => log.warn("could not close Droid", { error: error.message }));

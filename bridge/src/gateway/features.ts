@@ -251,13 +251,14 @@
 //   since, are their card again for the first device that keeps such cards and resumes
 //   the thread.
 // - `background_commands`: a command an agent left running in the background after its
-//   turn moved on (Claude Code's `run_in_background`, Codex's background terminals) is a
-//   `subagent.*` entry of `kind` `command`: `goal` what it runs, `summary` its last line
-//   of output, `output` the end of its output so far (at most 8 KB and 200 lines, with
-//   `output_truncated` when its start was left out), `can_stop` where its agent can stop
-//   it; at most one `subagent.progress` a second for it, of which the replay log keeps
-//   the latest only. Running commands' output also comes as `tool.progress` from Codex,
-//   Pi and Cursor, as from Droid (no feature: that event is older than the list).
+//   turn moved on (Claude Code's `run_in_background`, Codex's background terminals, Droid's
+//   background commands) is a `subagent.*` entry of `kind` `command`: `goal` what it
+//   runs, `summary` its last line of output, `output` the end of its output so far (at
+//   most 8 KB and 200 lines, with `output_truncated` when its start was left out),
+//   `can_stop` where its agent can stop it; at most one `subagent.progress` a second for
+//   it, of which the replay log keeps the latest only. Running commands' output also comes
+//   as `tool.progress` from Codex, Pi and Cursor, as from Droid (no feature: that event is
+//   older than the list).
 // - `net`: the Macs and devices that pair once and reach every Mac (src/net/net.ts,
 //   docs/net-plan.md). Every bridge keeps a copy of the member list, which `net.list`
 //   gives (without the tokens' hashes) and `net.sync` copies between the Macs. A member
