@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PiProvider } from "../src/providers/pi/provider.ts";
 
@@ -33,7 +33,7 @@ const env: NodeJS.ProcessEnv = {
   ...original,
   PI_LIVE_EXECUTABLE: pi,
   PI_LIVE_PIDS: join(run, "pids"),
-  PI_CODING_AGENT_DIR: original.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"),
+  PI_CODING_AGENT_DIR: original.PI_CODING_AGENT_DIR ?? join(original.HOME!, ".pi", "agent"),
   PI_CODING_AGENT_SESSION_DIR: join(run, "sessions"),
 };
 delete env.PORTALS_THREAD;
