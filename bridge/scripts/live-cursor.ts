@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { crc32, deflateSync } from "node:zlib";
 import { CursorProvider } from "../src/providers/cursor/provider.ts";
+import { projectName } from "../src/providers/cursor/folders.ts";
 import { modelAt } from "../src/providers/cursor/models.ts";
 import { realHome } from "../test/environment.ts";
 import { isEvent, startTestBridge, TestClient } from "../test/helpers.ts";
@@ -188,7 +189,8 @@ try {
 
   // 12. Folders.
   const folders = (await client.call("folders.list")).folders.map((folder: any) => folder.path);
-  check("Cursor's own folders offered", folders.some((path: string) => path.includes("cursor-roblox") || path.includes("aericode")), `${folders.length} folders`);
+  const known = existsSync(join(realHome, ".cursor/projects")) ? new Set(readdirSync(join(realHome, ".cursor/projects"))) : new Set<string>();
+  check("Cursor's own folders offered", folders.some((path: string) => known.has(projectName(path))), `${folders.length} folders`);
 } catch (error) {
   check("the run", false, (error as Error).stack ?? String(error));
 } finally {
