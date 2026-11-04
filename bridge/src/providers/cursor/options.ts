@@ -135,7 +135,7 @@ export const cursorModeMeanings: Partial<Record<Exclude<ThreadMode, "default">, 
  * 2026.10.22), and from then on searches the web and fetches pages for it without asking,
  * on a Cursor not run with `--force` too, after a restart, and in a fork, which copies the
  * store. Commands and edits it decides by how its process was started, so they follow the
- * thread's mode. The store is Cursor's, and left alone (2026-11-03: "tell me is enough for cursor").
+ * thread's mode. The store is Cursor's, and left alone: saying so is enough.
  */
 export const leftFullAccessText =
   "Cursor keeps part of Full access for this thread: it will go on searching the web and fetching pages without asking, also after a restart and in forks of this thread.";
