@@ -1,7 +1,7 @@
 [
  {
   "type": "tool.start",
-  "id": "call_lkODYhwTdRE1dLkhYxmzYrUF|fc_05c32b1fe0b173d3016accbafc6a4c87d0b07d00b6ccfe333f",
+  "id": "call_ohJTHA3aUhc9D5HzK8PPNepd|fc_0d7a9cc83bde1a1a016aeb0335fd3087d0a596366149cd826b",
   "name": "terminal",
   "args": {
    "command": "sleep 30"
@@ -9,7 +9,7 @@
  },
  {
   "type": "tool.end",
-  "id": "call_lkODYhwTdRE1dLkhYxmzYrUF|fc_05c32b1fe0b173d3016accbafc6a4c87d0b07d00b6ccfe333f",
+  "id": "call_ohJTHA3aUhc9D5HzK8PPNepd|fc_0d7a9cc83bde1a1a016aeb0335fd3087d0a596366149cd826b",
   "name": "terminal",
   "args": {
    "command": "sleep 30"
@@ -18,13 +18,13 @@
    "status": "error",
    "error": "Stopped before it finished."
   },
-  "durationSeconds": 0.002
+  "durationSeconds": 0.01
  },
  {
   "type": "turn.end",
   "status": "interrupted",
   "spent": {
-   "tokens": 1201
+   "tokens": 1183
   }
  }
 ]

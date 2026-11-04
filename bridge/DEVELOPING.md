@@ -233,7 +233,7 @@ off. The tests of Pi's sessions from the desk (`test/pi-desk.test.ts`) write the
 session files into the stand-in's folder and say themselves in which folders a Pi "runs
 in a terminal"; the provider a test builds with `piProvider` never asks the Mac for its
 processes. To record again (Pi changes its records often; these were recorded on
-1.1.0):
+1.5.0):
 
 ```sh
 node scripts/record-pi.ts                # or name scenarios: plain tools stop steer …
