@@ -129,6 +129,23 @@ test("two Droid commands under one id are two rows, neither stopped by Droid's i
   assert.equal(r.background.target("call_0#10"), "call_0");
 });
 
+test("two Droid commands under one id that left the list before Droid's word take its words in the order they left", () => {
+  const r = rig({ atWork: () => true, waitMs: 60_000, holdMs: 60_000 });
+  r.background.list([listed("call_0", 10), listed("call_0", 11, "npm test")]);
+  // The newer leaves first, the older next, both while a foreground tool runs: Droid's
+  // words on them come after that tool, in the order they ended.
+  r.background.list([listed("call_0", 10)]);
+  r.background.list([]);
+  assert.equal(r.last("call_0#10")!.status, "running");
+  assert.equal(r.last("call_0#11")!.status, "running");
+  r.background.finished("call_0", "failed");
+  assert.equal(r.last("call_0#11")!.status, "failed", "the first word is the one that left first");
+  assert.equal(r.last("call_0#10")!.status, "running");
+  r.background.finished("call_0", "completed");
+  assert.equal(r.last("call_0#10")!.status, "completed");
+  r.background.close();
+});
+
 test("a Droid command stopped from Portals ends as stopped; close lets go of those still running", () => {
   const r = rig();
   r.background.list([listed("toolu_1", 1), listed("toolu_2", 2)]);

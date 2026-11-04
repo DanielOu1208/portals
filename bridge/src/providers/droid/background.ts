@@ -52,6 +52,8 @@ interface Row {
   /** Since it left Droid's list, waiting for Droid's word on it (`waitMs`). */
   timer?: NodeJS.Timeout;
   leftAt?: number;
+  /** Its place in the order rows left Droid's list, which is the order Droid tells their ends in. */
+  leftOrder?: number;
 }
 
 export class DroidBackground {
@@ -62,6 +64,8 @@ export class DroidBackground {
   private readonly told: { droid: string; status: Exclude<SubagentStatus, "running">; at: number }[] = [];
   /** The Droid ids listed more than once at the last list: none of those can be stopped by itself. */
   private shared = new Set<string>();
+  /** The next row to leave Droid's list gets this place (`Row.leftOrder`). */
+  private leftCount = 0;
   private readonly now: () => number;
   private readonly wait: number;
   private readonly hold: number;
@@ -100,10 +104,13 @@ export class DroidBackground {
 
   /** Droid told how a command under its id `droid` ended (its completion): the row of the one that left its list is ended so, or the next to. */
   finished(droid: string, status: Exclude<SubagentStatus, "running">): void {
-    // Of those that left the list waiting for it, the oldest.
+    // Of those that left the list waiting for it, the one that left first: Droid tells
+    // their ends in the order they ended, which need not be the order they started.
+    let first: [number, Row] | undefined;
     for (const [pid, row] of this.rows) {
-      if (row.droid === droid && row.timer) { this.end(pid, row, status); return; }
+      if (row.droid === droid && row.timer && (!first || row.leftOrder! < first[1].leftOrder!)) first = [pid, row];
     }
+    if (first) { this.end(first[0], first[1], status); return; }
     // Droid tells it just before its list (CLI 1.3): kept for the one that leaves it next.
     const now = this.now();
     while (this.told.length > 0 && (now - this.told[0].at > this.hold || this.told.length >= 64)) this.told.shift();
@@ -143,6 +150,7 @@ export class DroidBackground {
       return;
     }
     row.leftAt = now;
+    row.leftOrder = this.leftCount++;
     this.commands.stoppable(row.id, false);
     this.await(pid, row);
   }
