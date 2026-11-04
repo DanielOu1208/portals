@@ -526,6 +526,13 @@ export interface ProviderSession {
    */
   stopSubagent?(id: string): Promise<boolean>;
   /**
+   * A subagent's own conversation (one reported as `subagent` of kind `agent`), oldest
+   * first, in the shape of `history()`: what it was asked, where its agent keeps that,
+   * its tool calls and what it said. Read each time it is asked for, so one still at work
+   * gives what it has done so far. Agents that keep none need not have it.
+   */
+  subagentMessages?(id: string): Promise<StoredMessage[]>;
+  /**
    * Read once, with `history()`: the subagents and workflows the stored conversation
    * tells of, all ended, each with the turn that started it: 0 for the conversation's
    * last turn, -1 for the one before it, and so on.

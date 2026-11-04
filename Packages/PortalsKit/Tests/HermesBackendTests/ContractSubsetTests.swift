@@ -142,7 +142,14 @@ import Testing
             BridgeWire.Feature.messageReconciliation,
             BridgeWire.Feature.gitStatus, BridgeWire.Feature.usageRead, BridgeWire.Feature.openOnHost, BridgeWire.Feature.diskSpace,
             BridgeWire.Feature.steerWithdrawn,
+            BridgeWire.Feature.subagentRead,
         ])
+        // What one subagent did: named as Stop names it, and never sent to Hermes.
+        let subagentRead = try #require(subset["bridge"]?["methods"]?[BridgeWire.Method.subagentRead])
+        #expect(subagentRead["feature"]?.stringValue == BridgeWire.Feature.subagentRead)
+        let naming = try #require(try JSONValue(encoding: BridgeWire.SubagentReadParams(sessionID: "s1", subagentID: "a1", profile: "claude")).objectValue)
+        #expect(Set(naming.keys) == Set(try #require(subagentRead["params"]?.arrayValue).compactMap(\.stringValue)))
+        #expect(subset["methods"]?[BridgeWire.Method.subagentRead] == nil)
         // Searching the folders under the host's home folder: as the subset has it, and never sent to Hermes.
         let folderSearch = try #require(subset["bridge"]?["methods"]?[BridgeWire.Method.foldersSearch])
         #expect(folderSearch["feature"]?.stringValue == BridgeWire.Feature.folderSearch)

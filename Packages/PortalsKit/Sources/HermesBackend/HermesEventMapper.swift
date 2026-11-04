@@ -257,6 +257,7 @@ enum HermesEventMapper {
             output: entry["output"]?.stringValue,
             outputTruncated: entry["output_truncated"]?.boolValue == true,
             canStop: state == .working && entry["can_stop"]?.boolValue == true,
+            canRead: entry["can_read"]?.boolValue == true,
             model: nonEmpty(entry["model"]?.stringValue),
             tokens: entry["tokens"]?.intValue,
             toolUses: entry["tool_uses"]?.intValue,

@@ -204,6 +204,9 @@ public enum BridgeWire {
         /// `gateway.ready`'s `bridge` block and the `sessions.activity` answer carry `disk`,
         /// the free space on the bridge's disk (`HostDisk`), for Settings.
         public static let diskSpace = "disk_space"
+        /// `subagent.read` gives what one subagent did, its own messages, for one that says
+        /// it can be read (`can_read`, `Subagent.canRead`).
+        public static let subagentRead = "subagent_read"
     }
 
     /// The free space on a bridge's disk, as one with `disk_space` says it (`disk`): two
@@ -268,6 +271,8 @@ public enum BridgeWire {
         /// Feature `history_pages`: the turns of a thread before the first it holds.
         public static let sessionHistory = "session.history"
         public static let subagentStop = "subagent.stop"
+        /// Feature `subagent_read`: what one subagent did, its own messages.
+        public static let subagentRead = "subagent.read"
         public static let fileAttachBytes = "file.attach_bytes"
         public static let fileRead = "file.read"
         public static let filesSearch = "files.search"
@@ -454,6 +459,16 @@ public enum BridgeWire {
     /// `stopped`, or `not_running` when it was not one that could be stopped any more.
     public struct SubagentStopResult: Decodable, Sendable {
         public var status: String?
+    }
+
+    /// `subagent.read` names the subagent as `subagent.stop` does.
+    public typealias SubagentReadParams = SubagentStopParams
+
+    /// What one subagent did: its own messages, as `session.resume` gives a thread's; not
+    /// `available` for one that cannot be read.
+    public struct SubagentReadResult: Decodable, Sendable {
+        public var available: Bool?
+        public var messages: [JSONValue]?
     }
 
     public struct QueueRemoveResult: Decodable, Sendable {

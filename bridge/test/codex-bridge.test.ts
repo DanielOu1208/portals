@@ -1113,6 +1113,42 @@ test("Stop on a Codex sub-agent interrupts the turn its own thread runs, and the
   await completed(session, start);
 });
 
+test("subagent.read gives a Codex sub-agent's own thread as messages, so far while it works and with no mark of an end; another thread's cannot be read", async () => {
+  const session = await createThread();
+  const start = client.frames.length;
+  await send(session, "Spawn a sub-agent that counts files.");
+  const turnID = await daemon.activeTurn(session);
+  const command = { type: "commandExecution", id: "cmd_1", command: "ls | wc -l", cwd, processId: null, status: "completed", commandActions: [], aggregatedOutput: "3\n", exitCode: 0, durationMs: 12 };
+  const child = daemon.addThread(cwd, [{ id: "child-turn", items: [command], status: "inProgress", error: null }], {
+    loaded: true,
+    status: { type: "active", activeFlags: [] },
+    parentThreadId: session,
+  });
+  daemon.broadcast("item/completed", { threadId: session, turnId: turnID, item: { type: "subAgentActivity", id: "call_1", kind: "started", agentThreadId: child, agentPath: "/root/count_files", model: "gpt-6-luna" } });
+  const started = await client.from(start, (frame) => isEvent(frame, "subagent.start", session));
+  assert.equal(started.params.payload.can_read, true);
+
+  // At work: the command it ran, its turn not taken for one cut off.
+  const sofar = await client.call("subagent.read", { session_id: session, subagent_id: child, profile: "codex" });
+  assert.equal(sofar.available, true);
+  assert.deepEqual(sofar.messages.map((message: Frame) => [message.role, message.name, message.args?.command]), [["tool", "terminal", "ls | wc -l"]]);
+  assert.equal(sofar.messages.some((message: Frame) => message.display_metadata?.interrupted), false);
+
+  // Done: what it answered too.
+  const thread = daemon.thread(child);
+  thread.turns[0] = { ...thread.turns[0], items: [command, { type: "agentMessage", id: "msg_1", text: "3 files." }], status: "completed" };
+  thread.status = { type: "idle" };
+  const whole = await client.call("subagent.read", { session_id: session, subagent_id: child, profile: "codex" });
+  assert.deepEqual(whole.messages.map((message: Frame) => [message.role, message.text ?? message.name]), [["tool", "terminal"], ["assistant", "3 files."]]);
+
+  // A thread that is not one of its sub-agents is not read.
+  const reads = daemon.calls.length;
+  assert.deepEqual(await client.call("subagent.read", { session_id: session, subagent_id: session, profile: "codex" }), { available: false });
+  assert.equal(daemon.calls.slice(reads).some((call) => call.method === "thread/read" && call.params.threadId === session), false);
+  daemon.broadcast("turn/completed", { threadId: session, turn: { id: turnID, items: [], status: "completed", error: null } });
+  await completed(session, start);
+});
+
 test("Stop on a sub-agent whose turn the bridge does not know stops the turn its read finds, also when a change of the sub-agent's status overtakes that read", async () => {
   const session = await createThread();
   const start = client.frames.length;

@@ -141,6 +141,8 @@ struct ChatScreen: View {
     @State private var showsModelPicker = DebugLaunch.opensModelPicker
     /// The subagent or workflow whose detail is open, from the subagents line.
     @State private var openedSubagent: Subagent.ID?
+    /// `PORTALS_DEBUG_SUBAGENT` has opened one.
+    private static var debugOpenedSubagent = false
     /// The panel is open over the chat, a card under its button (`ThreadPanel`).
     /// On a phone, the panel is open over the chat until a tap beside it (`ThreadPanel`).
     @State private var panelShownHere = DebugLaunch.opensPanel
@@ -722,6 +724,11 @@ struct ChatScreen: View {
             // itself should the same one come back.
             .onChange(of: chat.shownSubagents) {
                 if let id = openedSubagent, !chat.shownSubagents.contains(where: { $0.id == id }) { openedSubagent = nil }
+                // PORTALS_DEBUG_SUBAGENT: the first that can be read, opened once, for screenshots.
+                if DebugLaunch.opensSubagent != nil, !Self.debugOpenedSubagent, let readable = chat.shownSubagents.first(where: \.canRead) {
+                    Self.debugOpenedSubagent = true
+                    openedSubagent = readable.id
+                }
             }
             .sheetOrPanel(
                 Binding(
@@ -730,7 +737,7 @@ struct ChatScreen: View {
                 ),
                 width: 620
             ) { id, close in
-                SubagentsLine.detail(of: id, in: chat.shownSubagents, onStop: { chat.stopSubagent($0) }, onDone: close)
+                SubagentsLine.detail(of: id, in: chat.shownSubagents, read: chat.readsSubagents, onStop: { chat.stopSubagent($0) }, onDone: close)
             }
             // Any of the above open over the chat. On a Mac its panel takes the composer's
             // focus while it is open (the chat under it is disabled), and on an iPhone or iPad

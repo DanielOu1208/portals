@@ -1621,7 +1621,7 @@ export class Session {
 
   /** The `subagent.list` answer: every subagent and workflow the agent started, oldest first, but those that have left the line. */
   subagentList(): Record<string, unknown>[] {
-    return [...this.subagents.values()].filter(({ cleared }) => !cleared).map(({ info, turn }) => subagentPayload(info, turn));
+    return [...this.subagents.values()].filter(({ cleared }) => !cleared).map(({ info, turn }) => subagentPayload(info, turn, this.canRead(info)));
   }
 
   /**
@@ -1694,6 +1694,22 @@ export class Session {
       log.warn("could not write that a subagent is at work again", { session: this.id, error: (error as Error).message });
       this.writeFailed(error);
     }
+  }
+
+  /** Whether `subagent.read` gives what `subagent` did (feature subagent_read): an agent, not a workflow or a command, of an agent that keeps it. */
+  private canRead(subagent: SubagentInfo): boolean {
+    return subagent.kind === "agent" && this.provider?.subagentMessages !== undefined;
+  }
+
+  /**
+   * A subagent's own conversation (`subagent.read`), as its agent keeps it now: one still at
+   * work gives what it has done so far. Null when it is not one that can be read.
+   */
+  async subagentMessages(id: string): Promise<StoredMessage[] | null> {
+    const known = this.subagents.get(id)?.info;
+    const provider = this.provider;
+    if (!known || !this.canRead(known) || !provider?.subagentMessages) return null;
+    return await provider.subagentMessages(id);
   }
 
   /** Stops one subagent or workflow (`subagent.stop`). False when it is not one still running that can be. */
@@ -2807,13 +2823,13 @@ export class Session {
     if (cleared) {
       // Shown until now (one a restart brought back at work): ended, then off the line.
       if (known && !known.cleared) {
-        this.emit("subagent.complete", subagentPayload(subagent, turn));
+        this.emit("subagent.complete", subagentPayload(subagent, turn, this.canRead(subagent)));
         this.emit("subagent.cleared", { subagent_ids: [subagent.id] });
       }
       return;
     }
     const type = !known ? "subagent.start" : subagent.status === "running" ? "subagent.progress" : "subagent.complete";
-    this.emit(type, subagentPayload(subagent, turn));
+    this.emit(type, subagentPayload(subagent, turn, this.canRead(subagent)));
   }
 
   private async ask(request: AgentRequest, signal?: AbortSignal): Promise<RequestAnswer> {
@@ -2931,9 +2947,9 @@ export class Session {
  * Hermes's keys (`subagent_id`, `goal`, `status`, `tool_name`), which any app reads, and
  * the bridge's own, which an app reads from a bridge that lists the feature. Times are
  * Unix seconds; `turn` numbers the thread's turns since the bridge started, and is the
- * one that started it.
+ * one that started it. `canRead`: `subagent.read` gives what it did.
  */
-export function subagentPayload(subagent: SubagentInfo, turn: number): Record<string, unknown> {
+export function subagentPayload(subagent: SubagentInfo, turn: number, canRead = false): Record<string, unknown> {
   const payload: Record<string, unknown> = {
     subagent_id: subagent.id,
     kind: subagent.kind,
@@ -2945,6 +2961,8 @@ export function subagentPayload(subagent: SubagentInfo, turn: number): Record<st
     can_stop: subagent.status === "running" && subagent.stoppable,
   };
   if (subagent.name) payload.name = subagent.name;
+  // Feature subagent_read: `subagent.read` gives what it did.
+  if (canRead) payload.can_read = true;
   // Feature subagent_names.
   if (subagent.nickname) payload.nickname = subagent.nickname;
   if (subagent.role) payload.role = subagent.role;

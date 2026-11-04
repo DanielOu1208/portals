@@ -166,7 +166,8 @@
    "steer_withdrawn",
    "message_fork",
    "turn_file_undo",
-   "disk_space"
+   "disk_space",
+   "subagent_read"
   ],
   "events": {
    "mcp.auth": {
@@ -407,6 +408,14 @@
    },
    "subagent.stop": {
     "feature": "subagents",
+    "params": [
+     "session_id",
+     "subagent_id",
+     "profile"
+    ]
+   },
+   "subagent.read": {
+    "feature": "subagent_read",
     "params": [
      "session_id",
      "subagent_id",

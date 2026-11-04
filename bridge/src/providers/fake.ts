@@ -222,6 +222,8 @@ class FakeSession implements ProviderSession {
   private readonly live: LiveOutput;
   private readonly commands: BackgroundCommands;
   private readonly commandTimers = new Map<string, NodeJS.Timeout>();
+  /** What each of the crew's agents did, by its id (`subagentMessages`). */
+  private readonly crewMessages = new Map<string, StoredMessage[]>();
   /** The crew's agents and workflow still at work (`startCrew`): the timer that ends each, and Stop, which ends it stopped. */
   private readonly crew = new Map<string, { timer: NodeJS.Timeout; stop: () => void }>();
 
@@ -310,6 +312,10 @@ class FakeSession implements ProviderSession {
     this.commandTimers.delete(id);
     this.commands.end(id, "stopped");
     return true;
+  }
+
+  async subagentMessages(id: string): Promise<StoredMessage[]> {
+    return structuredClone(this.crewMessages.get(id) ?? []);
   }
 
   hasBackgroundWork(): boolean {
@@ -529,6 +535,19 @@ class FakeSession implements ProviderSession {
       timer.unref();
       this.crew.set(subagent.id, { timer, stop: () => finish("stopped", {}) });
     };
+    // What each agent did, as its own messages: what it was asked, a call, its answer.
+    const did = (subagent: SubagentInfo, path: string, found: string, answer: string) => {
+      const at = subagent.startedAt / 1000;
+      const args = { path: join(this.cwd, path) };
+      this.crewMessages.set(subagent.id, [
+        { role: "user", text: subagent.goal, timestamp: at },
+        { role: "tool", name: "read_file", args, content: JSON.stringify({ content: found }), tool_call_id: `${subagent.id}-read`, timestamp: at + 1 },
+        { role: "assistant", text: answer, timestamp: at + 2 },
+      ]);
+    };
+    did(explore, "test/helpers.ts", "export async function startTestBridge(", "test/helpers.ts starts one with `startTestBridge`, on a free port.");
+    did(inner, "test/fixtures", "41 files", "41 fixtures.");
+    did(docs, "docs/gateway-protocol.md", "**Subagents and workflows**", "subagent.list lists the ended ones too.");
     end(explore, seconds / 3, { result: "test/helpers.ts starts one with startTestBridge." });
     end(inner, seconds / 3, { result: "41 fixtures." });
     end(review, seconds / 2, { agents: review.agents?.map((agent) => ({ ...agent, status: "completed" as const })) });

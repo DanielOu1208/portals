@@ -1278,6 +1278,13 @@ final class ThreadController: Identifiable {
         }
     }
 
+    /// What one subagent did, its own messages as turns; nil from a host that cannot say,
+    /// or for one that cannot be read. Read again at each call: one at work has done more.
+    var readsSubagents: ((Subagent.ID) async throws -> Transcript?)? {
+        guard let thread, let host = backend as? any SubagentReading else { return nil }
+        return { id in try await host.subagentTranscript(id, in: thread.id) }
+    }
+
     // MARK: Messages waiting
 
     func placeQueued(_ id: String, at placement: WhenBusy) {

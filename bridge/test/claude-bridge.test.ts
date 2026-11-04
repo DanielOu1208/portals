@@ -1274,6 +1274,48 @@ test("a background subagent and a workflow: the app is told of each, can list th
   assert.equal(query.calls.some((call) => call[0] === "stopTask"), false);
 });
 
+test("subagent.read gives a subagent's own messages from the file Claude Code keeps for it, so far while it works; a workflow's cannot be read", async () => {
+  const session = await createThread();
+  const start = client.frames.length;
+  const query = await send(session, "Start a subagent and a workflow.");
+  files.stored.set(session, { title: null, messages: [] });
+  const [entries] = processes("subagents");
+  const ended = entries.findIndex((entry) => entry.kind === "message" && entry.message.subtype === "task_updated");
+  await playEntries(query, entries.slice(0, ended), { uuids: new Map() });
+  await completed(session, start);
+  // The subagent says it can be read, live and listed; the workflow does not.
+  const started = turnEvents(session, start).filter((event) => event.type === "subagent.start");
+  assert.deepEqual(started.map((event) => [event.payload.subagent_id, event.payload.can_read]), [["a24479d5e93836222", true], ["wwn9e3l29", undefined]]);
+  const listed = (await client.call("subagent.list", { session_id: session, profile: "claude" })).subagents;
+  assert.deepEqual(listed.map((subagent: Frame) => subagent.can_read), [true, undefined]);
+
+  // Its messages as getSubagentMessages gives them: each names the Agent call that started it.
+  const call = "toolu_01Agent";
+  const at = (second: number) => `2026-11-03T10:00:0${second}.000Z`;
+  const said = (type: string, content: unknown, second: number) => ({ type, uuid: `u${second}`, session_id: session, message: { role: type, content }, parent_tool_use_id: call, parent_agent_id: null, timestamp: at(second) });
+  files.subagents.set(`${session}/a24479d5e93836222`, [
+    said("user", "Count the files in this folder.", 1),
+    said("assistant", [{ type: "tool_use", id: "toolu_ls", name: "Bash", input: { command: "ls | wc -l", description: "Count files" } }], 2),
+    said("user", [{ type: "tool_result", tool_use_id: "toolu_ls", content: "0" }], 3),
+  ]);
+  const sofar = await client.call("subagent.read", { session_id: session, subagent_id: "a24479d5e93836222", profile: "claude" });
+  assert.equal(sofar.available, true);
+  assert.deepEqual(sofar.messages.map((message: Frame) => [message.role, message.text ?? message.name]), [["user", "Count the files in this folder."], ["tool", "terminal"]]);
+  assert.equal(sofar.messages[1].args.command, "ls | wc -l");
+  assert.equal(sofar.messages[0].timestamp, Date.parse(at(1)) / 1000);
+
+  // Read again once it has said more.
+  files.subagents.get(`${session}/a24479d5e93836222`)!.push(said("assistant", [{ type: "text", text: "0 entries." }], 4));
+  const whole = await client.call("subagent.read", { session_id: session, subagent_id: "a24479d5e93836222", profile: "claude" });
+  assert.deepEqual(whole.messages.at(-1), { role: "assistant", text: "0 entries.", timestamp: Date.parse(at(4)) / 1000 });
+
+  // A workflow, one never started, and a thread not here cannot be read.
+  assert.deepEqual(await client.call("subagent.read", { session_id: session, subagent_id: "wwn9e3l29", profile: "claude" }), { available: false });
+  assert.deepEqual(await client.call("subagent.read", { session_id: session, subagent_id: "nope", profile: "claude" }), { available: false });
+  assert.deepEqual(await client.call("subagent.read", { session_id: "not-a-thread", subagent_id: "a24479d5e93836222", profile: "claude" }), { available: false });
+  await playEntries(query, entries.slice(ended), { from: 1, uuids: new Map() });
+});
+
 test("Stop on a workflow stops it alone: Claude Code is asked to stop that task, and the workflow ends stopped", async () => {
   const session = await createThread();
   const start = client.frames.length;

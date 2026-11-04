@@ -367,6 +367,12 @@
 //   takes it out of the turn it was shown in, and the device that sent it puts it back in
 //   its composer; an app without the feature shows the notice, which quotes the message
 //   whole. The conversation no longer has it, after a resume too.
+// - `subagent_read`: `subagent.read` gives what one subagent did, read only: its own
+//   messages, as `session.resume` gives a thread's, so far for one still at work. A
+//   subagent that can be read says so (`can_read` in `subagent.*` events and
+//   `subagent.list`): Claude Code's subagents (the file it keeps for each,
+//   `getSubagentMessages`) and Codex's sub-agents (each its own thread, `thread/read`), not
+//   workflows or commands.
 
 export const bridgeFeatures = [
   "turn_file_undo",
@@ -443,6 +449,7 @@ export const bridgeFeatures = [
   "open_on_host",
   "steer_withdrawn",
   "disk_space",
+  "subagent_read",
 ] as const;
 
 export const bridgeProtocol = 1;

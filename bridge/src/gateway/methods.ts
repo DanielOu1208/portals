@@ -10,7 +10,7 @@ import { highestLookIndex, isLookCondition, isLookIndex, isLookOrigin, lookCondi
 import type { Net, SignedIn } from "../net/net.ts";
 import { isOrderMoment, longestOrder, orderNames, type Order, type OrderChange, type SidebarOrder } from "../order.ts";
 import { machineWord } from "../platform.ts";
-import { adoptModes, DeskRefused, isAdoptMode, isThreadMode, threadModes, type Provider, type UsageReport } from "../providers/types.ts";
+import { adoptModes, DeskRefused, isAdoptMode, isThreadMode, threadModes, type Provider, type StoredMessage, type UsageReport } from "../providers/types.ts";
 import { modeFields, providerModeOptions } from "../providers/modes.ts";
 import { FileReader, ownFolder } from "../sessions/fileRead.ts";
 import { gitDiffs, gitStatus, GitStatusError } from "../sessions/gitStatus.ts";
@@ -1063,6 +1063,23 @@ export const methods: Record<string, MethodSpec> = {
     async handle(params, context) {
       const session = followed(context, params.session_id);
       return { status: (await session.stopSubagent(params.subagent_id as string)) ? "stopped" : "not_running" };
+    },
+  },
+
+  "subagent.read": {
+    summary:
+      "What one subagent did, read only (feature subagent_read): available false for one that cannot be read (a workflow, a command, an agent that keeps none, a thread not loaded); else its own messages, oldest first, in the shape of session.resume's, so far for one still at work.",
+    params: { session_id: "string", subagent_id: "string", profile: "string" },
+    required: ["session_id", "subagent_id"],
+    async handle(params, context) {
+      const session = context.gateway.sessions.get(params.session_id as string);
+      let messages: StoredMessage[] | null;
+      try {
+        messages = (await session?.subagentMessages(params.subagent_id as string)) ?? null;
+      } catch (error) {
+        throw new RpcError(ErrorCode.internal, `What this agent did could not be read: ${(error as Error).message}`);
+      }
+      return messages ? { available: true, messages } : { available: false };
     },
   },
 

@@ -1262,6 +1262,110 @@ import Testing
         await hermes.disconnect()
     }
 
+    /// A bridge with `subagent_read` says which subagents can be read, and gives what one
+    /// did as its own messages, which come as turns as a thread's history does.
+    @Test func aBridgeGivesWhatASubagentDidAsTurns() async throws {
+        let ready: JSONValue = ["replay_epoch": "e1", "heartbeat": false, "bridge": ["protocol": 1, "features": ["subagents", "subagent_read"]]]
+        let (backend, transport) = try await connect(ready: ready)
+        let ref = ThreadRef(id: ThreadRef.ID(rawValue: "s1"), agent: claude)
+        let opening = Task { try await backend.openThread(ref) }
+        let resume = try #require(await transport.nextSentRequest(includingRoster: true))
+        transport.deliver(["jsonrpc": "2.0", "id": try #require(resume["id"]), "result": ["session_id": "s1", "messages": []]])
+        _ = try await opening.value
+        let roster = try #require(await transport.nextSentRequest(includingRoster: true))
+        transport.deliver(["jsonrpc": "2.0", "id": try #require(roster["id"]), "result": [
+            "subagents": [
+                ["subagent_id": "a1", "kind": "agent", "goal": "Count the files", "status": "completed", "turn": 1, "started_at": 200, "ended_at": 211, "can_read": true],
+                ["subagent_id": "w1", "kind": "workflow", "goal": "Two agents", "status": "completed", "turn": 1, "started_at": 212, "ended_at": 220],
+            ],
+        ]])
+        var events = await backend.events(for: ref.id).makeAsyncIterator()
+        guard case let .subagentsListed(listed)? = await events.next() else {
+            Issue.record("no list")
+            return
+        }
+        #expect(listed.map(\.canRead) == [true, false])
+
+        let reading = Task { try await backend.subagentTranscript("a1", in: ref.id) }
+        let read = try #require(await transport.nextSentRequest())
+        #expect(read["method"] == "subagent.read")
+        #expect(read["params"] == ["session_id": "s1", "subagent_id": "a1", "profile": "claude"])
+        transport.deliver(["jsonrpc": "2.0", "id": try #require(read["id"]), "result": ["available": true, "messages": [
+            ["role": "user", "text": "Count the files in this folder.", "timestamp": 201],
+            ["role": "tool", "name": "terminal", "args": ["command": "ls | wc -l"], "content": "{\"output\":\"0\"}", "tool_call_id": "t1", "timestamp": 203],
+            ["role": "assistant", "text": "0 entries.", "timestamp": 205],
+        ]]])
+        let transcript = try #require(try await reading.value)
+        #expect(transcript.turns.count == 1)
+        let items = try #require(transcript.turns.first?.items)
+        guard items.count == 3, case let .user(asked) = items[0].content, case let .tool(call) = items[1].content, case let .text(answer) = items[2].content else {
+            Issue.record("not its messages: \(items)")
+            return
+        }
+        #expect(asked.text == "Count the files in this folder.")
+        #expect(call.name == "terminal")
+        #expect(answer == "0 entries.")
+
+        // One that cannot be read is nil.
+        let refusing = Task { try await backend.subagentTranscript("w1", in: ref.id) }
+        let refused = try #require(await transport.nextSentRequest())
+        transport.deliver(["jsonrpc": "2.0", "id": try #require(refused["id"]), "result": ["available": false]])
+        #expect(try await refusing.value == nil)
+        await backend.disconnect()
+
+        // A host without the feature is not asked.
+        let (older, _) = try await connect(ready: Self.subagentsReady)
+        #expect(try await older.subagentTranscript("a1", in: ref.id) == nil)
+        await older.disconnect()
+    }
+
+    /// A subagent at work is read again as the line hears more of it, and each read maps
+    /// its messages afresh. Read again, its turns and items keep the ids they had, so the
+    /// steps and rows the reader opened (kept by those ids) stay open; also for a Codex
+    /// subagent, whose messages begin with the agent speaking.
+    @Test(arguments: [false, true]) func aSubagentReadAgainKeepsItsTurnsAndItems(beginsWithTheAgent: Bool) throws {
+        let asked: [JSONValue] = beginsWithTheAgent ? [] : [["role": "user", "text": "Count the files in this folder.", "timestamp": 201]]
+        let first: [JSONValue] = asked + [
+            ["role": "assistant", "text": "", "reasoning": "Look at the folder first.", "timestamp": 202],
+            ["role": "tool", "name": "terminal", "args": ["command": "ls"], "content": "{\"output\":\"a b\"}", "tool_call_id": "t1", "timestamp": 203],
+            ["role": "assistant", "text": "Two so far.", "timestamp": 204],
+            ["role": "tool", "name": "terminal", "args": ["command": "ls -a"], "content": "{\"output\":\". .. a b\"}", "tool_call_id": "t2", "timestamp": 205],
+        ]
+        let more: [JSONValue] = [
+            ["role": "tool", "name": "read_file", "args": ["path": "a"], "content": "{\"content\":\"\"}", "tool_call_id": "t3", "timestamp": 206],
+            ["role": "assistant", "text": "2 entries.", "timestamp": 207],
+            ["role": "user", "text": "And hidden ones?", "timestamp": 208],
+            ["role": "assistant", "text": "None.", "timestamp": 209],
+        ]
+        let earlier = HermesHistoryMapper.transcript(from: first)
+        let read = HermesHistoryMapper.transcript(from: first + more)
+        #expect(earlier.turns.count == 1)
+        #expect(read.turns.count == 2)
+
+        let refreshed = read.keepingIdentities(of: earlier)
+        // What was there keeps its ids; what is new is told apart from it.
+        #expect(refreshed.turns.first?.id == earlier.turns.first?.id)
+        let before = try #require(earlier.turns.first?.items)
+        let after = try #require(refreshed.turns.first?.items)
+        #expect(Array(after.prefix(before.count).map(\.id)) == before.map(\.id))
+        let ids = refreshed.turns.map(\.id) + refreshed.turns.flatMap(\.items).map(\.id)
+        #expect(Set(ids).count == ids.count)
+        // The fold the reader opened, named for its first step, is the same fold.
+        let opened = TurnLayout.pieces(for: try #require(earlier.turns.first)).compactMap { piece -> UUID? in
+            if case let .steps(steps) = piece { steps.id } else { nil }
+        }
+        let shown = TurnLayout.pieces(for: try #require(refreshed.turns.first)).compactMap { piece -> UUID? in
+            if case let .steps(steps) = piece { steps.id } else { nil }
+        }
+        #expect(!opened.isEmpty)
+        #expect(Array(shown.prefix(opened.count)) == opened)
+        // Its contents are the newer read's.
+        #expect(refreshed.turns.map { $0.items.map(\.content) } == read.turns.map { $0.items.map(\.content) })
+
+        // Read with nothing new, it is the very same.
+        #expect(HermesHistoryMapper.transcript(from: first).keepingIdentities(of: earlier) == earlier)
+    }
+
     /// The list of who is at work, answered just before the bridge cleared an ended one
     /// from the line (`subagent.cleared` comes after the answer on the socket), does not
     /// bring that one back however the two reach the thread (recent-20). The answer and
