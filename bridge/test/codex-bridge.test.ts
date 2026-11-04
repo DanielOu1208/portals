@@ -5,7 +5,7 @@ import { basename, dirname, join } from "node:path";
 import { after, before, test } from "node:test";
 import { setLogLevel } from "../src/log.ts";
 import { machineWord } from "../src/platform.ts";
-import { CodexClient, socketConnector } from "../src/providers/codex/client.ts";
+import { CodexClient, CodexError, socketConnector } from "../src/providers/codex/client.ts";
 import { titleSchema } from "../src/providers/codex/naming.ts";
 import { CodexProvider } from "../src/providers/codex/provider.ts";
 import { CodexSession } from "../src/providers/codex/session.ts";
@@ -161,9 +161,9 @@ test("a chat: commentary, a command row and the reply; the first message names t
   // What the turn spent (feature turn_usage): Codex's time for it, and how far the thread's tokens rose.
   assert.deepEqual(ended, {
     status: "complete",
-    text: "I saw `hello.txt`; 221 is not prime because 221 = 13 × 17.",
-    usage: { context_used: 24843, context_max: 258_400 },
-    turn_usage: { seconds: 6.2, tokens: 49_635 },
+    text: "I saw `hello.txt`; 221 is not prime (13 × 17).",
+    usage: { context_used: 22952, context_max: 258_400 },
+    turn_usage: { seconds: 8.3, tokens: 45_857 },
   });
 
   // Codex's own warnings stay in the log.
@@ -225,7 +225,7 @@ test("/mode ask: Codex asks before the edit and each command; the answers go bac
   assert.equal(count.params.command, "wc -c hello.txt");
   client.answer(count.id, { choice: "always" });
   const done = await completed(session, start);
-  assert.equal(done.payload.text, "Patched `hi` to `hello`; `wc -c hello.txt` reports 6 bytes.");
+  assert.equal(done.payload.text, "Patched `hi` to `hello` in `hello.txt`; `wc -c hello.txt` reports 6 bytes.");
   assert.deepEqual(answersFor(session), [
     { decision: "accept" },
     { decision: "acceptForSession" },
@@ -385,7 +385,7 @@ test("requestUserInput is a question card, and the answer goes back keyed by the
       choices: ["Python", "Swift"],
       multi_select: false,
       header: "Language",
-      descriptions: { Python: "Choose Python as your preferred language.", Swift: "Choose Swift as your preferred language." },
+      descriptions: { Python: "Choose Python.", Swift: "Choose Swift." },
     },
   ]);
   client.answer(question.id, { answers: { preferred_language: "Swift" } });
@@ -642,7 +642,10 @@ test("a message Codex says no to while its turn runs waits on disk as one Codex 
 
 test("/compact is offered and runs thread/compact/start: a turn of its own, marked where it compacted, which resume and replay keep", async () => {
   const catalog = await client.call("commands.catalog", { profile: "codex" });
-  assert.deepEqual(catalog.categories[1], { name: "Codex", pairs: [["/compact", "Summarise the conversation so far, to free up context"]] });
+  assert.deepEqual(catalog.categories[1], {
+    name: "Codex",
+    pairs: [["/compact", "Summarise the conversation so far, to free up context"], ["/review", "Review your uncommitted changes (usage: /review [what to review])"]],
+  });
   const session = await createThread();
   assert.deepEqual(await client.call("command.dispatch", { session_id: session, name: "compact" }), { type: "send", message: "/compact" });
 
@@ -664,10 +667,10 @@ test("/compact is offered and runs thread/compact/start: a turn of its own, mark
     ["message.start", "thinking.delta", "session.usage", "thinking.delta", "session.compacted", "message.complete"],
   );
   const compacted = events.find((event) => event.type === "session.compacted");
-  assert.deepEqual(compacted.payload, { trigger: "manual", tokens_before: 24706 });
+  assert.deepEqual(compacted.payload, { trigger: "manual", tokens_before: 25862 });
   const { turn: compactTurn, ...compactEnd } = done.payload;
   assert.ok(Number.isInteger(compactTurn));
-  assert.deepEqual(compactEnd, { status: "complete", text: "", usage: { context_used: 15254, context_max: 258_400 }, turn_usage: { seconds: 0.9 } });
+  assert.deepEqual(compactEnd, { status: "complete", text: "", usage: { context_used: 30449, context_max: 258_400 }, turn_usage: { seconds: 0.2 } });
   // No message went to Codex as words.
   assert.equal(daemon.callsOf("turn/start").filter((call) => call.params.threadId === session).length, 1);
 
@@ -678,11 +681,282 @@ test("/compact is offered and runs thread/compact/start: a turn of its own, mark
       ["user", "Reply with the single word hello. Do not use any tools."],
       ["assistant", "hello"],
       ["user", "/compact"],
-      ["compaction", "manual", 24706],
+      ["compaction", "manual", 25862],
     ],
   );
   const replayed = await client.call("session.events.since", { session_id: session, last_seen: compacted.seq - 1 });
   assert.deepEqual(replayed.events[0], compacted);
+});
+
+test("/review runs review/start: one row from the review's start to its end, its commands between, the findings as the reply; a message waits for it, and it reads back so", async () => {
+  const session = await createThread();
+  assert.deepEqual(await client.call("command.dispatch", { session_id: session, name: "review", arg: "the error handling" }), { type: "send", message: "/review the error handling" });
+  const start = client.frames.length;
+  let from = daemon.calls.length;
+  assert.deepEqual(await client.call("prompt.submit", { session_id: session, text: "/review" }), { status: "streaming" });
+  const call = await daemon.waitForCall((call) => call.method === "review/start", from);
+  assert.deepEqual(call.params, { threadId: session, target: { type: "uncommittedChanges" }, delivery: "inline" });
+  const turnId = await daemon.activeTurn(session);
+  assert.match(turnId, /^review-/);
+  const opened = await client.from(start, (frame) => isEvent(frame, "tool.start", session) && frame.params.payload.name === "review");
+  assert.deepEqual([opened.params.payload.context, opened.params.payload.args], ["current changes", {}]);
+  const command = { type: "commandExecution", id: "exec-diff", command: "/bin/zsh -lc 'git diff'", cwd, processId: null, status: "inProgress", commandActions: [], aggregatedOutput: null, exitCode: null, durationMs: null };
+  daemon.broadcast("item/started", { threadId: session, turnId, item: command, startedAtMs: 1 });
+  daemon.broadcast("item/completed", { threadId: session, turnId, item: { ...command, status: "completed", aggregatedOutput: "+helo\n", exitCode: 0, durationMs: 5 }, completedAtMs: 2 });
+  await client.from(start, (frame) => isEvent(frame, "tool.complete", session) && frame.params.payload.name === "terminal");
+
+  // Codex takes no message into a review: it waits.
+  from = daemon.calls.length;
+  assert.deepEqual(await client.call("prompt.submit", { session_id: session, text: "Then fix it." }), { status: "queued", queue_id: "1" });
+  daemon.finishReview(session, turnId, "hello.txt says helo: a typo.");
+  const done = await completed(session, start);
+  assert.equal(done.payload.text, "hello.txt says helo: a typo.");
+  const events = turnEvents(session, start);
+  assert.deepEqual(events.find((event) => event.type === "message.start").payload, { text: "/review", sender: "user" });
+  assert.deepEqual(
+    events.filter((event) => event.type === "tool.start" || event.type === "tool.complete").map((event) => [event.type, event.payload.name]),
+    [["tool.start", "review"], ["tool.start", "terminal"], ["tool.complete", "terminal"], ["tool.complete", "review"]],
+  );
+  const reviewed = events.find((event) => event.type === "tool.complete" && event.payload.name === "review").payload;
+  assert.deepEqual([reviewed.tool_id, reviewed.context, reviewed.result], [opened.params.payload.tool_id, "current changes", {}]);
+  const next = await daemon.waitForCall((call) => call.method === "turn/start" && call.params.threadId === session, from);
+  daemon.finishTurn(session, await daemon.activeTurn(session), "Fixed.");
+  await until(() => turnEvents(session, start).filter((event) => event.type === "message.complete").length === 2);
+
+  // Each row where it ended, the review's after its commands.
+  const resumed = await client.call("session.resume", { session_id: session });
+  assert.deepEqual(
+    resumed.messages.map((message: Frame) => (message.role === "tool" ? [message.name, message.context ?? null, JSON.parse(message.content)] : [message.role, message.text])),
+    [
+      ["user", "/review"],
+      ["terminal", null, { output: "+helo\n", exit_code: 0 }],
+      ["review", "current changes", {}],
+      ["assistant", "hello.txt says helo: a typo."],
+      ["user", "Then fix it."],
+      ["assistant", "Fixed."],
+    ],
+  );
+});
+
+test("/review after a Full access turn and a switch to Ask, or to a default that is stricter, is refused until a message has taken the access chosen", async () => {
+  const session = await createThread();
+  daemon.folderConfigs.set(cwd, { sandbox_mode: "read-only", approval_policy: "on-request" });
+  try {
+    await client.call("session.set_mode", { session_id: session, mode: "full" });
+    let start = client.frames.length;
+    await send(session, "First under Full.");
+    daemon.finishTurn(session, await daemon.activeTurn(session));
+    await completed(session, start);
+    assert.equal(daemon.threads.get(session)!.approvalPolicy, "never");
+
+    const refused = async (): Promise<void> => {
+      start = client.frames.length;
+      const from = daemon.calls.length;
+      assert.equal((await client.call("prompt.submit", { session_id: session, text: "/review" })).status, "streaming");
+      const done = await completed(session, start);
+      assert.equal(done.payload.status, "error");
+      assert.match(done.payload.text, /Send a message first/);
+      assert.equal(daemon.calls.slice(from).some((call) => call.method === "review/start"), false);
+    };
+    for (const mode of ["ask", "default"]) {
+      await client.call("session.set_mode", { session_id: session, mode });
+      await refused();
+    }
+
+    // Once a message has carried the default's access to Codex, the review runs with it.
+    await client.call("session.set_mode", { session_id: session, mode: "ask" });
+    start = client.frames.length;
+    const turn = await send(session, "Under Ask.");
+    assert.equal(turn.params.approvalPolicy, "untrusted");
+    daemon.finishTurn(session, await daemon.activeTurn(session));
+    await completed(session, start);
+    start = client.frames.length;
+    const from = daemon.calls.length;
+    await client.call("prompt.submit", { session_id: session, text: "/review" });
+    await daemon.waitForCall((call) => call.method === "review/start", from);
+    daemon.finishReview(session, await daemon.activeTurn(session), "Nothing to fix.");
+    assert.equal((await completed(session, start)).payload.text, "Nothing to fix.");
+  } finally {
+    daemon.folderConfigs.delete(cwd);
+  }
+});
+
+test("/review after a change of model, or of thinking level, is refused until a message has taken it to Codex", async () => {
+  const session = await createThread({ model: "gpt-6-luna", reasoning_effort: "low" });
+  let start = client.frames.length;
+  await send(session, "First on Luna.");
+  daemon.finishTurn(session, await daemon.activeTurn(session));
+  await completed(session, start);
+
+  const refused = async (): Promise<void> => {
+    start = client.frames.length;
+    const from = daemon.calls.length;
+    assert.equal((await client.call("prompt.submit", { session_id: session, text: "/review" })).status, "streaming");
+    const done = await completed(session, start);
+    assert.equal(done.payload.status, "error");
+    assert.match(done.payload.text, /Send a message first/);
+    assert.equal(daemon.calls.slice(from).some((call) => call.method === "review/start"), false);
+  };
+  const reviews = async (): Promise<void> => {
+    start = client.frames.length;
+    const from = daemon.calls.length;
+    await client.call("prompt.submit", { session_id: session, text: "/review" });
+    await daemon.waitForCall((call) => call.method === "review/start", from);
+    daemon.finishReview(session, await daemon.activeTurn(session), "Nothing to fix.");
+    assert.equal((await completed(session, start)).payload.text, "Nothing to fix.");
+  };
+  const carried = async (text: string): Promise<Frame> => {
+    start = client.frames.length;
+    const turn = await send(session, text);
+    daemon.finishTurn(session, await daemon.activeTurn(session));
+    await completed(session, start);
+    return turn;
+  };
+
+  // Another model.
+  await client.call("config.set", { session_id: session, key: "model", value: "gpt-6.1-sol --provider openai --session" });
+  await refused();
+  assert.equal((await carried("Now on Sol.")).params.model, "gpt-6.1-sol");
+  await reviews();
+
+  // Another level, the model as it was.
+  await client.call("config.set", { session_id: session, key: "reasoning", value: "high" });
+  await refused();
+  const turn = await carried("Now thinking harder.");
+  assert.equal(turn.params.model, undefined);
+  assert.equal(turn.params.effort, "high");
+  await reviews();
+});
+
+/** The review's command, as `finishReview` keeps it in the review's own turn. */
+function reviewCommandItem(turnId: string, session: string): void {
+  const command = { type: "commandExecution", id: `exec-${turnId}`, command: "/bin/zsh -lc 'git diff'", cwd, processId: null, status: "inProgress", commandActions: [], aggregatedOutput: null, exitCode: null, durationMs: null };
+  daemon.broadcast("item/started", { threadId: session, turnId, item: command, startedAtMs: 1 });
+  daemon.broadcast("item/completed", { threadId: session, turnId, item: { ...command, status: "completed", aggregatedOutput: "+helo\n", exitCode: 0, durationMs: 5 }, completedAtMs: 2 });
+}
+
+/** A turn's rows and messages, as the app was told them. */
+function reviewTold(session: string, start: number): unknown[] {
+  return turnEvents(session, start)
+    .filter((event) => ["message.start", "tool.start", "tool.complete", "message.complete"].includes(event.type))
+    .map((event) => (event.type.startsWith("tool.") ? [event.type, event.payload.name] : [event.type, event.payload.text]));
+}
+
+test("a review run at the desk while the connection to Codex is down is told at the reconnect as one /review, with its commands inside it", async () => {
+  const session = await createThread();
+  let start = client.frames.length;
+  await send(session, "First.");
+  daemon.finishTurn(session, await daemon.activeTurn(session));
+  await completed(session, start);
+  start = client.frames.length;
+  daemon.accepting = false;
+  daemon.dropAll();
+  const turn = daemon.startReview(session);
+  reviewCommandItem(turn.id, session);
+  daemon.finishReview(session, turn.id, "hello.txt says helo: a typo.");
+  daemon.accepting = true;
+  assert.equal((await completed(session, start)).payload.text, "hello.txt says helo: a typo.");
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.deepEqual(reviewTold(session, start), [
+    ["message.start", "/review"],
+    ["tool.start", "review"],
+    ["tool.start", "terminal"],
+    ["tool.complete", "terminal"],
+    ["tool.complete", "review"],
+    ["message.complete", "hello.txt says helo: a typo."],
+  ]);
+});
+
+test("a /review that ends while the connection to Codex is down ends at the reconnect with the commands it ran meanwhile", async () => {
+  const session = await createThread();
+  const start = client.frames.length;
+  const from = daemon.calls.length;
+  await client.call("prompt.submit", { session_id: session, text: "/review" });
+  await daemon.waitForCall((call) => call.method === "review/start", from);
+  const turnId = await daemon.activeTurn(session);
+  await client.from(start, (frame) => isEvent(frame, "tool.start", session) && frame.params.payload.name === "review");
+  daemon.accepting = false;
+  daemon.dropAll();
+  reviewCommandItem(turnId, session);
+  daemon.finishReview(session, turnId, "Nothing to fix.");
+  daemon.accepting = true;
+  assert.equal((await completed(session, start)).payload.text, "Nothing to fix.");
+  assert.deepEqual(reviewTold(session, start), [
+    ["message.start", "/review"],
+    ["tool.start", "review"],
+    ["tool.start", "terminal"],
+    ["tool.complete", "terminal"],
+    ["tool.complete", "review"],
+    ["message.complete", "Nothing to fix."],
+  ]);
+});
+
+test("/review with words after it reviews what they say", async () => {
+  const session = await createThread();
+  const start = client.frames.length;
+  const from = daemon.calls.length;
+  await client.call("prompt.submit", { session_id: session, text: "/review  the error handling " });
+  const call = await daemon.waitForCall((call) => call.method === "review/start", from);
+  assert.deepEqual(call.params.target, { type: "custom", instructions: "the error handling" });
+  const opened = await client.from(start, (frame) => isEvent(frame, "tool.start", session) && frame.params.payload.name === "review");
+  assert.equal(opened.params.payload.context, "the error handling");
+  daemon.finishReview(session, await daemon.activeTurn(session), "Nothing to fix.");
+  assert.equal((await completed(session, start)).payload.text, "Nothing to fix.");
+});
+
+test("a review begun at the desk shows as /review from its start, though the turn Codex starts for it is the review's own", async () => {
+  const session = await createThread();
+  let start = client.frames.length;
+  await send(session, "First.");
+  daemon.finishTurn(session, await daemon.activeTurn(session));
+  await completed(session, start);
+  start = client.frames.length;
+  const turn = daemon.startReview(session);
+  const opened = await client.from(start, (frame) => isEvent(frame, "message.start", session));
+  assert.deepEqual(opened.params.payload, { text: "/review", sender: "desk" });
+  await client.from(start, (frame) => isEvent(frame, "tool.start", session) && frame.params.payload.name === "review");
+  daemon.finishReview(session, turn.id, "Looks right.");
+  const done = await completed(session, start);
+  assert.deepEqual([done.payload.status, done.payload.text], ["complete", "Looks right."]);
+});
+
+test("Codex's skills for the thread's folder are in the menu as skills, and a message that names one carries it", async () => {
+  const skill = (name: string, scope: string, more: Record<string, unknown> = {}) => ({
+    name, description: `The ${name} skill, described at length.`, path: `${cwd}/.agents/skills/${name}/SKILL.md`, scope, enabled: true, pluginId: null, ...more,
+  });
+  daemon.skills = [
+    skill("say-pear", "repo", { interface: { shortDescription: "Says pear", iconSmallUrl: null, iconLargeUrl: null } }),
+    skill("tidy", "user"),
+    // Not offered: turned off, a name the app cannot send, and one the bridge's own /review takes.
+    skill("off", "user", { enabled: false }),
+    skill("Shout", "user"),
+    skill("review", "system"),
+  ];
+  try {
+    const session = await createThread();
+    const catalog = await client.call("commands.catalog", { session_id: session, profile: "codex" });
+    assert.deepEqual(Object.keys(catalog.skills), ["/say-pear", "/tidy"]);
+    assert.deepEqual(catalog.pairs.slice(-2), [["/say-pear", "Says pear"], ["/tidy", "The tidy skill, described at length."]]);
+    // Before there is a thread there is no folder: only skills that are not a folder's own.
+    assert.deepEqual(Object.keys((await client.call("commands.catalog", { profile: "codex" })).skills), ["/tidy"]);
+    assert.deepEqual(await client.call("command.dispatch", { session_id: session, name: "say-pear", arg: "plum" }), { type: "send", message: "/say-pear plum" });
+
+    const start = client.frames.length;
+    const turn = await send(session, "/say-pear plum");
+    assert.deepEqual(turn.params.input, [
+      { type: "text", text: "/say-pear plum", text_elements: [] },
+      { type: "skill", name: "say-pear", path: `${cwd}/.agents/skills/say-pear/SKILL.md` },
+    ]);
+    daemon.finishTurn(session, await daemon.activeTurn(session), "pear plum");
+    await completed(session, start);
+    // A slash that names no skill is words.
+    const plain = await send(session, "/tmp is full");
+    assert.deepEqual(plain.params.input, [{ type: "text", text: "/tmp is full", text_elements: [] }]);
+    daemon.finishTurn(session, await daemon.activeTurn(session));
+    await until(() => turnEvents(session, start).filter((event) => event.type === "message.complete").length === 2);
+  } finally {
+    daemon.skills = [];
+  }
 });
 
 test("/compact with a file attached is words for Codex, as with an image: the message and the file go in a turn, and nothing is compacted", async () => {
@@ -735,7 +1009,7 @@ test("a sub-agent Codex spawns is on the line: its start and end reach the app, 
   await send(session, "Spawn a sub-agent that says pear.");
   await completed(session, start);
   const news = turnEvents(session, start).filter((event) => event.type.startsWith("subagent."));
-  const child = "01a13a21-3e05-7212-b29e-4fb66eb40f01";
+  const child = "01a1a5d6-3d08-73e1-bb31-9ec1b5857c73";
   assert.deepEqual(
     news.map((event) => [event.type, event.payload.subagent_id, event.payload.status]),
     [
@@ -743,7 +1017,7 @@ test("a sub-agent Codex spawns is on the line: its start and end reach the app, 
       ["subagent.complete", child, "completed"],
     ],
   );
-  assert.equal(news[0].payload.goal, "pear reply");
+  assert.equal(news[0].payload.goal, "pear");
   assert.equal(news[0].payload.model, "gpt-6.1-sol");
   assert.equal(news[0].payload.can_stop, true);
   const listed = (await client.call("subagent.list", { session_id: session, profile: "codex" })).subagents;
@@ -1267,7 +1541,8 @@ test("read back after a restart, a Codex wait names its sub-agents by the nickna
   const reads: { threadId: string; includeTurns?: boolean }[] = [];
   const host = {
     client: {
-      call: async (_method: string, params: { threadId: string; includeTurns?: boolean }) => {
+      call: async (method: string, params: { threadId: string; includeTurns?: boolean }) => {
+        if (method === "thread/turns/list") throw new CodexError(-32601, "Method not found");
         reads.push(params);
         if (!threads[params.threadId]) throw new Error("no such thread");
         return { thread: threads[params.threadId] };
@@ -1908,6 +2183,31 @@ test("after a restart the bridge follows a thread Codex still runs at once; its 
   }
 });
 
+test("after a restart a thread with no message yet, which Codex still has loaded, opens empty, and its first message runs", async () => {
+  const first = await startTestBridge({ keepHome: true, providers: new Map([["codex", codexProvider()]]), config: { generalFolder: cwd } });
+  const phone = await TestClient.open(first);
+  const session = (await phone.call("session.create", { profile: "codex", cwd, title: "Not started" })).session_id;
+  await phone.close();
+  await first.close();
+
+  const second = await startTestBridge({ home: first.home, providers: new Map([["codex", codexProvider()]]) });
+  const again = await TestClient.open(second);
+  try {
+    // Codex lists no turns for it, neither to thread/read nor to thread/resume.
+    const resumed = await again.call("session.resume", { session_id: session, profile: "codex", inline_images: false });
+    assert.equal(resumed.running, false);
+    assert.deepEqual(resumed.messages, []);
+    assert.equal(resumed.info.title, "Not started");
+    const start = again.frames.length;
+    await send(session, "Hello.", again);
+    daemon.finishTurn(session, await daemon.activeTurn(session), "Hi.");
+    assert.equal((await completed(session, start, again)).payload.text, "Hi.");
+  } finally {
+    await again.close();
+    await second.dispose();
+  }
+});
+
 test("after a restart a thread Codex has not loaded comes back from thread/read, and is followed only when used", async () => {
   const turns = rewrite(recordedHistory("tools").turns, [
     [recordedThread("tools"), "x"],
@@ -2174,7 +2474,7 @@ test("after a restart a Codex thread's sub-agents come back from its stored turn
     const listed = (await phone.call("subagent.list", { session_id: thread, profile: "codex" })).subagents;
     assert.deepEqual(
       listed.map((subagent: Frame) => [subagent.subagent_id, subagent.goal, subagent.status, subagent.turn, subagent.started_at, subagent.ended_at]),
-      [["01a13a21-3e05-7212-b29e-4fb66eb40f01", "pear reply", "completed", 0, 1791976616, 1791976624]],
+      [["01a1a5d6-3d08-73e1-bb31-9ec1b5857c73", "pear", "completed", 0, 1793783638, 1793783647]],
     );
   } finally {
     await phone.close();
@@ -2193,7 +2493,10 @@ test("a stored thread's sub-agent left at work keeps the turn that started it, h
     ],
   };
   const host = {
-    client: { call: async (_method: string, params: { threadId: string }) => ({ thread: params.threadId === "parent" ? parent : { status: { type: "idle" }, turns: [{ id: "ct", status: "completed", items: [] }] } }) },
+    client: { call: async (method: string, params: { threadId: string }) => {
+      if (method === "thread/turns/list") throw new CodexError(-32601, "Method not found");
+      return { thread: params.threadId === "parent" ? parent : { status: { type: "idle" }, turns: [{ id: "ct", status: "completed", items: [] }] } };
+    } },
     defaults: () => null,
     efforts: () => [],
     imagesDir: cwd,
@@ -2235,6 +2538,7 @@ test("after a restart a sub-agent's own sub-agent still at work comes back under
   const host = {
     client: {
       call: async (method: string, params: { threadId: string; turnId?: string }) => {
+        if (method === "thread/turns/list") throw new CodexError(-32601, "Method not found");
         if (method === "turn/interrupt") return interrupts.push([params.threadId, params.turnId]);
         return { thread: threads[params.threadId] };
       },
@@ -2273,7 +2577,8 @@ test("after a restart a sub-agent's many own sub-agents are read a few at a time
   let most = 0;
   const host = {
     client: {
-      call: async (_method: string, params: { threadId: string }) => {
+      call: async (method: string, params: { threadId: string }) => {
+        if (method === "thread/turns/list") throw new CodexError(-32601, "Method not found");
         reading += 1;
         most = Math.max(most, reading);
         await new Promise((resolve) => setTimeout(resolve, 5));
@@ -2305,7 +2610,10 @@ test("after a restart, a sub-agent that had left the line and ran again while th
     worker: { status: { type: "idle" }, turns: [{ id: "t2", status: "completed", startedAt: at - 5, completedAt: at, items: [{ type: "agentMessage", text: "Done." }] }] },
   };
   const host = {
-    client: { call: async (_method: string, params: { threadId: string }) => ({ thread: threads[params.threadId] }) },
+    client: { call: async (method: string, params: { threadId: string }) => {
+      if (method === "thread/turns/list") throw new CodexError(-32601, "Method not found");
+      return { thread: threads[params.threadId] };
+    } },
     defaults: () => null,
     efforts: () => [],
     imagesDir: cwd,
@@ -2337,6 +2645,7 @@ test("a read that would settle a sub-agent, answered after it was given more to 
   const host = {
     client: {
       call: async (method: string, params: { threadId: string }) => {
+        if (method === "thread/turns/list") throw new CodexError(-32601, "Method not found");
         if (method === "turn/interrupt") return interrupts.push(params);
         if (params.threadId === "parent") return { thread: parent };
         // The child's own thread, read to settle it: answered late.
@@ -2374,7 +2683,8 @@ test("overlapping child reads keep the newer completion, in either response orde
       let hold = false;
       const reads: ((thread: unknown) => void)[] = [];
       const host = {
-        client: { call: async (_method: string, params: { threadId: string }) => {
+        client: { call: async (method: string, params: { threadId: string }) => {
+          if (method === "thread/turns/list") throw new CodexError(-32601, "Method not found");
           if (params.threadId === "parent") return { thread: parent };
           if (!hold) return { thread: old };
           return new Promise((resolve) => reads.push((thread) => resolve({ thread })));
@@ -2391,7 +2701,7 @@ test("overlapping child reads keep the newer completion, in either response orde
       await provider.reconnected(Promise.resolve(new Set()));
       if (completionNotified) provider.agentNotification("child", "turn/completed", { turn: { id: "new", status: "completed" } });
       else await provider.reconnected(Promise.resolve(new Set()));
-      assert.equal(reads.length, 2);
+      await until(() => reads.length === 2);
       const active = { status: { type: "active", activeFlags: [] }, turns: [{ id: "new", status: "inProgress", items: [] }] };
       const done = { status: { type: "idle" }, turns: [{ id: "new", status: "completed", items: [{ type: "agentMessage", text: "New answer" }] }] };
       for (const index of olderFirst ? [0, 1] : [1, 0]) {
@@ -2710,10 +3020,10 @@ test("a plan carried out by a turn that said no tokens keeps the plan's under th
   // Codex says nothing of what carrying it out spent; its own time for it is 1 s, the plan's is not known.
   daemon.finishTurn(session, work, "Changed it.");
   const done = await completed(session, start);
-  assert.equal(done.payload.turn_usage.tokens, 77_784);
+  assert.equal(done.payload.turn_usage.tokens, 25_564);
   assert.notEqual(done.payload.turn_usage.seconds, 1);
   const kept = JSON.parse(readFileSync(join(bridge.home, "state", "spent", `${session}.json`), "utf8"));
-  assert.deepEqual(kept.map((entry: Frame) => [entry.turn, entry.tokens]), [[work, 77_784]]);
+  assert.deepEqual(kept.map((entry: Frame) => [entry.turn, entry.tokens]), [[work, 25_564]]);
 });
 
 test("a plan whose carrying out Codex never began keeps what planning spent under the plan's turn (turn_usage)", async () => {
@@ -2730,12 +3040,12 @@ test("a plan whose carrying out Codex never began keeps what planning spent unde
     client.answer(card.id, { choice: "once" });
     const done = await completed(session, start);
     assert.equal(done.payload.status, "error");
-    assert.equal(done.payload.turn_usage.tokens, 77_784);
+    assert.equal(done.payload.turn_usage.tokens, 25_564);
   } finally {
     daemon.onTurnStart = () => {};
   }
   const kept = JSON.parse(readFileSync(join(bridge.home, "state", "spent", `${session}.json`), "utf8"));
-  assert.deepEqual(kept.map((entry: Frame) => entry.tokens), [77_784]);
+  assert.deepEqual(kept.map((entry: Frame) => entry.tokens), [25_564]);
   assert.match(kept[0].turn, /\S/);
 });
 
@@ -3542,6 +3852,7 @@ test("a message that fails while the bridge reads the thread again for a missed 
           if (message.id === undefined) return;
           const answer = (result: unknown) => queueMicrotask(() => handlers.message({ id: message.id, result }));
           if (message.method === "initialize") return answer({});
+          if (message.method === "thread/turns/list") return queueMicrotask(() => handlers.message({ id: message.id, error: { code: -32601, message: "Method not found" } }));
           if (message.method === "thread/resume") return answer({ thread: { turns: [] } });
           if (message.method === "thread/read") {
             if (phase === "initial") return answer({ thread: { status: { type: "idle" }, turns: [known] } });
@@ -4114,6 +4425,81 @@ test("requests the app has no card for are declined with a notice, or refused", 
       .map((event) => event.payload.text),
     ["Codex asked for more access (needs the network). Portals cannot grant that, so it goes on without it.", "The docs tool asked for input Portals cannot give, so it was declined."],
   );
+});
+
+test("an MCP tool Codex asks about is an approval card, and the answer goes back as Codex reads it; a form it asks for is still declined", async () => {
+  const session = await createThread();
+  const start = client.frames.length;
+  await send(session, "Shout hi.");
+  const turnId = await daemon.activeTurn(session);
+  const meta = { codex_approval_kind: "mcp_tool_call", persist: ["session", "always"], tool_params: { text: "hi" } };
+  const asked = daemon.request(session, "mcpServer/elicitation/request", {
+    threadId: session, turnId, serverName: "scratch", mode: "form", _meta: meta, message: 'Allow the scratch MCP server to run tool "shout"?', requestedSchema: { type: "object", properties: {} },
+  });
+  const card = await client.next((frame) => frame.method === "approval" && frame.params.session_id === session);
+  assert.equal(card.params.command, 'scratch {"text":"hi"}');
+  assert.equal(card.params.description, 'Allow the scratch MCP server to run tool "shout"?');
+  assert.deepEqual(card.params.choices, ["once", "session", "always", "deny"]);
+  client.answer(card.id, { choice: "session" });
+  assert.deepEqual((await asked).result, { action: "accept", content: null, _meta: { persist: "session" } });
+  const form = await daemon.request(session, "mcpServer/elicitation/request", { threadId: session, turnId, serverName: "docs", mode: "form", _meta: null, message: "Your name?", requestedSchema: { type: "object", properties: {} } });
+  assert.deepEqual(form.result, { action: "decline", content: null, _meta: null });
+  daemon.finishTurn(session, turnId);
+  await completed(session, start);
+  assert.deepEqual(
+    turnEvents(session, start).filter((event) => event.type === "status.update").map((event) => event.payload.text),
+    ["The docs tool asked for input Portals cannot give, so it was declined."],
+  );
+});
+
+/** An MCP tool approval as Codex asks it: one with no item or approval id to tell two calls apart. */
+function shoutApproval(threadId: string, turnId: string): Record<string, unknown> {
+  const meta = { codex_approval_kind: "mcp_tool_call", persist: ["session", "always"], tool_name: "shout", tool_params: { text: "hi" } };
+  return { threadId, turnId, serverName: "scratch", mode: "form", _meta: meta, message: 'Allow the scratch MCP server to run tool "shout"?', requestedSchema: { type: "object", properties: {} } };
+}
+
+test("two calls of one MCP tool with the same arguments are two cards, each answered on its own request", async () => {
+  const session = await createThread();
+  const start = client.frames.length;
+  await send(session, "Shout hi twice.");
+  const turnId = await daemon.activeTurn(session);
+  const first = daemon.request(session, "mcpServer/elicitation/request", shoutApproval(session, turnId));
+  const firstCard = await client.next((frame) => frame.method === "approval" && frame.params.session_id === session);
+  const second = daemon.request(session, "mcpServer/elicitation/request", shoutApproval(session, turnId));
+  const secondCard = await client.next((frame) => frame.method === "approval" && frame.params.session_id === session);
+  assert.notEqual(secondCard.id, firstCard.id);
+  client.answer(firstCard.id, { choice: "once" });
+  assert.deepEqual((await first).result, { action: "accept", content: null, _meta: null });
+  client.answer(secondCard.id, { choice: "deny" });
+  assert.deepEqual((await second).result, { action: "decline", content: null, _meta: null });
+  assert.equal(daemon.openRequests().filter((request) => request.threadId === session).length, 0);
+  daemon.finishTurn(session, turnId);
+  await completed(session, start);
+});
+
+test("the connection to Codex drops while two calls of one MCP tool with the same arguments wait: both cards stay, and each answer reaches the request Codex asks again", async () => {
+  const session = await createThread();
+  const start = client.frames.length;
+  await send(session, "Shout hi twice.");
+  const turnId = await daemon.activeTurn(session);
+  const first = daemon.request(session, "mcpServer/elicitation/request", shoutApproval(session, turnId));
+  const firstCard = await client.next((frame) => frame.method === "approval" && frame.params.session_id === session);
+  const second = daemon.request(session, "mcpServer/elicitation/request", shoutApproval(session, turnId));
+  const secondCard = await client.next((frame) => frame.method === "approval" && frame.params.session_id === session);
+  const from = daemon.calls.length;
+  daemon.dropAll();
+  // The bridge follows the thread again; Codex asks both again under new ids.
+  await daemon.waitForCall((call) => call.method === "thread/resume" && call.params.threadId === session, from);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  client.answer(secondCard.id, { choice: "deny" });
+  assert.deepEqual((await second).result, { action: "decline", content: null, _meta: null });
+  client.answer(firstCard.id, { choice: "once" });
+  assert.deepEqual((await first).result, { action: "accept", content: null, _meta: null });
+  // Two cards throughout: not asked again, not withdrawn.
+  assert.equal(client.frames.slice(start).filter((frame) => frame.method === "approval" && frame.params.session_id === session).length, 2);
+  assert.equal(turnEvents(session, start).some((event) => event.type === "request.cancel"), false);
+  daemon.finishTurn(session, turnId);
+  await completed(session, start);
 });
 
 test("a turn begun at the desk on a thread the bridge follows shows as a turn of its own", async () => {
@@ -4726,12 +5112,12 @@ test("what a Codex turn spent is kept by the bridge, as Codex keeps no tokens wi
   daemon.scripts.push("plain");
   await phone.call("prompt.submit", { session_id: session, text: "List this folder.\nThen tell me about 221." });
   const done = await phone.from(start, (frame) => isEvent(frame, "message.complete", session));
-  assert.deepEqual(done.params.payload.turn_usage, { seconds: 6.2, tokens: 49_635 });
+  assert.deepEqual(done.params.payload.turn_usage, { seconds: 8.3, tokens: 45_857 });
   // Kept under Codex's id for the turn.
   const kept = JSON.parse(readFileSync(join(first.home, "state", "spent", `${session}.json`), "utf8"));
   assert.equal(kept.length, 1);
   assert.match(kept[0].turn, /\S/);
-  assert.deepEqual({ ...kept[0], turn: "" }, { turn: "", seconds: 6.2, tokens: 49_635 });
+  assert.deepEqual({ ...kept[0], turn: "" }, { turn: "", seconds: 8.3, tokens: 45_857 });
   await phone.close();
   await first.close();
 
@@ -4740,9 +5126,9 @@ test("what a Codex turn spent is kept by the bridge, as Codex keeps no tokens wi
   try {
     const resumed = await again.call("session.resume", { session_id: session, profile: "codex", inline_images: false });
     const last = resumed.messages.at(-1);
-    assert.equal(last.text, "I saw `hello.txt`; 221 is not prime because 221 = 13 × 17.");
+    assert.equal(last.text, "I saw `hello.txt`; 221 is not prime (13 × 17).");
     // The tokens the bridge kept, and its time for the turn where Codex's history has none.
-    assert.deepEqual(last.turn_usage, { seconds: 6.2, tokens: 49_635 });
+    assert.deepEqual(last.turn_usage, { seconds: 8.3, tokens: 45_857 });
   } finally {
     await again.close();
     await second.dispose();

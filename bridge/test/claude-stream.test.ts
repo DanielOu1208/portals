@@ -2,6 +2,8 @@ import "./environment.ts";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { test } from "node:test";
+import { machineWord } from "../src/platform.ts";
+import { ClaudeSignIn } from "../src/providers/claude/signIn.ts";
 import { ClaudeStream, ContextWindows } from "../src/providers/claude/stream.ts";
 import { fromAgentLog, fromJournal, pastSubagents } from "../src/providers/claude/tasks.ts";
 import { tinyCheckJournal } from "./claude-fixtures.ts";
@@ -58,13 +60,13 @@ test("a plain reply streams its text and ends complete with the context use; thi
   const events = replayStream("plain");
   assert.match(text(events), /^Hello/);
   // What the turn spent: the result's usage, in, out and cached (it read and wrote the cache), each once.
-  assert.deepEqual(events.at(-1), { type: "turn.end", status: "complete", usage: { used: 25215, max: 1_000_000 }, spent: { tokens: 25215 } });
+  assert.deepEqual(events.at(-1), { type: "turn.end", status: "complete", usage: { used: 24847, max: 1_000_000 }, spent: { tokens: 24847 } });
   // The whole messages that repeat the streamed text add nothing.
   assert.equal(ofType(events, "turn.end").length, 1);
-  // Haiku 5.5 thinks when it chooses to (adaptive thinking): not for that hello, but before its tools.
+  // Haiku 5.5 thinks when it chooses to (adaptive thinking): not for that hello, nor for its Read, but before its edit.
   const tools = replayStream("tools");
   assert.ok(ofType(tools, "reasoning").length > 5, "thinking streams word by word");
-  assert.ok(tools.findIndex((event) => event.type === "reasoning") < tools.findIndex((event) => event.type === "tool.start"));
+  assert.ok(tools.findIndex((event) => event.type === "reasoning") < tools.findIndex((event) => event.type === "tool.start" && event.name === "patch"));
 });
 
 // 2026-10-27, an hour into a Claude Code thread's first turn: "in this session i
@@ -166,9 +168,9 @@ test("plan mode: the plan is a row of its own, then the work it planned", () => 
 
 test("an interrupted turn ends interrupted, with what streamed before it", () => {
   const events = replayStream("interrupt");
-  assert.equal(text(events), "1");
+  assert.equal(text(events), "1\n2\n3\n4");
   // Claude Code's result for a stopped turn says no usage: what its request streamed, as its stored session keeps it.
-  assert.deepEqual(events.at(-1), { type: "turn.end", status: "interrupted", usage: { used: 25351, max: 1_000_000 }, spent: { tokens: 25351 } });
+  assert.deepEqual(events.at(-1), { type: "turn.end", status: "interrupted", usage: { used: 24851, max: 1_000_000 }, spent: { tokens: 24851 } });
 });
 
 test("a message sent mid-turn that gets a turn of its own stays in the app's one turn", () => {
@@ -233,6 +235,60 @@ test("the API's error is said once: Claude Code's own message saying it is left 
   assert.deepEqual(stream.map(result("b") as never), [{ type: "turn.end", status: "error", error: refused, retryable: true, usage: undefined }]);
 });
 
+test("a turn Claude Code refuses for the sign-in ends with what to run on the host, not its /login, and can be tried again", () => {
+  // As Claude Code 2.1.318 says it with no sign-in (an empty config folder).
+  const said = { type: "assistant", error: "authentication_failed", is_api_error_message: true, message: { id: "e", model: "<synthetic>", role: "assistant", content: [{ type: "text", text: "Not logged in · Please run /login" }] } };
+  const result = { type: "result", subtype: "success", is_error: true, result: "Not logged in · Please run /login", terminal_reason: "api_error" };
+  const refused = (signIn?: ClaudeSignIn) => {
+    const stream = new ClaudeStream({ cwd: "/tmp", ...(signIn ? { signIn: signIn.thread("a") } : {}) });
+    assert.deepEqual(stream.map(said as never), []);
+    return stream.map(result as never);
+  };
+  const signedOut = `Claude Code is not signed in on this ${machineWord()}. Run \`claude auth login\` in a terminal there, then try again.`;
+  assert.deepEqual(refused(), [{ type: "turn.end", status: "error", error: signedOut, retryable: true, usage: undefined }]);
+  const now = Date.parse("2026-11-28T12:00:00Z");
+  const login = new ClaudeSignIn({ credential: "login", now: () => now, timeZone: "UTC" });
+  assert.equal((refused(login)[0] as { error: string }).error, signedOut);
+  // A login Claude Code said ends before now has ended.
+  login.heard("2026-11-27T08:00:00.000Z");
+  assert.equal((refused(login)[0] as { error: string }).error, `Claude Code's sign-in on this ${machineWord()} has ended. Run \`claude auth login\` in a terminal there, then try again.`);
+  // A key or a token in config.json is what was refused.
+  assert.match((refused(new ClaudeSignIn({ credential: "apiKey" }))[0] as { error: string }).error, /^Claude Code was refused the API key in the host's config.json \(claude.apiKey\)/);
+  assert.match((refused(new ClaudeSignIn({ credential: "oauthToken" }))[0] as { error: string }).error, /^Claude Code was refused the token in the host's config.json \(claude.oauthToken\)\. Make a new one with `claude setup-token`/);
+  // A refusal of another kind is Claude Code's own words, and the next result is not taken for one.
+  const stream = new ClaudeStream({ cwd: "/tmp", signIn: login.thread("a") });
+  stream.map(said as never);
+  stream.map(result as never);
+  assert.deepEqual(stream.map({ type: "result", subtype: "success", is_error: true, result: "API Error: 529 overloaded" } as never), [
+    { type: "turn.end", status: "error", error: "API Error: 529 overloaded", retryable: true, usage: undefined },
+  ]);
+});
+
+test("from ten days before the Claude sign-in ends, each thread says so once a day, until it is renewed", () => {
+  let now = Date.parse("2026-11-16T09:00:00Z");
+  const signIn = new ClaudeSignIn({ credential: "login", now: () => now, timeZone: "UTC" });
+  const end = (stream: ClaudeStream, endsAt = "2026-11-27T08:00:00.000Z") => stream.map({ type: "result", subtype: "success", is_error: false, credential_expires_at: endsAt } as never);
+  const notice = { type: "notice", level: "warn", text: `Claude Code's sign-in on this ${machineWord()} ends on Fri, Nov 27. Run \`claude auth login\` in a terminal there before then to keep its threads working.` };
+  const complete = { type: "turn.end", status: "complete", usage: undefined };
+  const first = new ClaudeStream({ cwd: "/tmp", signIn: signIn.thread("a") });
+  // Eleven days before: nothing yet.
+  assert.deepEqual(end(first), [complete]);
+  now = Date.parse("2026-11-17T09:00:00Z");
+  assert.deepEqual(end(first), [notice, complete]);
+  assert.deepEqual(end(first), [complete]);
+  // Another thread, and another process of the first, the same day.
+  assert.deepEqual(end(new ClaudeStream({ cwd: "/tmp", signIn: signIn.thread("b") })), [notice, complete]);
+  assert.deepEqual(end(new ClaudeStream({ cwd: "/tmp", signIn: signIn.thread("a") })), [complete]);
+  // The next day it says so again.
+  now = Date.parse("2026-11-18T09:00:00Z");
+  assert.deepEqual(end(first), [notice, complete]);
+  // Signed in again: the new login ends a month on.
+  now = Date.parse("2026-11-19T09:00:00Z");
+  assert.deepEqual(end(first, "2026-12-19T08:00:00.000Z"), [complete]);
+  // A result that says no date (an older Claude Code, an API key) leaves what was said.
+  assert.deepEqual(first.map({ type: "result", subtype: "success", is_error: false } as never), [complete]);
+});
+
 test("an error result ends the turn as failed with a sentence; a tool left open is closed as stopped", () => {
   const stream = new ClaudeStream({ cwd: "/tmp", now: () => 0 });
   stream.map({ type: "assistant", message: { id: "m", content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "sleep 100" } }] } } as never);
@@ -292,10 +348,10 @@ test("/compact that runs: a passing status, the mark of its place with the token
   assert.deepEqual(last, [
     { type: "status", text: "Compacting the conversation…" },
     { type: "status", text: "" },
-    { type: "compacted", trigger: "manual", tokensBefore: 25473 },
-    { type: "usage", usage: { used: 2807, max: 1_000_000 } },
+    { type: "compacted", trigger: "manual", tokensBefore: 24966 },
+    { type: "usage", usage: { used: 8584, max: 1_000_000 } },
     // Neither the summary nor Claude Code's "Compacted" is said.
-    { type: "turn.end", status: "complete", usage: { used: 2807, max: 1_000_000 } },
+    { type: "turn.end", status: "complete", usage: { used: 8584, max: 1_000_000 } },
   ]);
 });
 
@@ -346,8 +402,8 @@ test("background work: the stream says it runs until it ends, and the turn Claud
   assert.deepEqual(begun, [
     {
       type: "turn.begin",
-      user: 'Background command "Sleep for 3 seconds in background" completed (exit code 0)',
-      host: { kind: "process_complete", text: 'Background command "Sleep for 3 seconds in background" completed (exit code 0)' },
+      user: 'Background command "Sleep 3 seconds in background" completed (exit code 0)',
+      host: { kind: "process_complete", text: 'Background command "Sleep 3 seconds in background" completed (exit code 0)' },
     },
   ]);
   // Two turns, each ended once: the app's, then Claude's own.
@@ -366,7 +422,7 @@ test("a resumed session's empty result answers nothing: the turn ends with the r
   assert.deepEqual(ofType(events, "turn.begin"), []);
   assert.equal(ofType(events, "turn.end").length, 1);
   assert.equal(events.at(-1)?.type, "turn.end");
-  assert.match(text(events), /^No, it isn't running anymore/);
+  assert.match(text(events), /^Probably not: the notification says the task stopped/);
 });
 
 test("work that ends while a message waits: Claude's own turn first keeps the app's turn open", () => {

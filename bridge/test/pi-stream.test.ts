@@ -85,14 +85,14 @@ test("every recorded turn ends with exactly one turn.end", () => {
 
 test("a plain reply streams, and the turn ends when Pi settles, not at its system or user messages", () => {
   const events = replay("plain");
-  assert.equal(said(events), "A JSON line is a single line of text containing one valid JSON value. It’s commonly used in newline-delimited JSON files, where each line is a separate record.");
+  assert.equal(said(events), "A JSON line is one complete JSON value written on a single line. In JSON Lines files, each line is a separate record, usually followed by a newline.");
   assert.ok(ofType(events, "text").length > 20, "the reply streams piece by piece");
   // The system message Pi sends first and the user's own message say nothing.
   assert.deepEqual(types(events).filter((type) => type !== "text"), ["turn.end", "usage"]);
   // What it spent: the tokens of Pi's request, in, out and cached (feature turn_usage).
-  assert.deepEqual(ofType(events, "turn.end")[0], { type: "turn.end", status: "complete", spent: { tokens: 1214 } });
+  assert.deepEqual(ofType(events, "turn.end")[0], { type: "turn.end", status: "complete", spent: { tokens: 1194 } });
   // The recorder asked for the stats after the turn; the ring is Pi's context use.
-  assert.deepEqual(events.at(-1), { type: "usage", usage: { used: 1214, max: 272_000 } });
+  assert.deepEqual(events.at(-1), { type: "usage", usage: { used: 1194, max: 272_000 } });
 });
 
 test("a turn's end comes at agent_settled: complete, interrupted when aborted, an error with the last message's reason", () => {
@@ -140,7 +140,7 @@ test("recorded: a refused turn ends with the provider's sentence, without its JS
 
 test("recorded: Stop while the reply streams, and Stop while a command runs, both end interrupted", () => {
   const streaming = replay("stop");
-  assert.equal(said(streaming), "1");
+  assert.equal(said(streaming), "1\n2\n3\n");
   assert.deepEqual(streaming.at(-1), { type: "turn.end", status: "interrupted" });
 
   // The command gets its end from Pi ("Command aborted"), then Pi adds an empty message
@@ -148,7 +148,7 @@ test("recorded: Stop while the reply streams, and Stop while a command runs, bot
   const command = replay("stop-tool");
   assert.deepEqual(types(command), ["tool.start:terminal", "tool.end:terminal", "turn.end"]);
   assert.deepEqual(ofType(command, "tool.end")[0].result, { status: "error", error: "Stopped before it finished." });
-  assert.deepEqual(command.at(-1), { type: "turn.end", status: "interrupted", spent: { tokens: 1201 } });
+  assert.deepEqual(command.at(-1), { type: "turn.end", status: "interrupted", spent: { tokens: 1183 } });
 });
 
 test("tools still open when the turn ends close as stopped, before the one turn.end", () => {
@@ -239,7 +239,7 @@ test("a text block with no delta is still said once", () => {
 
 test("recorded: thinking streams before the text, without the blank line OpenAI ends it with", () => {
   const events = replay("thinking");
-  assert.equal(thought(events), "**Checking the count two ways**");
+  assert.equal(thought(events), "**Cross-checking the count**");
   assert.ok(events.findLastIndex((event) => event.type === "reasoning") < events.findIndex((event) => event.type === "text"));
   // The recording does end the block's deltas with a blank line.
   const deltas = fixture("thinking").flatMap((entry) => (entry.record?.assistantMessageEvent?.type === "thinking_delta" ? [entry.record.assistantMessageEvent.delta] : []));
@@ -404,7 +404,7 @@ test("recorded: five tools in a turn are five rows with their results and a diff
   assert.deepEqual(ls.result, { output: "ls: no-such-file.txt: No such file or directory\n", exit_code: 1 });
   assert.deepEqual(write.args, { path: "done.txt", content: "done" });
   assert.deepEqual(write.result, { diff: "--- a/done.txt\n+++ b/done.txt\n+done\n" });
-  assert.equal(said(events), "Completed the five steps in order; `ls no-such-file.txt` failed as expected.");
+  assert.equal(said(events), "Updated `hello.txt`, ran both commands, and wrote `done` to `done.txt`.");
 });
 
 test("recorded: two calls of one message run at once; the one an extension refused closes as blocked", () => {
@@ -429,8 +429,8 @@ test("recorded: the calls a codemode script makes are not rows of their own", ()
   const events = replay("own");
   assert.deepEqual(types(events), ["tool.start:execute_code", "tool.end:execute_code", ...Array(ofType(events, "text").length).fill("text"), "turn.end", "usage"]);
   const [script] = ofType(events, "tool.end");
-  assert.match(String(script.args.code), /^const paths = \["one\.txt", "two\.txt"\];/);
-  assert.deepEqual(script.result, { output: 'Script completed\nWall time 0.1 seconds\nOutput:\n[["one.txt",11],["two.txt",12]]' });
+  assert.match(String(script.args.code), /^const results = await Promise\.all\(\[\n  tools\.read\(\{ path: "one\.txt"/);
+  assert.deepEqual(script.result, { output: 'Script completed\nWall time 0.1 seconds\nOutput:\n[11,12]' });
   // The recording has the two nested reads, each with its parent's id.
   const nested = fixture("own").filter((entry) => entry.record?.type === "tool_execution_start" && entry.record.parentToolCallId);
   assert.equal(nested.length, 2);
@@ -456,25 +456,25 @@ test("recorded: /compact is a status line and a manual mark; a refused one fails
   assert.deepEqual(events.slice(at - 2, at + 2), [
     { type: "status", text: "Compacting the conversation…" },
     { type: "status", text: "" },
-    { type: "compacted", trigger: "manual", tokensBefore: 1245 },
-    // Pi's estimate afterwards (1,609) is larger than what was there: the ring keeps its value.
-    { type: "turn.end", status: "complete", usage: { used: 1245, max: 272_000 } },
+    { type: "compacted", trigger: "manual", tokensBefore: 1230 },
+    // Pi's estimate afterwards (1,482) is larger than what was there: the ring keeps its value.
+    { type: "turn.end", status: "complete", usage: { used: 1230, max: 272_000 } },
   ]);
   assert.deepEqual(events.slice(at + 2, at + 5), [
     { type: "status", text: "Compacting the conversation…" },
     { type: "status", text: "" },
-    { type: "turn.end", status: "error", error: "Already compacted", retryable: true, usage: { used: 1245, max: 272_000 } },
+    { type: "turn.end", status: "error", error: "Already compacted", retryable: true, usage: { used: 1230, max: 272_000 } },
   ]);
   assert.equal(ofType(events, "notice").length, 0);
   // Right after the compaction Pi answers the stats with null, which changes nothing.
   assert.deepEqual(answers("compact", "get_session_stats")[1].contextUsage, { tokens: null, contextWindow: 272_000, percent: null });
-  assert.deepEqual(ofType(events, "usage").map((event) => event.usage.used), [1245, 1375]);
+  assert.deepEqual(ofType(events, "usage").map((event) => event.usage.used), [1230, 1335]);
 });
 
 test("recorded: a compaction Pi starts itself is an auto mark inside the turn, before the turn's end", () => {
   const events = replay("compact-auto");
   assert.deepEqual(types(events).slice(-4), ["status", "status", "compacted", "turn.end"]);
-  assert.deepEqual(ofType(events, "compacted"), [{ type: "compacted", trigger: "auto", tokensBefore: 1213 }]);
+  assert.deepEqual(ofType(events, "compacted"), [{ type: "compacted", trigger: "auto", tokensBefore: 1199 }]);
 });
 
 test("a compaction of Pi's own that fails is a notice; an aborted one is not; the ring takes Pi's estimate when it is smaller", () => {

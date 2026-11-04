@@ -245,7 +245,7 @@ test("Claude Code: a session open in a terminal is not continued; once closed it
   const resumed = await client.call("session.resume", { session_id: id, profile: "claude" });
   assert.deepEqual(
     resumed.messages.map((message: Frame) => (message.role === "tool" ? message.name : message.role)),
-    ["user", "assistant", "read_file", "patch", "terminal", "assistant"],
+    ["user", "read_file", "assistant", "patch", "terminal", "assistant"],
   );
   const start = client.frames.length;
   assert.equal((await client.call("prompt.submit", { session_id: id, text: "Hello." })).status, "streaming");
@@ -315,7 +315,7 @@ test("Claude Code: a session only read takes no message, shows what the terminal
   const id = "6d3c8a9e-0000-4000-8000-000000000003";
   const messages = inFolder(claudeHistory("tools"), at("projects/app"));
   files.sessions.push({ sessionId: id, cwd: at("projects/app"), lastModified: now, summary: "Edit hello" });
-  files.stored.set(id, { title: null, messages: messages.slice(0, 2) });
+  files.stored.set(id, { title: null, messages: messages.slice(0, 3) });
   open.add(id);
 
   const read = await client.call("session.adopt", { profile: "claude", session_id: id, mode: "read" });

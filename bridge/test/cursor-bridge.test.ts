@@ -1756,7 +1756,7 @@ test("a Cursor that is not signed in says so with what to do, and its process is
   writeFileSync(join(state.agentDir, "signed-out"), "");
   let before = calls(state.agentDir).length;
   await assert.rejects(createThread({}, state.phone), (error: RpcFailure) => error.message === notSignedInText);
-  assert.equal(notSignedInText, `Cursor is not signed in on this ${machineWord()}. Run \`cursor-agent login\` in a terminal there.`);
+  assert.equal(notSignedInText, `Cursor is not signed in on this ${machineWord()}. Run \`cursor-agent login\` in a terminal there, then try again.`);
   const refused = calls(state.agentDir).slice(before);
   assert.deepEqual(methods(refused), ["initialize", "cursor/list_available_models", "session/new"]);
   await until(() => !alive(refused[0].pid), "the signed-out process has gone");
@@ -1784,6 +1784,17 @@ test("a reply that ends with Cursor's request to sign in fails the turn with the
   assert.equal(failed.status, "error");
   assert.equal(failed.text, notSignedInText);
   // That process lost its sign-in for good: the next message starts another.
+  await until(() => !alive(pid), "the process has gone");
+  assert.notEqual(Number(/pid=(\d+)/.exec(await reply(session, "where", state.phone))?.[1]), pid);
+});
+
+test("a sign-in Cursor's backend refuses fails the turn with the same sentence, and the process is stopped as for one that has gone", async (t) => {
+  const state = await rig(t);
+  const session = await createThread({}, state.phone);
+  const pid = Number(/pid=(\d+)/.exec(await reply(session, "where", state.phone))?.[1]);
+  const events = await runTurn(state.phone, session, "refused");
+  assert.deepEqual([events.at(-1).payload.status, events.at(-1).payload.text, events.at(-1).payload.error_surface?.retryable], ["error", notSignedInText, true]);
+  assert.equal(events.some((event: any) => event.type === "message.delta" && /unauthenticated/.test(event.payload.text)), false);
   await until(() => !alive(pid), "the process has gone");
   assert.notEqual(Number(/pid=(\d+)/.exec(await reply(session, "where", state.phone))?.[1]), pid);
 });
@@ -2390,10 +2401,11 @@ function versionLines(t: TestContext): () => string[] {
   return () =>
     written.mock.calls
       .map((call) => String(call.arguments[0]).trimEnd().split(" ").slice(1).join(" "))
-      .filter((line) => /Cursor (was not found|is \d+\.\d+\.\d+;|\d+\.\d+\.\d+$)/.test(line));
+      .filter((line) => /Cursor (was not found|is \d+\.\d+\.\d+[;,]|\d+\.\d+\.\d+$)/.test(line));
 }
 
 const anotherRelease = (version: string) => `warn  Cursor is ${version}; this bridge was tested with ${testedCursorVersion}. Check a thread before relying on it.`;
+const newerRelease = (version: string) => `warn  Cursor is ${version}, newer than this bridge was tested with (${testedCursorVersion}). Check a thread before relying on it.`;
 
 test("at start the bridge logs Cursor's version: an error when the program does not run, a warning for another release, a line for the tested one", async (t) => {
   const dir = agentFolder();
@@ -2457,7 +2469,9 @@ test("a release of Cursor not seen since the bridge started is told of once, whe
   await next(null, "and again");
   await next("2026.11.02-9f8e7d6", "once more");
   await until(() => lines().length === 3, "the third release was told of");
-  assert.deepEqual(lines(), [`info  Cursor ${testedCursorVersion}`, anotherRelease("2026.10.09"), anotherRelease("2026.11.02")]);
+  assert.deepEqual(lines(), [`info  Cursor ${testedCursorVersion}`, anotherRelease("2026.10.09"), newerRelease("2026.11.02")]);
+  // `/status` names the release found last.
+  assert.equal(own.version.statusLine(), `Version: Cursor 2026.11.02, newer than the ${testedCursorVersion} Portals was tested with`);
   assert.equal(new Set(calls(dir).map((call) => call.pid)).size, 4);
 });
 

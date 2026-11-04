@@ -30,7 +30,9 @@ import { ClaudeTodos } from "./todos.ts";
 import { InputQueue } from "./input.ts";
 import { claudeEffort, permissionModeFor, queryOptions, thinkingBudget, threadModeFor } from "./options.ts";
 import { permissionRequest, permissionResult } from "./permissions.ts";
+import type { ClaudeSignIn } from "./signIn.ts";
 import type { CommandAccess } from "../../portals/access.ts";
+import type { VersionCheck } from "../program.ts";
 import type { Warmable, WarmPool } from "../pool.ts";
 import { ClaudeStream, type ContextWindows } from "./stream.ts";
 import type { PastSubagent } from "./tasks.ts";
@@ -137,14 +139,20 @@ export interface ClaudeHost {
   modelInfo(model: string): ModelInfo | undefined;
   /** Whether a terminal on the Mac has the session open now (`claude agents`). */
   isOpenInTerminal(id: string): Promise<boolean>;
+  /** The commands a session's Claude Code says need a terminal (`terminal_slash_commands` in its `system/init`), which the app does not offer. */
+  terminalCommands(names: unknown): void;
   /** A query started: the provider can refresh what it knows (models, commands). */
   learn(query: QueryLike, reported: { permissionMode: string | null; effort: string | null }, overridden: boolean): void;
   /** Claude Code said how much of a usage limit is used (`rate_limit_event`), for `/usage`. */
   limitsHeard(info: Record<string, unknown>): void;
+  /** Which Claude Code runs, which each process says in its `system/init` (`claude_code_version`). */
+  readonly version: VersionCheck;
   /** A session closed: the provider keeps track of it no longer. */
   forget(session: ClaudeSession): void;
   /** The window each model's context fills, as its processes have said. */
   readonly windows: ContextWindows;
+  /** When the sign-in ends, as its processes have said. */
+  readonly signIn: ClaudeSignIn;
 }
 
 interface Live {
@@ -507,6 +515,7 @@ export class ClaudeSession implements ProviderSession, Warmable {
         background: (event) => this.sink.emit(event),
         todos: this.todos,
         windows: this.host.windows,
+        signIn: this.host.signIn.thread(this.id),
         unknown: (kind) => log.info("Claude Code sent a message the bridge does not know", { session: this.id, kind }),
       }),
       controls: Promise.resolve(),
@@ -561,6 +570,7 @@ export class ClaudeSession implements ProviderSession, Warmable {
   private receive(live: Live, message: SDKMessage): void {
     if (this.live !== live) return;
     if (message.type === "rate_limit_event") this.host.limitsHeard(message.rate_limit_info as Record<string, unknown>);
+    if (message.type === "system" && message.subtype === "init") this.host.version.runningIs(message.claude_code_version);
     // Claude Code also sends `api_retry` after a turn's result, as a heartbeat while a
     // background agent waits out a usage limit: at rest there is no turn to show it in,
     // and a line held from it would stand over the next run (2026-10-26: "Drop
@@ -575,7 +585,10 @@ export class ClaudeSession implements ProviderSession, Warmable {
       else this.emit(event);
     }
     this.observeMode(live);
-    if (message.type === "system" && (message as { subtype?: unknown }).subtype === "init") this.askWindow(live);
+    if (message.type === "system" && (message as { subtype?: unknown }).subtype === "init") {
+      this.host.terminalCommands((message as { terminal_slash_commands?: unknown }).terminal_slash_commands);
+      this.askWindow(live);
+    }
   }
 
   /**

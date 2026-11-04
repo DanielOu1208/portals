@@ -107,6 +107,9 @@ export const testCommands: SlashCommand[] = [
   { name: "clear", description: "Start a new session with empty context", argumentHint: "", builtin: true },
   { name: "model", description: "Set the AI model for Claude Code", argumentHint: "<model>", builtin: true },
   { name: "grill-me", description: "Interview the user about a plan", argumentHint: "", builtin: false },
+  // Ones that need a terminal, which Claude Code 2.1.318 lists in `terminal_slash_commands`.
+  { name: "doctor", description: "Diagnose and verify your Claude Code installation and settings", argumentHint: "", builtin: true },
+  { name: "send-to-project", description: "Send this session to another project", argumentHint: "", builtin: true },
 ];
 
 /** What every FakeQuery answers for `/usage` (its own `/usage`), until a test says otherwise; an error is thrown. */
@@ -377,7 +380,7 @@ export class FakeFiles implements SessionFiles {
 
 /** A Claude provider whose queries are FakeQuery objects, in the order they start. */
 export function fakeClaude(
-  options: { maxWarm?: number; idleMinutes?: number; files?: FakeFiles; agents?: () => Promise<unknown>; appliedModel?: string | null; now?: () => number; interruptGraceMs?: number; titleWatchMs?: number[]; home?: string; managedSettings?: string } = {},
+  options: { maxWarm?: number; idleMinutes?: number; files?: FakeFiles; agents?: () => Promise<unknown>; authStatus?: () => Promise<unknown>; appliedModel?: string | null; now?: () => number; interruptGraceMs?: number; titleWatchMs?: number[]; home?: string; managedSettings?: string } = {},
 ) {
   const queries: FakeQuery[] = [];
   const files = options.files ?? new FakeFiles();
@@ -389,6 +392,8 @@ export function fakeClaude(
     managedSettings: options.managedSettings ?? "/nonexistent/managed-settings.json",
     // No terminal has anything open unless the test says so.
     agents: options.agents ?? (async () => []),
+    // Signed in with no end said, unless the test says.
+    authStatus: options.authStatus ?? (async () => ({ loggedIn: true, loginExpiresAt: null })),
     now: options.now,
     interruptGraceMs: options.interruptGraceMs,
     titleWatchMs: options.titleWatchMs,

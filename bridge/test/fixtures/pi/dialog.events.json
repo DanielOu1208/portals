@@ -55,7 +55,7 @@
  },
  {
   "type": "tool.start",
-  "id": "call_CfcO5eVMed9EqwZAwkn1EYJS|fc_0a1317b6a91829f0016accba28fd1c87d0a4ba5ef428fe2fb8",
+  "id": "call_mJmONWTKDx8rf4MPnIZB5DOW|fc_0b9bf91f84c780d1016aeb03c0368c87d0b618703a9dd45c21",
   "name": "terminal",
   "args": {
    "command": "echo first"
@@ -63,7 +63,7 @@
  },
  {
   "type": "tool.start",
-  "id": "call_ArOPSbG58aH3lTJaPotAfpbY|fc_0a1317b6a91829f0016accba28fd3087d087bd0e56d3d6a69a",
+  "id": "call_urzop2JPGV0ng4rn5u1JnRnB|fc_0b9bf91f84c780d1016aeb03c0369c87d09f90789b87847f53",
   "name": "terminal",
   "args": {
    "command": "echo second"
@@ -71,7 +71,7 @@
  },
  {
   "type": "tool.end",
-  "id": "call_ArOPSbG58aH3lTJaPotAfpbY|fc_0a1317b6a91829f0016accba28fd3087d087bd0e56d3d6a69a",
+  "id": "call_urzop2JPGV0ng4rn5u1JnRnB|fc_0b9bf91f84c780d1016aeb03c0369c87d09f90789b87847f53",
   "name": "terminal",
   "args": {
    "command": "echo second"
@@ -83,7 +83,7 @@
  },
  {
   "type": "tool.end",
-  "id": "call_CfcO5eVMed9EqwZAwkn1EYJS|fc_0a1317b6a91829f0016accba28fd1c87d0a4ba5ef428fe2fb8",
+  "id": "call_mJmONWTKDx8rf4MPnIZB5DOW|fc_0b9bf91f84c780d1016aeb03c0368c87d0b618703a9dd45c21",
   "name": "terminal",
   "args": {
    "command": "echo first"
@@ -92,7 +92,7 @@
    "output": "first\n",
    "exit_code": 0
   },
-  "durationSeconds": 0.009
+  "durationSeconds": 0.013
  },
  {
   "type": "text",
@@ -103,7 +103,7 @@
   "type": "turn.end",
   "status": "complete",
   "spent": {
-   "tokens": 2818
+   "tokens": 2770
   }
  }
 ]

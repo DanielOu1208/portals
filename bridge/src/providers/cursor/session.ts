@@ -37,7 +37,7 @@ import {
   type ThreadMode,
 } from "../types.ts";
 import { cursorID, levelAt, levelSetting, levelsOf, modelAt, type CursorModel } from "./models.ts";
-import { cursorMode, cursorName, cursorQuirks, goAheadText, levelLeftToCursorText, noSuchModeText, notSignedInText, portalsNote, runsEverything, signInReply, turnFailure } from "./options.ts";
+import { cursorMode, cursorName, cursorQuirks, goAheadText, levelLeftToCursorText, noSuchModeText, notSignedInText, portalsNote, runsEverything, saysSignedOut, signInReply, turnFailure } from "./options.ts";
 import { askQuestion, createPlan, mergedTodos, permissionCard, permissionOutcome, planCard, planOutcome, questionCard, questionOutcome, todoRow, unplacedAnswer, updateTodos, type Todo } from "./requests.ts";
 import { CursorSubagents } from "./subagents.ts";
 import { cursorTools } from "./tools.ts";
@@ -567,8 +567,7 @@ export class CursorSession implements ProviderSession {
 
   /** The open turn's reply ended with Cursor saying its sign-in has gone: the model never ran. */
   private signInGone(): boolean {
-    const held = this.heldText();
-    return (held ?? this.lastPiece).trim() === signInReply;
+    return saysSignedOut(this.heldText() ?? this.lastPiece);
   }
 
   /** Why the open turn failed, as Cursor said it as the turn's last piece of reply; null when it did not. */
