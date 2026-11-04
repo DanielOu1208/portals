@@ -226,12 +226,26 @@ export function withReviews(turns: Turn[]): Turn[] {
 
 /** Each review's own turn (`withReviews`) by its id, with the id of the review's turn it is told in. */
 export function reviewsOwn(turns: readonly Turn[]): Map<string, string> {
-  const reviews = new Set(turns.filter((turn) => (turn.items as Item[]).some((item) => item.type === "enteredReviewMode")).map((turn) => turn.id));
+  const reviews = new Set(turns.filter(isReview).map((turn) => turn.id));
   const within = new Map<string, string>();
   for (const turn of turns) {
     if (typeof turn.rootTurnId === "string" && turn.rootTurnId !== turn.id && reviews.has(turn.rootTurnId)) within.set(turn.id, turn.rootTurnId);
   }
   return within;
+}
+
+/**
+ * Of turns read from the newest back: the oldest so far is a review without its own turn
+ * (`withReviews`), which Codex keeps just before it, so that is still to come. A review
+ * that has none (stopped before it had one) costs one more page, as the next oldest decides.
+ */
+export function reviewOwnStillOlder(newestFirst: readonly Turn[]): boolean {
+  const oldest = newestFirst.at(-1);
+  return oldest !== undefined && isReview(oldest) && ![...reviewsOwn(newestFirst).values()].includes(oldest.id);
+}
+
+function isReview(turn: Turn): boolean {
+  return (turn.items as Item[]).some((item) => item.type === "enteredReviewMode");
 }
 
 /**
