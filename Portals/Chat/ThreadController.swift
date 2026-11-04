@@ -1074,35 +1074,48 @@ final class ThreadController: Identifiable {
     /// A message of this device's steered into a run that a Stop took back before the
     /// agent read it (a bridge's `steer_withdrawn`): it goes back to the composer, ahead of
     /// anything written there since, with what was attached to it that this device still
-    /// has, so nothing typed is lost (2026-11-03: "the text goes back in the composer so
-    /// nothing typed is lost"). `asked`: the message as the transcript showed it, when it
-    /// still did; else `stored`, its words as the host keeps them, are all there is.
+    /// has, so nothing typed is lost. `asked`: the message as the transcript showed it, when
+    /// it still did; else `stored`, its words as the host keeps them, are all there is.
     private func giveBack(_ asked: UserMessage?, id: UUID, stored: String) {
         let original = savedConversation?.submissions.first { $0.id == id }
         let words = original?.text ?? asked?.text ?? SentText.parse(stored).text
-        composer.text = [words, composer.text].filter { !$0.isEmpty }.joined(separator: "\n\n")
-        if let mentions = original?.mentions { composer.mentions = mentions + composer.mentions.filter { !mentions.contains($0) } }
-        say("Stopped before the agent read your message. It is back in the composer.")
-        guard let asked, !asked.images.isEmpty || !asked.files.isEmpty else { return }
+        let mentions = original?.mentions ?? []
+        guard let asked, !asked.images.isEmpty || !asked.files.isEmpty else {
+            return putBack(words, mentions: mentions, images: [], files: [], whole: true)
+        }
         let held = heldAttachments(of: asked)
         let unread = (images: asked.images.filter { held.images[$0.id] == nil }, files: asked.files.filter { held.files[$0.id] == nil })
+        // In the order they were attached.
+        func given(_ images: [UUID: ImageAttachment], _ files: [UUID: FileAttachment]) {
+            let found = (images: asked.images.compactMap { images[$0.id] }, files: asked.files.compactMap { files[$0.id] })
+            putBack(words, mentions: mentions, images: found.images, files: found.files,
+                    whole: found.images.count == asked.images.count && found.files.count == asked.files.count)
+        }
+        guard !unread.images.isEmpty || !unread.files.isEmpty else { return given(held.images, held.files) }
+        // The rest from disk, off the main thread. The message goes back only then, words
+        // and attachments at once: never its words alone, to be sent without them, nor its
+        // attachments later into whatever the composer holds by then.
         Task {
-            var read: (images: [ImageAttachment], files: [FileAttachment]) = ([], [])
-            if !unread.images.isEmpty || !unread.files.isEmpty {
-                read = await submissionStore.attachmentsInBackground(images: unread.images, files: unread.files, in: localID, copies: imageStore)
-            }
+            let read = await submissionStore.attachmentsInBackground(images: unread.images, files: unread.files, in: localID, copies: imageStore)
             guard !isClosed else { return }
             var images = held.images, files = held.files
             for image in read.images { images[image.id] = image }
             for file in read.files { files[file.id] = file }
-            // In the order they were attached, before any attached since.
-            let given = (images: asked.images.compactMap { images[$0.id] }, files: asked.files.compactMap { files[$0.id] })
-            composer.images = given.images + composer.images.filter { image in !given.images.contains { $0.id == image.id } }
-            composer.files = given.files + composer.files.filter { file in !given.files.contains { $0.id == file.id } }
-            if given.images.count < asked.images.count || given.files.count < asked.files.count {
-                say("This device no longer has all that was attached to it. Attach it again, then send.", .warning)
-            }
+            given(images, files)
         }
+    }
+
+    /// Puts a message given back (`giveBack`) in the composer in one change, ahead of what
+    /// is there. `whole`: all that was attached to it is with it.
+    private func putBack(_ words: String, mentions: [String], images: [ImageAttachment], files: [FileAttachment], whole: Bool) {
+        var draft = composer
+        draft.text = [words, draft.text].filter { !$0.isEmpty }.joined(separator: "\n\n")
+        draft.mentions = mentions + draft.mentions.filter { !mentions.contains($0) }
+        draft.images = images + draft.images.filter { image in !images.contains { $0.id == image.id } }
+        draft.files = files + draft.files.filter { file in !files.contains { $0.id == file.id } }
+        composer = draft
+        say("Stopped before the agent read your message. It is back in the composer.")
+        if !whole { say("This device no longer has all that was attached to it. Attach it again, then send.", .warning) }
     }
 
     /// The message with `id` as the transcript shows it, the latest turns first.

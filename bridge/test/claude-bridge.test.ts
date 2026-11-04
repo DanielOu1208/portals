@@ -708,6 +708,46 @@ test("Stop between Claude's turns, before the one for a message steered in: it i
   assert.equal(turnEvents(session, start).filter((event) => event.type === "status.update" && event.payload.withdrawn).length, 1);
 });
 
+test("Stop with a message steered in that still waits on a setting change: it is taken back, the devices are told, and it is never sent", async () => {
+  const session = await createThread();
+  const start = client.frames.length;
+  const query = await send(session, "Count to 25.");
+  // Claude has begun its reply; the recording's next entry is the steered message reaching it.
+  const says = steerSays();
+  await playEntries(query, fixture("steer").slice(0, says.indexOf("send", says.indexOf("send") + 1)));
+  await client.from(start, (frame) => isEvent(frame, "message.delta", session));
+  // A mode change Claude Code has not answered yet holds every message sent after it.
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  query.setPermissionMode = async (mode) => {
+    query.calls.push(["setPermissionMode", mode]);
+    await held;
+  };
+  const moved = client.call("session.set_mode", { session_id: session, mode: "edits" });
+  await until(() => query.calls.some((call) => call[0] === "setPermissionMode"));
+  const messageID = "0E4C7B21-5D3A-4F86-A9B2-71C6E8D04F13";
+  assert.deepEqual(await client.call("prompt.submit", { session_id: session, text: "Then say banana.", message_id: messageID }), { status: "steered" });
+  const [stopped] = fixture("interrupt").filter((entry) => entry.kind === "message" && (entry.message as { type?: string }).type === "result");
+  query.interrupt = async (options) => {
+    query.calls.push(options ? ["interrupt", options] : ["interrupt"]);
+    setImmediate(() => query.emit({ ...(stopped.message as object), user_message_uuids: [query.received[0].uuid] }));
+    return { still_queued: [], cancelled: [] };
+  };
+  assert.deepEqual(await client.call("session.interrupt", { session_id: session }), { status: "interrupted" });
+  assert.equal((await completed(session, start)).payload.status, "interrupted");
+  const notice = (await client.from(start, (frame) => isEvent(frame, "status.update", session) && frame.params.payload.withdrawn !== undefined)).params;
+  assert.deepEqual(notice.payload.withdrawn, { text: "Then say banana.", message_id: messageID });
+  release();
+  await moved;
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  // Claude Code never had it: nothing for it to take back, and nothing written after the Stop.
+  assert.equal(query.received.length, 1);
+  assert.deepEqual(query.calls.filter((call) => call[0] === "interrupt"), [["interrupt"]]);
+  assert.equal(turnEvents(session, start).filter((event) => event.type === "message.start").length, 1);
+  const resumed = await client.call("session.resume", { session_id: session });
+  assert.deepEqual(resumed.messages.filter((message: Frame) => message.role === "user").map((message: Frame) => message.text), ["Count to 25."]);
+});
+
 test("Stop with nothing steered in asks Claude Code to take nothing back", async () => {
   const session = await createThread();
   const start = client.frames.length;

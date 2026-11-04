@@ -263,6 +263,11 @@ export class ClaudeSession implements ProviderSession, Warmable {
   private modelChanged = false;
   private effortChanged = false;
   private stopTimer: NodeJS.Timeout | null = null;
+  /**
+   * Messages steered in that are not written to Claude Code yet, behind a setting change
+   * it has not answered: a Stop takes them back before they are (`withdrawn`).
+   */
+  private readonly unsent = new Set<{ prompt: Prompt; withdrawn: boolean }>();
   private readonly stderr: string[] = [];
 
   constructor(options: SessionOptions, sink: SessionSink, host: ClaudeHost, history: StoredMessage[] = [], past: PastSubagent[] = [], cutOff = false) {
@@ -339,6 +344,8 @@ export class ClaudeSession implements ProviderSession, Warmable {
 
   private async send(prompt: Prompt, steering = false): Promise<true | "refused"> {
     let live: Live;
+    const waiting = steering ? { prompt, withdrawn: false } : null;
+    if (waiting) this.unsent.add(waiting);
     try {
       live = await this.warm();
       for (;;) {
@@ -348,8 +355,11 @@ export class ClaudeSession implements ProviderSession, Warmable {
         await permission;
         if (controls === live.controls && permission === live.permission) break;
       }
+      // Taken back by a Stop meanwhile, and the devices told: it is not sent, nor sent again.
+      if (waiting?.withdrawn) return true;
       if (this.closed || this.live !== live || live.closing) return "refused";
     } catch (error) {
+      if (waiting?.withdrawn) return true;
       // The original native turn still runs when a steer was never sent. Keep it
       // open; the session will retain this input for a turn of its own.
       if (this.closed || steering) return "refused";
@@ -357,6 +367,8 @@ export class ClaudeSession implements ProviderSession, Warmable {
       if (error instanceof NotStarted) this.endTurn({ type: "turn.end", status: "error", error: message, retryable: false });
       else this.endTurn({ type: "turn.end", status: "error", error: message === terminalHasIt ? message : `Claude Code could not start: ${message}` });
       return "refused";
+    } finally {
+      if (waiting) this.unsent.delete(waiting);
     }
     const uuid = randomUUID();
     const { message, skipped } = userMessage(prompt, uuid);
@@ -390,10 +402,16 @@ export class ClaudeSession implements ProviderSession, Warmable {
     }, this.host.interruptGraceMs);
     this.stopTimer.unref();
     // A message steered in that Claude has not read yet would run once the turn has
-    // stopped, as a turn of its own: Claude Code takes it back too, and the person has it
-    // back (2026-11-03: "Stop means stop, and the text goes back in the composer so
-    // nothing typed is lost"). Asked only then, so a Stop with none is as it always was.
+    // stopped, as a turn of its own: Claude Code takes it back too, and it goes back to
+    // the composer of the device that sent it. Asked only then, so a Stop with none is as
+    // it always was.
     const steered = new Map([...live.steers].filter(([uuid]) => live.stream.awaits(uuid)));
+    // One still waiting to be written is taken back here, before it is.
+    for (const waiting of this.unsent) {
+      if (waiting.withdrawn) continue;
+      waiting.withdrawn = true;
+      this.sink.emit({ type: "steer.withdrawn", prompt: waiting.prompt });
+    }
     try {
       const receipt = await live.query.interrupt(steered.size > 0 ? { cancelQueued: true } : undefined);
       this.withdraw(live, steered, receipt);
