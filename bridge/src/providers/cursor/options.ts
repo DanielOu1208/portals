@@ -103,6 +103,11 @@ export function turnFailure(piece: string): string | null {
   return error ? error : null;
 }
 
+// MARK: The terminal's chats
+
+/** Why a chat of Cursor's terminal is not continued or read, only forked (./desk.ts). */
+export const chatForkedOnlyText = `${cursorName} opens a chat from its terminal here only as a copy: fork it to go on in a new thread.`;
+
 /** One of Cursor's own slash commands that is left out: it writes the Mac's clipboard. */
 export const hiddenCommands = new Set(["copy-request-id"]);
 
@@ -137,14 +142,16 @@ export const cursorModeMeanings: Partial<Record<Exclude<ThreadMode, "default">, 
 };
 
 /**
- * What a thread says as it leaves Full access, once Cursor has run its session with Run
- * Everything. Cursor keeps that in the session's own store (`isRunEverything`, seen with
- * 2026.10.22), and from then on searches the web and fetches pages for it without asking,
- * on a Cursor not run with `--force` too, after a restart, and in a fork, which copies the
- * store. Commands and edits it decides by how its process was started, so they follow the
- * thread's mode. The store is Cursor's, and left alone: saying so is enough.
+ * What a thread says when Cursor keeps Run Everything in its session's own store
+ * (`isRunEverything`, seen with 2026.10.22): as it leaves Full access, once Cursor has run
+ * its session so, and as the first turn of a fork of a terminal chat whose store keeps it
+ * starts (`keepsRunEverything`, ./desk.ts). From then on Cursor searches the web and
+ * fetches pages for it without asking, on a Cursor not run with `--force` too, after a
+ * restart, and in a fork, which copies the store. Commands and edits it decides by how its
+ * process was started, so they follow the thread's mode. The store is Cursor's, and left
+ * alone: saying so is enough.
  */
-export const leftFullAccessText =
+export const keptFullAccessText =
   "Cursor keeps part of Full access for this thread: it will go on searching the web and fetching pages without asking, also after a restart and in forks of this thread.";
 
 /**

@@ -524,9 +524,10 @@ export class SessionManager {
   /** `adopt` continuing or reading a session, one call at a time for each. */
   private async adoptOnce(provider: Provider, options: AdoptOptions): Promise<Session> {
     const known = this.registry.get(options.id);
-    // An agent with no sessions of the desk's (Cursor) adopts only to fork: a thread of its
-    // taken off the list comes back as it was, from its record, which still has its folder.
-    if (!known && provider.adopt && (provider.deskSessions || !this.removedOf(options))) return this.takeUp(provider, options);
+    // An agent with no sessions of the desk's, or whose are only forked (Cursor), adopts only
+    // to fork: a thread of its taken off the list comes back as it was, from its record,
+    // which still has its folder.
+    if (!known && provider.adopt && ((provider.deskSessions && !provider.deskForksOnly) || !this.removedOf(options))) return this.takeUp(provider, options);
     if (!known) {
       const removed = this.removedOf(options);
       if (!removed) throw new DeskRefused(noDesk(provider));

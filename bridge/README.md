@@ -242,8 +242,9 @@ the network, and a link you tap opens in your browser.
 One setting in the app (the gear, under Messages) says what it does:
 
 - **Steer** (as it comes): the agent reads the message during the turn it is on. Claude
-  Code, Codex and Pi can; Droid takes it at the next model step. Cursor and Hermes
-  cannot, and queue it.
+  Code, Codex and Pi can; Droid takes it at the next model step. Cursor cannot add a
+  message to what it is doing: it stops, and runs the message instead. Hermes cannot,
+  and queues it.
 - **Queue**: the message waits and starts a turn of its own when the agent is done.
 
 Messages that wait are listed above the message field on every device connected to the
@@ -263,6 +264,7 @@ in a terminal on that computer (Claude Code's, Codex's and Pi's), to **continue*
 **fork** (a new thread with its history so far) or to **view only**. A Claude Code session
 a terminal has open is not continued, nor a Pi session while a Pi runs in a terminal in
 its folder: quit it there first, or fork. A Codex thread can be worked on from both.
+Cursor's terminal chats are listed too, to fork only.
 
 ### Claude Code
 
@@ -347,9 +349,17 @@ sign-in.
   as `cursor-agent mcp list` run there says.
 - **A turn Cursor could not finish** (no network, a plan that is used up) ends as failed,
   with what Cursor said.
-- A message sent while it works waits for the turn to end. There is no context meter or
-  `/compact`: Cursor tells of no tokens. Cursor keeps every session under
-  `~/.cursor/acp-sessions/`, and nothing deletes them.
+- **A message sent while it works** stops what Cursor was doing and runs in its place,
+  with the app set to Steer: Cursor has no way to add it to the work under way. With
+  Queue it waits for the turn to end.
+- **Chats from Cursor's terminal** are listed with the sessions from your terminal, and can
+  only be forked: Cursor opens a copy of the chat in the new thread, which shows the
+  conversation as Cursor sends it again. The chat in the terminal is left as it was. A
+  chat Cursor ran with Run Everything (`--force`, or Cursor's own setting) keeps it in the
+  copy too, so web searches there go on without asking; the thread says so with its first
+  message.
+- There is no context meter or `/compact`: Cursor tells of no tokens. Cursor keeps every
+  session under `~/.cursor/acp-sessions/`, and nothing deletes them.
 
 ### Droid
 

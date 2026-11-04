@@ -215,6 +215,8 @@ export function planCard(params: Params): AgentRequest {
     description: `${cursorName} has a plan`,
     choices: ["once", "deny"],
     plan: { startsIn: "default" },
+    // Cursor reads a note given with a no as the reason (`planOutcome`): it is not sent again as a message.
+    takesNote: true,
   };
 }
 

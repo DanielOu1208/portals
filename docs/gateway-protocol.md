@@ -1427,9 +1427,14 @@ newest first, at most `limit`.
   folder that exists and is not temporary (`/tmp`, `/private/tmp`, `/var/folders`, unless
   it is the General folder or under it), the bridge's own or hidden in its config.
 - `id` is the agent's own session id (Claude Code's session, Codex's thread, Pi's
-  session); `title` one line: Claude's custom title, summary or first prompt, Codex's
-  thread name or first message, Pi's name for the session or the first line of its first
-  message; `folder` the real path; `updated` Unix seconds.
+  session, Cursor's chat); `title` one line: Claude's custom title, summary or first
+  prompt, Codex's thread name or first message, Pi's name for the session or the first
+  line of its first message, Cursor's title for the chat (empty when it gave none);
+  `folder` the real path; `updated` Unix seconds.
+- `adopt_modes`, optional: the ways the session can be taken up (`session.adopt`
+  `mode`), when not all those its agent lists in `profiles.list`. Cursor's chats have
+  `["fork"]`. The app offers only those; an app before it asks to continue, is refused
+  with a sentence saying to fork, and offers the fork then.
 - `state`: Claude Code `open` (a terminal, or Claude Code in the background, has it:
   `claude agents`) or `closed`; Codex `running`, `waiting` (on an approval or a
   question), `idle` (loaded, nothing running) or `closed` (not loaded); Pi `open` (a Pi
@@ -1439,6 +1444,10 @@ newest first, at most `limit`.
   command that lists them: every session with a message in it, whoever started it, that a
   thread could open by its id in its folder (`bridge/src/providers/pi/desk.ts`). A copy
   the bridge made (`fork`, below) is not among them.
+- Cursor's are the chats of its terminal (`~/.cursor/chats/`), each with a conversation
+  and its folder in its `meta.json`, not a subagent's (`bridge/src/providers/cursor/desk.ts`),
+  all `closed`: Cursor does not say whether a terminal has one open, and a chat is only
+  forked.
 - An agent without desk sessions answers `{"sessions":[]}`.
 - A bridge with `thread_sync` also lists the agent's threads taken off its list
   (`thread.delete`) that the agent's own list lacks, as `closed`, with the folder the
@@ -1461,6 +1470,16 @@ with origin `desk`, and no longer in `desk.list`.
 | `continue` | The thread is the session, resumed by its id. Refused (-32602, with a sentence) while a terminal has it open: resuming it would write behind that terminal's back. Each time Claude starts for it again, it is checked once more, and the turn ends with that sentence as its error if a terminal has it | The thread is joined live on the shared daemon, even while a terminal has it: an approval the terminal is waiting on comes to the app too, and answering it there closes the terminal's dialog | The thread is the session, opened by its id in its folder. Refused (-32602, with a sentence) while a Pi runs in a terminal in that folder, which may have it open, when the Mac cannot be asked, and when the folder has since become a link to another (Pi would not find the session from there). Before every turn of the thread the Mac is asked once more, and the turn ends with that sentence as its error while one does, or with one saying the Mac could not be asked; nothing is written for such a turn, and a title, model or level given meanwhile (`session.rename`, `config.set`) is kept for the next turn. A turn also ends with a sentence, and no Pi is started, when the folder has become such a link since the session was taken up. A message sent while Pi works for the thread is taken as usual |
 | `fork` | A copy of the session with its history, under a new id (`session_id`); the original is left alone | `thread/fork`: a new thread with the history so far | Pi's own `--fork`: a copy with the history so far, under a new id that starts `fork-`, in the same folder. Its turns run also while a Pi is in that folder's terminal, and taken off the list it is taken back without being asked about: the copy is the bridge's own |
 | `read` | The thread shows the session's history (read again at each `session.resume`) and takes nothing: `prompt.submit`, `image.attach_bytes` and `config.set` answer -32602 with a sentence saying to fork it | The same; the thread is never joined | The same; no Pi is ever started for it. While a Pi runs in a terminal in the session's folder, a tool call with no result yet has no message (it may still be running) |
+
+Cursor's chats are only forked (`adopt_modes`): `continue` and `read` are -32602 with a
+sentence saying to fork. A fork copies the chat's folder into `~/.cursor/acp-sessions/`
+under a new id, the way Cursor keeps the sessions its ACP opens, and Cursor opens the copy
+there and then (`session/load`): what it sends again of the conversation is the thread's
+history, its title the chat's (or the first message's first line). One Cursor cannot open
+is refused, with what Cursor said, and its copy removed. When the chat's store keeps Cursor's
+Run Everything (a chat run with `--force`, or under Cursor's own Run Everything setting), so does the copy, and Cursor then searches the
+web and fetches pages for the thread without asking: the thread says so in a `warn`
+`status.update` as its first turn starts.
 
 A session that is already one of the bridge's threads is that thread (`fork` excepted);
 `continue` on a thread taken up for `read` continues it once that may be done. Refusals
@@ -1528,8 +1547,13 @@ the files with their counts, each opening its diff with the new file's line numb
 to the running turn where the agent can take one in, and `queue` keeps it for a turn of
 its own once the running one has ended, whatever the agent can do. Anything else is
 -32602. With no turn running it changes nothing. An agent that cannot take a message in
-(Cursor, Hermes, the fake agent), a slash command, and a message sent while Codex or Pi
-compacts wait either way. A message that waits is answered
+(Hermes, the fake agent), a slash command, and a message sent while Codex or Pi
+compacts wait either way. Cursor cannot add a message to a running prompt: a message
+handed to a Cursor turn (`message.steered`) stops what Cursor was doing, as Stop does
+(cards open close with `request.cancel` `withdrawn`, rows Cursor said no end of close as
+at a stop), and goes to Cursor once it has answered the stop and said nothing more of it
+for 0.3 seconds (at most 3), in the same turn; what Cursor says meanwhile is left out. A
+Stop before it went ends the turn, and it is not sent. A message that waits is answered
 `{"status":"queued","queue_id":"3"}`: its id on the thread's list of messages waiting.
 
 The list is the bridge's, so every device shows the same one, and it is kept on disk while

@@ -1357,14 +1357,17 @@ public enum BridgeWire {
         public var sessions: [JSONValue]?
 
         /// The sessions as the app lists them, for `agent`. A row without an id or a
-        /// folder is left out; a state the app does not know is taken as idle.
+        /// folder is left out; a state the app does not know is taken as idle. A row's
+        /// `adopt_modes`, when it names one the app knows, limits how it is taken up.
         public func deskSessions(for agent: Agent.ID) -> [DeskSession] {
             (sessions ?? []).compactMap { row in
                 guard let id = row["id"]?.stringValue, !id.isEmpty, let folder = row["folder"]?.stringValue, !folder.isEmpty else { return nil }
+                let modes = row["adopt_modes"]?.arrayValue?.compactMap { $0.stringValue.flatMap(AdoptMode.init(rawValue:)) }
                 return DeskSession(
                     id: id, agent: agent, title: row["title"]?.stringValue, folder: folder,
                     updated: row["updated"]?.doubleValue.map { Date(timeIntervalSince1970: $0) },
-                    state: row["state"]?.stringValue.flatMap(DeskSession.State.init(rawValue:)) ?? .idle
+                    state: row["state"]?.stringValue.flatMap(DeskSession.State.init(rawValue:)) ?? .idle,
+                    adoptModes: modes?.isEmpty == false ? modes : nil
                 )
             }
         }

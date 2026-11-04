@@ -755,6 +755,9 @@ import Testing
         transport.deliver(["jsonrpc": "2.0", "id": try #require(request["id"]), "result": ["sessions": [
             ["id": "s1", "title": "Fix the login", "folder": "/Users/dev/coding_projects/app", "updated": 1_791_324_000, "state": "open"],
             ["id": "s2", "title": "Count to ten", "folder": "/Users/dev/coding_projects/app", "updated": 1_791_323_000, "state": "waiting"],
+            // Only forked (a chat of Cursor's terminal); modes the app does not know say nothing.
+            ["id": "c1", "title": "From the terminal", "folder": "/Users/dev/notes", "state": "closed", "adopt_modes": ["fork"]],
+            ["id": "c2", "title": "From later", "folder": "/Users/dev/notes", "state": "closed", "adopt_modes": ["teleport"]],
             // Read leniently: an unknown state, a missing title and time, rows without an id or folder.
             ["id": "s3", "folder": "/Users/dev/notes", "state": "hibernating"],
             ["title": "No id", "folder": "/Users/dev/notes", "state": "closed"],
@@ -765,6 +768,8 @@ import Testing
         #expect(sessions == [
             DeskSession(id: "s1", agent: claude, title: "Fix the login", folder: "/Users/dev/coding_projects/app", updated: Date(timeIntervalSince1970: 1_791_324_000), state: .open),
             DeskSession(id: "s2", agent: claude, title: "Count to ten", folder: "/Users/dev/coding_projects/app", updated: Date(timeIntervalSince1970: 1_791_323_000), state: .waiting),
+            DeskSession(id: "c1", agent: claude, title: "From the terminal", folder: "/Users/dev/notes", state: .closed, adoptModes: [.fork]),
+            DeskSession(id: "c2", agent: claude, title: "From later", folder: "/Users/dev/notes", state: .closed),
             DeskSession(id: "s3", agent: claude, title: nil, folder: "/Users/dev/notes", state: .idle),
         ])
         await backend.disconnect()

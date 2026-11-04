@@ -350,6 +350,8 @@ async function handle(method: string, params: any): Promise<unknown> {
 //   session last ran on, as Cursor's code has it. (The one live look at a load saw Cursor
 //   stay on its model; the stand-in keeps the case that asks more of the bridge.)
 // - A second prompt for a session cancels the one running, which is answered first.
+// - A turn cancelled with the word `trail` in its prompt says one word more after its
+//   answer, as Cursor goes on for a moment with a prompt it answered as cancelled.
 // - A tool call is never `failed`, and a stopped turn says nothing more of a call that
 //   was running. Tool call ids have a newline in them.
 // - Its own requests (`cursor/…`) name a tool call and no session, and are numbered from 0.
@@ -597,6 +599,7 @@ async function handleAsCursor(method: string, params: any): Promise<unknown> {
       session.model = selected.model;
       try {
         const stopReason = await turnAsCursor(session, params.prompt, turn);
+        if (stopReason === "cancelled" && JSON.stringify(params.prompt).includes("trail")) setTimeout(() => text(session.id, "late "), 30);
         // An agent that tells what a turn spent (ACP's `usage`), as Cursor does not.
         return JSON.stringify(params.prompt).includes("spend tokens") ? { stopReason, usage: { totalTokens: 4321, inputTokens: 4000, outputTokens: 321 } } : { stopReason };
       } finally {

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { basename, join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { log } from "../../log.ts";
 import { threadIDPattern } from "../../sessions/registry.ts";
@@ -37,7 +38,7 @@ import {
   type ThreadMode,
 } from "../types.ts";
 import { cursorID, levelAt, levelSetting, levelsOf, modelAt, type CursorModel } from "./models.ts";
-import { cursorMode, cursorName, cursorQuirks, goAheadText, leftFullAccessText, levelLeftToCursorText, noSuchModeText, notSignedInText, portalsNote, runsEverything, saysSignedOut, signInReply, turnFailure } from "./options.ts";
+import { cursorMode, cursorName, cursorQuirks, goAheadText, keptFullAccessText, levelLeftToCursorText, noSuchModeText, notSignedInText, portalsNote, runsEverything, saysSignedOut, signInReply, turnFailure } from "./options.ts";
 import { askQuestion, createPlan, mergedTodos, permissionCard, permissionOutcome, planCard, planOutcome, questionCard, questionOutcome, todoRow, unplacedAnswer, updateTodos, type Todo } from "./requests.ts";
 import { CursorSubagents } from "./subagents.ts";
 import { cursorTools } from "./tools.ts";
@@ -62,8 +63,9 @@ import { outOfSpace } from "../../disk.ts";
 //   comes as `session/update` notifications (../acp/stream.ts). Before it go the
 //   thread's mode and, for a thread that chose one, its model and thinking level: all in
 //   the process's one queue, since the model is the process's and not the session's.
-// - A message sent meanwhile waits for the turn to end, in the bridge: Cursor has no way
-//   to add one to a running turn, and a second prompt would cancel the first.
+// - A message sent meanwhile waits for the turn to end, in the bridge, or, handed to the
+//   turn (the host's steer setting), stops what Cursor was doing and runs in its place:
+//   Cursor has no way to add one to a running prompt (`steer`).
 // - Cursor's questions become cards (./requests.ts).
 // - Its subagents are on the subagents line (./subagents.ts): their updates come under
 //   sessions of their own, which the provider brings here (`subagentUpdate`).
@@ -109,6 +111,8 @@ export interface KeptThread {
   open?: boolean;
   /** The thread's folder, for a fork of it or its return to the list when Cursor keeps no session of it. */
   cwd?: string;
+  /** A fork of a terminal chat whose store keeps Run Everything (./desk.ts): the thread is told as its first turn starts. */
+  runsEverything?: true;
 }
 
 /** What a session needs from its provider. */
@@ -154,6 +158,8 @@ export interface SessionStart {
   todos: Todo[];
   /** The conversation was kept with a turn open: the bridge was killed in it. */
   cut: boolean;
+  /** Cursor keeps Run Everything in the session, which the thread has not been told of yet (`KeptThread.runsEverything`). */
+  runsEverything?: boolean;
 }
 
 /** Cursor is not signed in (-32000). */
@@ -164,7 +170,10 @@ export class NotSignedIn extends Error {
 }
 
 const newSessionTimeoutMs = 120_000;
-const loadTimeoutMs = 180_000;
+/** How long Cursor says nothing of a prompt it answered as cancelled before a message sent to the turn goes (`steer`), and the longest that is waited for. */
+const quietMs = 300;
+const quietMaxMs = 3000;
+export const loadTimeoutMs = 180_000;
 /** Cursor has no such session, or was given a value it has not. */
 const invalidParamsCode = -32602;
 const cancelled = { outcome: { outcome: "cancelled" } } as const;
@@ -227,7 +236,7 @@ export class CursorSession implements ProviderSession {
   private process: CursorProcess | null;
   /**
    * Cursor has had the thread's session on a run with `--force`, and so keeps Run
-   * Everything in it (`leftFullAccessText`): in this run of the bridge, or, for a thread
+   * Everything in it (`keptFullAccessText`): in this run of the bridge, or, for a thread
    * that comes up in Full access with a conversation, most likely in an earlier one.
    */
   private ranEverything: boolean;
@@ -242,6 +251,25 @@ export class CursorSession implements ProviderSession {
   private turn = 0;
   /** A `session/prompt` is out for the open turn. */
   private prompted = false;
+  /**
+   * What ends the open turn: the answer to its newest prompt. A message sent to the turn
+   * (`steer`) is a prompt of its own, which takes the place of the one before, and is
+   * this while it is being sent.
+   */
+  private latest: Promise<PromptResult | null> | null = null;
+  /** Whether Cursor has answered the newest prompt out for the open turn. */
+  private latestAnswered = true;
+  /** Settled once the open turn's first prompt is out, or the turn is over: a message sent to the turn waits for it. */
+  private firstOut: PromiseWithResolvers<void> | null = null;
+  /**
+   * A message sent to the turn is taking the place of what Cursor was doing (`steer`):
+   * what Cursor says of the session meanwhile is of the prompt stopped, and left out.
+   */
+  private switching = false;
+  /** When Cursor last said something of the thread's session, in milliseconds since 1970. */
+  private heardAt = 0;
+  /** The messages sent to the turn, one after another. */
+  private steers: Promise<unknown> = Promise.resolve();
   /** Prompts Cursor has not answered yet, also those of a turn that was ended for the app. */
   private unanswered = 0;
   private interruptRequested = false;
@@ -268,6 +296,8 @@ export class CursorSession implements ProviderSession {
   private told: boolean;
   /** The thread was told its conversation could not be saved, and no save has worked since (`save`). */
   private toldUnsaved = false;
+  /** Cursor keeps Run Everything in the thread's session, which the thread says as its next turn starts (`KeptThread.runsEverything`). */
+  private keptEverything: boolean;
   /** The subagents Cursor has told of in this run of the thread. */
   private readonly subagents: CursorSubagents;
   /** What is Cursor's own of its tools (./tools.ts). */
@@ -296,6 +326,7 @@ export class CursorSession implements ProviderSession {
     this.title = options.title ?? null;
     this.titleFixed = this.title !== null;
     this.told = start.told;
+    this.keptEverything = start.runsEverything === true;
     this.todos = start.todos;
     // The turn a killed bridge left open is over, and nobody ended it: what was said is kept, marked as interrupted.
     if (start.cut) {
@@ -309,9 +340,9 @@ export class CursorSession implements ProviderSession {
     return this.turnOpen || this.asking.size > 0 || this.loading !== null;
   }
 
-  /** A request of Cursor's can be shown in the thread now. */
+  /** A request of Cursor's can be shown in the thread now: not one of a prompt a message sent to the turn stops. */
   get takesRequests(): boolean {
-    return this.turnOpen && !this.replaying;
+    return this.turnOpen && !this.replaying && !this.switching;
   }
 
   /**
@@ -368,9 +399,15 @@ export class CursorSession implements ProviderSession {
     this.interruptRequested = false;
     this.lastPiece = "";
     this.held = null;
+    this.latest = null;
+    this.firstOut = Promise.withResolvers<void>();
     const turn = ++this.turn;
     const before = this.transcript.messages.length;
     this.transcript.startTurn(storedUserText(prompt));
+    if (this.keptEverything) {
+      this.keptEverything = false;
+      this.emit({ type: "notice", level: "warn", text: keptFullAccessText });
+    }
     this.save();
     // `run` ends the turn whatever happens; this is for what went wrong while it did.
     this.run(prompt, turn, before > 0).catch((error: Error) => log.error(`a ${cursorName} turn did not end cleanly`, { thread: this.id, error: error.stack ?? String(error) }));
@@ -401,6 +438,91 @@ export class CursorSession implements ProviderSession {
     }, this.host.interruptGraceMs);
     this.interruptTimer.unref();
     return true;
+  }
+
+  /** A message can be sent to the turn (`steer`) until it is stopped, or a plan's go-ahead is due. */
+  steerable(): boolean {
+    return this.turnOpen && !this.interruptRequested && !this.goAhead;
+  }
+
+  /**
+   * A message for the running turn, which the bridge hands to it as the host's steer
+   * setting says. Cursor has no way to add one to a running prompt; a second prompt for
+   * the session cancels the one running and runs instead (recorded with 2026.10.22,
+   * scenario second-prompt). So the message stops what Cursor was doing and runs in its
+   * place, in the same turn of the app's: cards still open
+   * close, answered cancelled, rows Cursor will say no more of close as at a stop, and
+   * the message is kept after what was said before it. Sent as that second prompt,
+   * Cursor was seen to go on with the first one's words after it (live, 2026.10.22). So
+   * the running prompt is cancelled as at a stop, and the message goes once Cursor has
+   * answered it and said nothing more of it for a moment (`quiet`); what it says
+   * meanwhile is left out. One sent while Cursor starts or loads the session goes once
+   * the turn's own prompt is out. False when the turn ended or was stopped before it was
+   * taken: the bridge then sends it in a turn of its own. True once it was: should it
+   * then not reach Cursor, the turn ends as that says.
+   */
+  steer(prompt: Prompt): Promise<boolean | "refused"> {
+    const turn = this.turn;
+    if (!this.isTurn(turn) || this.interruptRequested) return Promise.resolve(false);
+    const taken = this.steers.then(() => this.switchTo(prompt, turn));
+    this.steers = taken.catch(() => undefined);
+    return taken;
+  }
+
+  private async switchTo(prompt: Prompt, turn: number): Promise<boolean> {
+    await this.firstOut?.promise;
+    const process = this.process;
+    // A plan's go-ahead is on its way: the message waits for the turn's end.
+    if (!this.isTurn(turn) || this.interruptRequested || !process || this.goAhead) return false;
+    this.replaced(storedUserText(prompt));
+    const stopped = this.latest;
+    const running = !this.latestAnswered;
+    // The turn ends with the message's answer from here, not the stopped prompt's.
+    const switched = Promise.withResolvers<PromptResult | null>();
+    this.latest = switched.promise;
+    this.switching = true;
+    try {
+      if (running && stopped) {
+        process.client.notify("session/cancel", { sessionId: this.sessionID });
+        await stopped.catch(() => null);
+        await this.quiet();
+      }
+      // Stopped meanwhile: the turn ends so, and the message stays where it was said.
+      if (await this.send(process, () => this.content(prompt, process), turn, true)) switched.resolve(null);
+      else switched.resolve({ stopReason: "cancelled" });
+    } catch (error) {
+      switched.reject(error);
+    } finally {
+      this.switching = false;
+    }
+    return true;
+  }
+
+  /**
+   * What Cursor was doing in the open turn is over: a message sent to the turn takes its
+   * place, and is kept where it came, after what was said before it.
+   */
+  private replaced(userText: string): void {
+    for (const controller of this.asking) controller.abort("withdrawn");
+    this.release();
+    this.lastPiece = "";
+    for (const closing of this.stream.endTurn()) this.emit(closing, false);
+    for (const subagent of this.subagents.stopAll()) this.news(subagent);
+    this.transcript.steer(userText);
+    this.save();
+  }
+
+  /**
+   * Waits until Cursor has said nothing of the thread's session for a moment, or at most
+   * a few seconds: what it still sends of a prompt it answered as cancelled.
+   */
+  private async quiet(): Promise<void> {
+    const until = Date.now() + quietMaxMs;
+    for (;;) {
+      const left = Math.min(this.heardAt + quietMs, until) - Date.now();
+      if (left <= 0) return;
+      await sleep(left);
+    }
   }
 
   /** True while Cursor has not answered the prompt of a turn the grace timer ended: it may still be at it. */
@@ -435,7 +557,7 @@ export class CursorSession implements ProviderSession {
   /** Cursor reads the mode as it takes a prompt, so it is only kept here, and goes with the thread's next message. */
   async setMode(mode: ThreadMode): Promise<void> {
     if (cursorMode(mode) === null) throw new SettingRefused(noSuchModeText);
-    if (this.threadMode === "full" && mode !== "full" && this.ranEverything) this.sink.emit({ type: "notice", level: "warn", text: leftFullAccessText });
+    if (this.threadMode === "full" && mode !== "full" && this.ranEverything) this.sink.emit({ type: "notice", level: "warn", text: keptFullAccessText });
     this.threadMode = mode;
   }
 
@@ -515,16 +637,40 @@ export class CursorSession implements ProviderSession {
   }
 
   /**
-   * Sends one prompt and waits for Cursor's answer to it. The thread's mode, model and
-   * level are set first, and nothing else that touches Cursor's shared state comes
-   * between them and the prompt. Null when the turn ended before the prompt went.
+   * Sends one prompt and waits for Cursor's answer to the turn: to this prompt, or, when
+   * a message was sent to the turn meanwhile (`steer`), to the newest such, which took
+   * the place of the one before. Null when the turn ended before the prompt went.
    */
   private async prompt(process: CursorProcess, blocks: () => ContentBlock[], turn: number): Promise<PromptResult | null> {
-    const sent = await process.exclusive(async () => {
-      if (!this.isTurn(turn)) return null;
+    if (!(await this.send(process, blocks, turn))) return null;
+    let result: PromptResult | null = null;
+    for (let answer = this.latest; answer !== null; answer = this.latest) {
+      try {
+        result = await answer;
+      } catch (error) {
+        // A prompt a message took the place of: the message's answer is the turn's.
+        if (!this.isTurn(turn) || this.latest === answer) throw error;
+      }
+      if (!this.isTurn(turn) || this.latest === answer) break;
+    }
+    if (this.isTurn(turn)) this.prompted = false;
+    process.touch();
+    return result ?? {};
+  }
+
+  /**
+   * Sends one prompt for the open turn, not waiting for its answer (`latest`). The
+   * thread's mode, model and level are set first, and nothing else that touches Cursor's
+   * shared state comes between them and the prompt. False when the turn ended before the
+   * prompt went, or, for a message sent to the turn (`steered`), when it was stopped.
+   */
+  private send(process: CursorProcess, blocks: () => ContentBlock[], turn: number, steered = false): Promise<boolean> {
+    const over = () => !this.isTurn(turn) || (steered && this.interruptRequested);
+    return process.exclusive(async () => {
+      if (over()) return false;
       await this.sendMode(process);
       await this.apply(process);
-      if (!this.isTurn(turn)) return null;
+      if (over()) return false;
       if (process.forced !== this.runsForced) {
         throw new Error("Cursor's access mode changed while the turn was starting, so the message was not sent. Send it again.");
       }
@@ -532,17 +678,18 @@ export class CursorSession implements ProviderSession {
       this.prompted = true;
       this.unanswered += 1;
       process.touch();
-      // Not waited for here: the turn's answer comes when the turn is over.
+      // The turn's answer comes when the turn is over. One a message took the place of
+      // may fail when nobody waits for it any more.
       const answer = process.client.call<PromptResult | null>("session/prompt", { sessionId: this.sessionID, prompt }, 0).finally(() => {
         this.unanswered -= 1;
+        if (this.latest === answer) this.latestAnswered = true;
       });
-      return { answer };
+      this.latestAnswered = false;
+      answer.catch(() => undefined);
+      this.latest = answer;
+      this.firstOut?.resolve();
+      return true;
     });
-    if (!sent) return null;
-    const result = await sent.answer;
-    if (this.isTurn(turn)) this.prompted = false;
-    process.touch();
-    return result ?? {};
   }
 
   /** Why a turn failed, as a sentence for the thread. */
@@ -609,6 +756,9 @@ export class CursorSession implements ProviderSession {
     if (!this.isTurn(turn)) return;
     this.turnOpen = false;
     this.prompted = false;
+    this.latest = null;
+    this.latestAnswered = true;
+    this.firstOut?.resolve();
     this.goAhead = false;
     this.interruptRequested = false;
     if (this.interruptTimer) clearTimeout(this.interruptTimer);
@@ -643,6 +793,7 @@ export class CursorSession implements ProviderSession {
       ...(this.told ? { told: true } : {}),
       ...(this.todos.length > 0 ? { todos: this.todos } : {}),
       ...(this.turnOpen ? { open: true } : {}),
+      ...(this.keptEverything ? { runsEverything: true } : {}),
     });
     if (saved.kept || this.toldUnsaved) {
       this.toldUnsaved = !saved.kept;
@@ -805,6 +956,7 @@ export class CursorSession implements ProviderSession {
 
   /** A `session/update` about this thread's session. */
   update(update: SessionUpdate): void {
+    this.heardAt = Date.now();
     if (this.replaying) return;
     if (update.sessionUpdate === "session_info_update") {
       this.titled(update.title, false);
@@ -814,6 +966,8 @@ export class CursorSession implements ProviderSession {
       this.subagentUpdate(null, update);
       return;
     }
+    // Of the prompt a message sent to the turn stops (`steer`).
+    if (this.turnOpen && this.switching) return;
     if (this.turnOpen) this.news(this.subagents.parentCall(update));
     // Outside a turn nothing is shown: what Cursor still sends of a turn that was ended
     // for the app is dropped. Only the context's size would count, which agents send once
