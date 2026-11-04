@@ -161,9 +161,9 @@ test("a chat: commentary, a command row and the reply; the first message names t
   // What the turn spent (feature turn_usage): Codex's time for it, and how far the thread's tokens rose.
   assert.deepEqual(ended, {
     status: "complete",
-    text: "I saw `hello.txt`; 221 is not prime because 221 = 13 × 17.",
-    usage: { context_used: 24843, context_max: 258_400 },
-    turn_usage: { seconds: 6.2, tokens: 49_635 },
+    text: "I saw `hello.txt`; 221 is not prime (13 × 17).",
+    usage: { context_used: 22952, context_max: 258_400 },
+    turn_usage: { seconds: 8.3, tokens: 45_857 },
   });
 
   // Codex's own warnings stay in the log.
@@ -225,7 +225,7 @@ test("/mode ask: Codex asks before the edit and each command; the answers go bac
   assert.equal(count.params.command, "wc -c hello.txt");
   client.answer(count.id, { choice: "always" });
   const done = await completed(session, start);
-  assert.equal(done.payload.text, "Patched `hi` to `hello`; `wc -c hello.txt` reports 6 bytes.");
+  assert.equal(done.payload.text, "Patched `hi` to `hello` in `hello.txt`; `wc -c hello.txt` reports 6 bytes.");
   assert.deepEqual(answersFor(session), [
     { decision: "accept" },
     { decision: "acceptForSession" },
@@ -385,7 +385,7 @@ test("requestUserInput is a question card, and the answer goes back keyed by the
       choices: ["Python", "Swift"],
       multi_select: false,
       header: "Language",
-      descriptions: { Python: "Choose Python as your preferred language.", Swift: "Choose Swift as your preferred language." },
+      descriptions: { Python: "Choose Python.", Swift: "Choose Swift." },
     },
   ]);
   client.answer(question.id, { answers: { preferred_language: "Swift" } });
@@ -664,10 +664,10 @@ test("/compact is offered and runs thread/compact/start: a turn of its own, mark
     ["message.start", "thinking.delta", "session.usage", "thinking.delta", "session.compacted", "message.complete"],
   );
   const compacted = events.find((event) => event.type === "session.compacted");
-  assert.deepEqual(compacted.payload, { trigger: "manual", tokens_before: 24706 });
+  assert.deepEqual(compacted.payload, { trigger: "manual", tokens_before: 25862 });
   const { turn: compactTurn, ...compactEnd } = done.payload;
   assert.ok(Number.isInteger(compactTurn));
-  assert.deepEqual(compactEnd, { status: "complete", text: "", usage: { context_used: 15254, context_max: 258_400 }, turn_usage: { seconds: 0.9 } });
+  assert.deepEqual(compactEnd, { status: "complete", text: "", usage: { context_used: 30449, context_max: 258_400 }, turn_usage: { seconds: 0.2 } });
   // No message went to Codex as words.
   assert.equal(daemon.callsOf("turn/start").filter((call) => call.params.threadId === session).length, 1);
 
@@ -678,7 +678,7 @@ test("/compact is offered and runs thread/compact/start: a turn of its own, mark
       ["user", "Reply with the single word hello. Do not use any tools."],
       ["assistant", "hello"],
       ["user", "/compact"],
-      ["compaction", "manual", 24706],
+      ["compaction", "manual", 25862],
     ],
   );
   const replayed = await client.call("session.events.since", { session_id: session, last_seen: compacted.seq - 1 });
@@ -735,7 +735,7 @@ test("a sub-agent Codex spawns is on the line: its start and end reach the app, 
   await send(session, "Spawn a sub-agent that says pear.");
   await completed(session, start);
   const news = turnEvents(session, start).filter((event) => event.type.startsWith("subagent."));
-  const child = "01a13a21-3e05-7212-b29e-4fb66eb40f01";
+  const child = "01a1a5d6-3d08-73e1-bb31-9ec1b5857c73";
   assert.deepEqual(
     news.map((event) => [event.type, event.payload.subagent_id, event.payload.status]),
     [
@@ -743,7 +743,7 @@ test("a sub-agent Codex spawns is on the line: its start and end reach the app, 
       ["subagent.complete", child, "completed"],
     ],
   );
-  assert.equal(news[0].payload.goal, "pear reply");
+  assert.equal(news[0].payload.goal, "pear");
   assert.equal(news[0].payload.model, "gpt-6.1-sol");
   assert.equal(news[0].payload.can_stop, true);
   const listed = (await client.call("subagent.list", { session_id: session, profile: "codex" })).subagents;
@@ -2174,7 +2174,7 @@ test("after a restart a Codex thread's sub-agents come back from its stored turn
     const listed = (await phone.call("subagent.list", { session_id: thread, profile: "codex" })).subagents;
     assert.deepEqual(
       listed.map((subagent: Frame) => [subagent.subagent_id, subagent.goal, subagent.status, subagent.turn, subagent.started_at, subagent.ended_at]),
-      [["01a13a21-3e05-7212-b29e-4fb66eb40f01", "pear reply", "completed", 0, 1791976616, 1791976624]],
+      [["01a1a5d6-3d08-73e1-bb31-9ec1b5857c73", "pear", "completed", 0, 1793783638, 1793783647]],
     );
   } finally {
     await phone.close();
@@ -2710,10 +2710,10 @@ test("a plan carried out by a turn that said no tokens keeps the plan's under th
   // Codex says nothing of what carrying it out spent; its own time for it is 1 s, the plan's is not known.
   daemon.finishTurn(session, work, "Changed it.");
   const done = await completed(session, start);
-  assert.equal(done.payload.turn_usage.tokens, 77_784);
+  assert.equal(done.payload.turn_usage.tokens, 25_564);
   assert.notEqual(done.payload.turn_usage.seconds, 1);
   const kept = JSON.parse(readFileSync(join(bridge.home, "state", "spent", `${session}.json`), "utf8"));
-  assert.deepEqual(kept.map((entry: Frame) => [entry.turn, entry.tokens]), [[work, 77_784]]);
+  assert.deepEqual(kept.map((entry: Frame) => [entry.turn, entry.tokens]), [[work, 25_564]]);
 });
 
 test("a plan whose carrying out Codex never began keeps what planning spent under the plan's turn (turn_usage)", async () => {
@@ -2730,12 +2730,12 @@ test("a plan whose carrying out Codex never began keeps what planning spent unde
     client.answer(card.id, { choice: "once" });
     const done = await completed(session, start);
     assert.equal(done.payload.status, "error");
-    assert.equal(done.payload.turn_usage.tokens, 77_784);
+    assert.equal(done.payload.turn_usage.tokens, 25_564);
   } finally {
     daemon.onTurnStart = () => {};
   }
   const kept = JSON.parse(readFileSync(join(bridge.home, "state", "spent", `${session}.json`), "utf8"));
-  assert.deepEqual(kept.map((entry: Frame) => entry.tokens), [77_784]);
+  assert.deepEqual(kept.map((entry: Frame) => entry.tokens), [25_564]);
   assert.match(kept[0].turn, /\S/);
 });
 
@@ -4675,12 +4675,12 @@ test("what a Codex turn spent is kept by the bridge, as Codex keeps no tokens wi
   daemon.scripts.push("plain");
   await phone.call("prompt.submit", { session_id: session, text: "List this folder.\nThen tell me about 221." });
   const done = await phone.from(start, (frame) => isEvent(frame, "message.complete", session));
-  assert.deepEqual(done.params.payload.turn_usage, { seconds: 6.2, tokens: 49_635 });
+  assert.deepEqual(done.params.payload.turn_usage, { seconds: 8.3, tokens: 45_857 });
   // Kept under Codex's id for the turn.
   const kept = JSON.parse(readFileSync(join(first.home, "state", "spent", `${session}.json`), "utf8"));
   assert.equal(kept.length, 1);
   assert.match(kept[0].turn, /\S/);
-  assert.deepEqual({ ...kept[0], turn: "" }, { turn: "", seconds: 6.2, tokens: 49_635 });
+  assert.deepEqual({ ...kept[0], turn: "" }, { turn: "", seconds: 8.3, tokens: 45_857 });
   await phone.close();
   await first.close();
 
@@ -4689,9 +4689,9 @@ test("what a Codex turn spent is kept by the bridge, as Codex keeps no tokens wi
   try {
     const resumed = await again.call("session.resume", { session_id: session, profile: "codex", inline_images: false });
     const last = resumed.messages.at(-1);
-    assert.equal(last.text, "I saw `hello.txt`; 221 is not prime because 221 = 13 × 17.");
+    assert.equal(last.text, "I saw `hello.txt`; 221 is not prime (13 × 17).");
     // The tokens the bridge kept, and its time for the turn where Codex's history has none.
-    assert.deepEqual(last.turn_usage, { seconds: 6.2, tokens: 49_635 });
+    assert.deepEqual(last.turn_usage, { seconds: 8.3, tokens: 45_857 });
   } finally {
     await again.close();
     await second.dispose();

@@ -2,7 +2,7 @@
  {
   "type": "usage",
   "usage": {
-   "used": 25150,
+   "used": 26354,
    "max": 475000
   }
  },
@@ -14,7 +14,7 @@
  {
   "type": "usage",
   "usage": {
-   "used": 25182,
+   "used": 26386,
    "max": 475000
   }
  },
@@ -22,13 +22,13 @@
   "type": "turn.end",
   "status": "complete",
   "usage": {
-   "used": 25182,
+   "used": 26386,
    "max": 475000
   },
   "spent": {
-   "tokens": 50332,
-   "seconds": 9.26
+   "tokens": 52740,
+   "seconds": 8.173
   },
-  "agentTurn": "01a13a21-dfa6-7042-8551-11d3c48a7899"
+  "agentTurn": "01a1a5d5-e64e-7622-bedb-475ef620ee73"
  }
 ]

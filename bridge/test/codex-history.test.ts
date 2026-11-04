@@ -26,13 +26,13 @@ test("a turn with commentary, a command, an edit and a reply reads back with its
   assert.deepEqual(patch.args, { path: `${fixtureCwd}/hello.txt` });
   // The result is JSON text, as the app reads it.
   assert.deepEqual(JSON.parse(patch.content!), { success: true, diff: "--- a/hello.txt\n+++ b/hello.txt\n@@ -1 +1 @@\n-hi\n+hello\n" });
-  assert.equal(patch.tool_call_id, "exec-1ffa67cc-2790-40a8-b8aa-2b40ed44892d");
+  assert.equal(patch.tool_call_id, "exec-d5f2b71e-9664-4cef-9578-b966781771ed");
   const command = messages[2];
   assert.deepEqual(command.role === "tool" && JSON.parse(command.content!), { output: "hi\n", exit_code: 0 });
-  assert.equal(messages[1].role === "assistant" && messages[1].text, "I’ll patch `hello.txt`, then check its byte count.");
+  assert.equal(messages[1].role === "assistant" && messages[1].text, "I’ll patch `hello.txt`, then check its byte count.\n");
   // Times are the turn's, in seconds.
-  assert.equal(messages[0].timestamp, 1_791_976_628);
-  assert.equal(messages[5].timestamp, 1_791_976_638);
+  assert.equal(messages[0].timestamp, 1_793_783_604);
+  assert.equal(messages[5].timestamp, 1_793_783_618);
 });
 
 test("a declined change reads back as blocked", () => {
@@ -154,7 +154,7 @@ test("a running Codex attachment keeps completed reasoning once through redelive
 test("an interrupted turn is marked; a failed one says why", () => {
   const interrupted = historyFromThread(recordedHistory("interrupt"), fixtureCwd, false).messages;
   // With how long it ran, as Codex keeps it (feature turn_usage).
-  assert.deepEqual(interrupted.at(-1), { role: "assistant", text: "", timestamp: interrupted.at(-1)!.timestamp, display_metadata: { interrupted: true }, turn_usage: { seconds: 3.482 } });
+  assert.deepEqual(interrupted.at(-1), { role: "assistant", text: "", timestamp: interrupted.at(-1)!.timestamp, display_metadata: { interrupted: true }, turn_usage: { seconds: 2.167 } });
   const failed = historyFromThread(
     { turns: [{ id: "t", items: [{ type: "userMessage", id: "u", clientId: null, content: [{ type: "text", text: "Go", text_elements: [] }] }], itemsView: "full", status: "failed", error: { message: "Usage limit reached", codexErrorInfo: null, additionalDetails: null, misalignment: null }, startedAt: 5, completedAt: 6, durationMs: 1000 }] } as never,
     "/w",
@@ -221,8 +221,8 @@ test("a /compact reads back as the command and the mark of where it compacted; C
   );
   // The command opens its turn; the mark is where it ended. History does not say how full the context was.
   assert.deepEqual(messages.slice(2), [
-    { role: "user", text: "/compact", timestamp: 1_791_976_566 },
-    { role: "compaction", trigger: "manual", timestamp: 1_791_976_567, turn_usage: { seconds: 0.858 } },
+    { role: "user", text: "/compact", timestamp: 1_793_783_835 },
+    { role: "compaction", trigger: "manual", timestamp: 1_793_783_835, turn_usage: { seconds: 0.207 } },
   ]);
 
   const message = (id: string, text: string) => ({ type: "userMessage", id, clientId: null, content: [{ type: "text", text, text_elements: [] }] });
@@ -265,7 +265,7 @@ test("a wait reads back naming the sub-agent it was about, as the line names it 
   const tools = messages.filter((message) => message.role === "tool");
   assert.deepEqual(
     tools.map((message) => message.role === "tool" && [message.name, message.context, message.args]),
-    [["delegate_task", "wait", { agents: ["pear reply"] }]],
+    [["delegate_task", "wait", { agents: ["pear"] }]],
   );
   const spawn = { type: "collabAgentToolCall", id: "spawn", tool: "spawnAgent", status: "completed", receiverThreadIds: ["c1"], prompt: "Count the files.", model: "gpt-6-luna", agentsStates: {} };
   const close = { type: "collabAgentToolCall", id: "close", tool: "closeAgent", status: "completed", receiverThreadIds: ["c1"], prompt: null, model: null, agentsStates: { c1: { status: "shutdown" } } };

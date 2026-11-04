@@ -45,9 +45,9 @@ test("commentary streams, then closes as an interim piece; the command is a term
   assert.deepEqual(end.result, { output: "hello.txt\n", exit_code: 0 });
   // Only the text after the last closed piece is the reply.
   const after = events.slice(events.indexOf(end));
-  assert.equal(text(after), "I saw `hello.txt`; 221 is not prime because 221 = 13 × 17.");
+  assert.equal(text(after), "I saw `hello.txt`; 221 is not prime (13 × 17).");
   // What it spent: how far the thread's tokens rose in it (two requests), and Codex's time for it.
-  assert.deepEqual(events.at(-1), { type: "turn.end", status: "complete", usage: { used: 24843, max: 258_400 }, spent: { tokens: 49_635, seconds: 6.234 }, agentTurn: "01a13a1f-4c5a-7443-94b3-016867640993" });
+  assert.deepEqual(events.at(-1), { type: "turn.end", status: "complete", usage: { used: 22952, max: 258_400 }, spent: { tokens: 45_857, seconds: 8.315 }, agentTurn: "01a1a5d8-b56d-7760-a906-7c4eb706a9b2" });
 });
 
 test("a file change is an edit row with a whole unified diff; a new file is a write row", () => {
@@ -88,7 +88,7 @@ test("an interrupted turn ends interrupted with what streamed before it", () => 
   const events = replayStream("interrupt");
   assert.equal(text(events), "1\n");
   // Stopped before Codex said any tokens: its time alone.
-  assert.deepEqual(events.at(-1), { type: "turn.end", status: "interrupted", spent: { seconds: 3.482 } });
+  assert.deepEqual(events.at(-1), { type: "turn.end", status: "interrupted", spent: { seconds: 2.167 } });
 });
 
 test("an item that started before the stream listened is reported whole when it completes, never from the middle", () => {
@@ -235,18 +235,20 @@ test("usage limits at 80% or more are warned about once per window and reset", (
   assert.equal(windowName(43_200), "30-day");
 });
 
-test("/compact is a turn of its own: a passing status, then the mark with the context used before it, which then falls", () => {
+test("/compact is a turn of its own: a passing status, then the mark with the context used before it, and the context Codex counts after it", () => {
   const events = replayStream("compact");
   const ends = ofType(events, "turn.end");
   assert.equal(ends.length, 2);
   assert.deepEqual(events.slice(events.indexOf(ends[0]) + 1), [
     { type: "status", text: "Compacting the conversation…" },
-    { type: "usage", usage: { used: 15254, max: 258_400 } },
+    // Codex's own count after compacting. On a thread this short its summary can be the
+    // larger (codex-cli 0.166.0 counted 30,449 after 25,862), so it need not fall.
+    { type: "usage", usage: { used: 30449, max: 258_400 } },
     { type: "status", text: "" },
     // Asked for: the turn has no message of the user's.
-    { type: "compacted", trigger: "manual", tokensBefore: 24706 },
+    { type: "compacted", trigger: "manual", tokensBefore: 25862 },
     // The compaction did not move the thread's tokens: it spent none Codex counts.
-    { type: "turn.end", status: "complete", usage: { used: 15254, max: 258_400 }, spent: { seconds: 0.858 } },
+    { type: "turn.end", status: "complete", usage: { used: 30449, max: 258_400 }, spent: { seconds: 0.207 } },
   ]);
 });
 

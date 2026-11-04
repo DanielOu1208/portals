@@ -77,7 +77,7 @@ test("requestUserInput is a clarify card, answered by question id; dismissing it
         choices: ["Python", "Swift"],
         multiSelect: false,
         header: "Language",
-        descriptions: { Python: "Choose Python as your preferred language.", Swift: "Choose Swift as your preferred language." },
+        descriptions: { Python: "Choose Python.", Swift: "Choose Swift." },
       },
     ],
   });
