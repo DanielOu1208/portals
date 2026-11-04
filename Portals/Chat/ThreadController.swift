@@ -3,6 +3,14 @@ import Foundation
 import Observation
 import os
 
+enum MessageEditError: LocalizedError {
+    case missingAttachments
+
+    var errorDescription: String? {
+        "An original attachment is no longer available on this portal."
+    }
+}
+
 /// The files the messages sent from this device mentioned, by message, in every thread
 /// while the app runs (`SentMentions`): sent again with one on "Try again", and the note on
 /// a chip of a file its agent may not have read in whole. Not a thread's controller's own,
@@ -25,6 +33,18 @@ final class SentMentionsMemory {
 /// (`.detached`), and the thread is reopened when it is next on screen or used.
 @Observable
 final class ThreadController: Identifiable {
+    struct MessageEdit {
+        let checkpoint: MessageCheckpoint
+        let previous: ComposerDraft
+    }
+
+    private(set) var editingMessage: MessageEdit?
+    private(set) var isPreparingMessageEdit = false
+    private(set) var isSendingMessageEdit = false
+    var keepsDraftInMemory: Bool {
+        editingMessage != nil || !composer.images.isEmpty || !composer.files.isEmpty || !composer.mentions.isEmpty
+    }
+
     /// The agent, as the host last described it (its name can change there).
     private(set) var agent: Agent
     private(set) var thread: ThreadRef? {
@@ -39,7 +59,7 @@ final class ThreadController: Identifiable {
     /// controller is.
     var composer = ComposerDraft() {
         didSet {
-            if composer.text != oldValue.text { ComposerDrafts.shared.set(composer.text, for: draftKey) }
+            if editingMessage == nil, composer.text != oldValue.text { ComposerDrafts.shared.set(composer.text, for: draftKey) }
         }
     }
     let localID: UUID
@@ -127,6 +147,9 @@ final class ThreadController: Identifiable {
     /// The host takes the files a message mentions beside its text (a bridge's
     /// `file_mentions`), as far as it has said (`checkHost`).
     private(set) var takesFileMentions = false
+    /// Message-level forks are offered only by a host that explicitly lists them.
+    private(set) var offersMessageFork = false
+    var canForkMessage: Bool { isAtRest && !isSending && !isLoadingHistory && !isClosed }
     /// Counts what was sent from here (a message, a command, a retry): the chat keeps to its
     /// end from each, to show what it becomes (`ChatScreen`).
     private(set) var sentHere = 0
@@ -338,8 +361,66 @@ final class ThreadController: Identifiable {
     /// the command's row comes back from the host's list (`subagent.list`) as it is then,
     /// its output so far and its Stop with it, and follows the command on from there.
     var isAtRest: Bool {
+        atRest(allowingCalls: 0)
+    }
+
+    private func atRest(allowingCalls: Int) -> Bool {
         thread != nil && !isAtWork && pendingRequest == nil && state.pending.isEmpty && state.queued.isEmpty
-            && connecting == nil && !isRetrying && commandInProgress == nil && callsOut == 0 && unstagedPayloads.isEmpty
+            && connecting == nil && !isRetrying && commandInProgress == nil && callsOut == allowingCalls && unstagedPayloads.isEmpty
+    }
+
+    /// Uses the same local attachment copies as retrying a sent message.
+    func editMessage(_ message: UserMessage, at checkpoint: MessageCheckpoint) async throws {
+        guard checkpoint.canEdit, canForkMessage, !isPreparingMessageEdit, !isSendingMessageEdit else { throw MessageForkError.busy }
+        isPreparingMessageEdit = true
+        callsOut += 1
+        defer { isPreparingMessageEdit = false; callsOut -= 1 }
+        let expected = composer
+        let previous = editingMessage?.previous ?? composer
+        var images: [UUID: ImageAttachment] = [:], files: [UUID: FileAttachment] = [:]
+        for staged in unstagedPayloads.values {
+            for image in staged.images { images[image.id] = image }
+            for file in staged.files { files[file.id] = file }
+        }
+        for file in message.files where files[file.id] == nil {
+            if let data = sentFiles.data(for: file.id) { files[file.id] = FileAttachment(id: file.id, data: data, filename: file.filename) }
+        }
+        let unreadImages = message.images.filter { images[$0.id] == nil }
+        let unreadFiles = message.files.filter { files[$0.id] == nil }
+        let read = await submissionStore.attachmentsInBackground(images: unreadImages, files: unreadFiles, in: localID, copies: imageStore)
+        for image in read.images { images[image.id] = image }
+        for file in read.files { files[file.id] = file }
+        guard !isClosed, atRest(allowingCalls: 1), !isSending, !isLoadingHistory, composer == expected else { throw MessageForkError.busy }
+        guard message.images.allSatisfy({ images[$0.id] != nil }), message.files.allSatisfy({ files[$0.id] != nil }) else {
+            throw MessageEditError.missingAttachments
+        }
+        let opener = turns.flatMap(\.items).first { item in
+            if case let .user(user) = item.content { return user.checkpoint?.id == checkpoint.id }
+            return false
+        }
+        let original = opener.flatMap { item in savedConversation?.submissions.first { $0.id == item.id } }
+        let mentions = original?.mentions ?? opener.map { SentMentionsMemory.shared.sent.paths(of: $0.id) } ?? []
+        editingMessage = MessageEdit(checkpoint: checkpoint, previous: previous)
+        composer = ComposerDraft(text: message.text, images: message.images.compactMap { images[$0.id] }, files: message.files.compactMap { files[$0.id] }, mentions: mentions)
+    }
+
+    func cancelMessageEdit() {
+        guard !isSendingMessageEdit, let editing = editingMessage else { return }
+        composer = editing.previous
+        editingMessage = nil
+    }
+
+    func beginMessageEditSend(at checkpoint: MessageCheckpoint) throws {
+        guard editingMessage?.checkpoint == checkpoint, canForkMessage, !isSendingMessageEdit else { throw MessageForkError.busy }
+        isSendingMessageEdit = true
+        callsOut += 1
+    }
+
+    func finishMessageEditSend(sent: Bool) {
+        guard isSendingMessageEdit else { return }
+        isSendingMessageEdit = false
+        callsOut -= 1
+        if sent { cancelMessageEdit() }
     }
 
     /// Whether "Try again" can be offered: not during a run, nor while something sent
@@ -584,6 +665,7 @@ final class ThreadController: Identifiable {
 
     /// Asks the host what it takes, once it is connected: files of any kind, or images only.
     func checkHost() async {
+        offersMessageFork = await (backend as? any MessageForking)?.offersMessageFork ?? false
         takesFiles = await (backend as? any FileAttaching)?.attachesFiles ?? false
         readsFiles = await (backend as? any FileReading)?.readsFiles ?? false
         searchesFiles = await (backend as? any FileSearching)?.searchesFiles ?? false

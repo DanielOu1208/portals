@@ -103,6 +103,11 @@ enum HermesEventMapper {
             }
             return [.turnStarted]
 
+        case "message.checkpoint":
+            guard features.contains(BridgeWire.Feature.messageFork),
+                  let checkpoint = BridgeWire.messageCheckpoint(payload["checkpoint"]) else { return [] }
+            return [.messageCheckpoint(checkpoint)]
+
         case "message.steered":
             // A bridge's: a message handed to the running turn, this app's own or another's.
             guard features.contains(BridgeWire.Feature.turnMessages), let text = payload["text"]?.stringValue else { return [] }

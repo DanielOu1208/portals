@@ -1,4 +1,5 @@
-import { constants, statSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { constants, realpathSync, statSync } from "node:fs";
 import { open, stat, type FileHandle } from "node:fs/promises";
 import { homedir } from "node:os";
 import { normalize } from "node:path";
@@ -34,6 +35,7 @@ import {
   type UsageReport,
 } from "../types.ts";
 import { machineWord } from "../../platform.ts";
+import { ClaudeCheckpoints } from "./checkpoints.ts";
 import { historyFromSession, turnCutOff } from "./history.ts";
 import { ClaudeSettingsEnv } from "./settingsEnv.ts";
 import { ClaudeSessionFiles } from "../../search/locate.ts";
@@ -87,6 +89,8 @@ export interface ClaudeProviderOptions {
   env?: NodeJS.ProcessEnv;
   /** Claude Code's managed settings file (tests). */
   managedSettings?: string;
+  /** Bridge-owned UUID membership for exact message forks across restarts. */
+  checkpointPath?: string;
   /** What `claude agents --json` lists: the sessions running on the Mac now, the bridge's own left out. */
   agents?: () => Promise<unknown>;
   /** What `claude auth status --json` says. */
@@ -146,7 +150,7 @@ export const sdkSessionFiles: SessionFiles = {
   // Direct lookup echoes filesystem aliases; the index keeps the exact stored ids.
   info: async (id) => (await listSessions({ includeProgrammatic: true })).find((session) => session.sessionId === id),
   // A copy with the same history under a new id; the original is not touched.
-  fork: async (id, cwd) => (await forkSession(id, { dir: cwd })).sessionId,
+  fork: async (id, cwd, upToMessageId) => (await forkSession(id, { dir: cwd, ...(upToMessageId ? { upToMessageId } : {}) })).sessionId,
   // A custom title, as `/rename` gives one; `title` reads it back.
   rename: (id, cwd, title) => renameSession(id, title, { dir: cwd }),
   journal: (path) => readJournal(path),
@@ -313,6 +317,7 @@ export class ClaudeProvider implements Provider, ClaudeHost {
   readonly portals: CommandAccess | undefined;
   readonly query: QueryFactory;
   readonly files: SessionFiles;
+  readonly checkpoints: ClaudeCheckpoints;
   readonly pool: WarmPool;
   readonly interruptGraceMs: number;
   readonly titleWatchMs: readonly number[];
@@ -374,6 +379,7 @@ export class ClaudeProvider implements Provider, ClaudeHost {
     this.settingsEnv = new ClaudeSettingsEnv(this.env, options.managedSettings);
     this.query = options.query ?? ((prompt, queryOptions) => sdkQuery({ prompt, options: queryOptions }) as QueryLike);
     this.files = options.files ?? sdkSessionFiles;
+    this.checkpoints = new ClaudeCheckpoints(options.checkpointPath);
     this.agents = options.agents ?? (() => desktopAgents(this.claudePath, this.env));
     this.authStatus = options.authStatus ?? (() => claudeAuthStatus(this.claudePath, this.env));
     this.pool = new WarmPool({ maxWarm: options.settings.maxWarm, idleMs: options.settings.idleMinutes * 60_000 });
@@ -732,6 +738,47 @@ export class ClaudeProvider implements Provider, ClaudeHost {
     }
   }
 
+  /** Forks a known bridge opener, retaining the entire native chain prefix. */
+  async forkAt(id: string, checkpointId: string, before: boolean, expectedCwd: string): Promise<DeskAdoption> {
+    const session = await this.files.info(id);
+    if (!session?.cwd || session.sessionId !== id) throw new DeskRefused("Claude Code has no session by that exact id.");
+    try {
+      if (realpathSync(session.cwd) !== realpathSync(expectedCwd)) throw new Error("folder changed");
+    } catch {
+      throw new DeskRefused("The Claude Code session's folder no longer matches this Portals thread. Branching was refused.");
+    }
+    if ([...this.sessions].some((session) => session.id === id && session.busy) || await this.isOpenInTerminal(id)) throw new DeskRefused("Wait for this Claude Code session to finish before branching it.");
+    const cwd = expectedCwd;
+    const messages = await this.files.messages(id, cwd);
+    if (turnCutOff(messages) && !this.checkpoints.completedAtEnd(id, messages)) throw new DeskRefused("This Claude Code turn has not finished, so it cannot be branched yet.");
+    const history = historyFromSession(messages, cwd, this.checkpoints.forSession(id, messages));
+    const checkpoint = history.find((message) => message.role === "user" && message.checkpoint?.id === checkpointId);
+    if (checkpoint?.role !== "user" || !(before ? checkpoint.checkpoint?.can_edit : checkpoint.checkpoint?.can_fork)) throw new DeskRefused("Claude Code has no safe message boundary at this checkpoint.");
+    const boundary = this.checkpoints.boundary(id, checkpointId, messages);
+    const cut = boundary ? (before ? boundary.before : boundary.after) : -1;
+    const settings = [...this.sessions].find((session) => session.id === id)?.settings() ?? { model: "default", provider: "anthropic", reasoningEffort: (await this.models()).reasoning };
+    const title = `${deskTitle(session)} (fork)`;
+    // There is no prior chain entry before the first prompt: start an empty native
+    // session under a fresh UUID, as startSession does, never copy the original prompt.
+    if (cut < 0) return { id: randomUUID(), cwd, title, settings };
+    const native = messages[cut] as { uuid?: unknown };
+    if (typeof native?.uuid !== "string") throw new DeskRefused("Claude Code could not identify the retained native boundary.");
+    let fork: string;
+    try {
+      fork = await this.files.fork(id, cwd, native.uuid);
+    } catch (error) {
+      throw new DeskRefused(`Claude Code could not fork at this checkpoint: ${(error as Error).message}`);
+    }
+    if (!fork || fork === id) throw new DeskRefused("Claude Code did not create a separate fork, so it was not adopted.");
+    const copied = await this.files.messages(fork, cwd);
+    try {
+      this.checkpoints.copied(id, fork, messages.slice(0, cut + 1), copied);
+    } catch (error) {
+      log.warn("could not save forked Claude message checkpoints", { session: fork, error: (error as Error).message });
+    }
+    return { id: fork, cwd, title, settings };
+  }
+
   modelInfo(model: string): ModelInfo | undefined {
     return this.modelList?.find((entry) => entry.value === model) ?? this.modelList?.find((entry) => entry.resolvedModel === model);
   }
@@ -797,7 +844,8 @@ export class ClaudeProvider implements Provider, ClaudeHost {
   async resumeSession(options: SessionOptions, sink: SessionSink): Promise<ProviderSession> {
     // History is read from Claude's own files; no process starts until a message is sent.
     const messages = await this.files.messages(options.id, options.cwd);
-    return this.track(new ClaudeSession(options, sink, this, historyFromSession(messages, options.cwd), await this.withJournals(pastSubagents(messages)), turnCutOff(messages)));
+    const cutOff = turnCutOff(messages) && !this.checkpoints.completedAtEnd(options.id, messages);
+    return this.track(new ClaudeSession(options, sink, this, historyFromSession(messages, options.cwd, this.checkpoints.forSession(options.id, messages)), await this.withJournals(pastSubagents(messages)), cutOff));
   }
 
   /**

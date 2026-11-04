@@ -205,6 +205,33 @@ export class CodexClient {
     return this.rpc.isConnected;
   }
 
+  /** The version reported by this live app server, rather than an installed CLI. */
+  get serverVersion(): string | null {
+    return this.isConnected ? /\/(\d+\.\d+\.\d+)(?:\s|$)/.exec(this.serverUserAgent ?? "")?.[1] ?? null : null;
+  }
+
+  get supportsMessageForks(): boolean {
+    return this.versionAtLeast("0.166.0");
+  }
+
+  /** Checks the current handshake and sends without yielding to a reconnect between them. */
+  async callVersioned<T>(method: string, params: unknown, minimum: string): Promise<T> {
+    await this.whenReady();
+    if (!this.versionAtLeast(minimum)) throw new CodexError(-32601, `This Codex app server must be version ${minimum} or newer to branch at a message.`, true);
+    return this.rpc.send<T>(method, params);
+  }
+
+  private versionAtLeast(minimum: string): boolean {
+    const version = this.serverVersion;
+    if (!version) return false;
+    const actual = version.split(".").map(Number);
+    const required = minimum.split(".").map(Number);
+    for (let index = 0; index < required.length; index += 1) {
+      if (actual[index] !== required[index]) return actual[index] > required[index];
+    }
+    return true;
+  }
+
   listen(listener: ClientListener): () => void {
     return this.rpc.listen(listener);
   }

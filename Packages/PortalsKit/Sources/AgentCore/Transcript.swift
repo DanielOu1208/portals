@@ -111,6 +111,7 @@ public struct Transcript: Codable, Hashable, Sendable {
                 kept.takeOpeningEvents(from: theirs)
                 kept.takeSubagentCalls(from: theirs)
                 kept.takeSenders(from: theirs)
+                kept.takeCheckpoints(from: theirs)
                 // And how a question asked without waiting was settled after the turn (below).
                 agreed.append((kept.id, theirs))
                 // The host's word on what it spent, unless it has none (a bridge restarted since).
@@ -384,6 +385,17 @@ public struct Turn: Identifiable, Codable, Hashable, Sendable {
         }
     }
 
+    /// The host's latest checkpoint belongs to the opening message, never a steer.
+    mutating func takeCheckpoints(from other: Turn) {
+        guard let mine = items.firstIndex(where: \.isUserMessage),
+              let theirs = other.items.first(where: \.isUserMessage),
+              case var .user(message) = items[mine].content,
+              case let .user(host) = theirs.content,
+              message.text == host.text else { return }
+        message.checkpoint = host.checkpoint
+        items[mine].content = .user(message)
+    }
+
     /// Takes the images of `other`'s messages for this turn's messages, in order. The
     /// host's history only names images; the copy made when they were sent has them.
     mutating func keepImages(from other: Turn) {
@@ -606,10 +618,12 @@ public struct UserMessage: Codable, Hashable, Sendable {
     /// the questions' row, which shows them. The message has no bubble of its own
     /// (`TurnLayout`). nil for any other.
     public var cardAnswer: String?
+    /// Provider-native position of this turn's opener, distinct from the user item's id.
+    public var checkpoint: MessageCheckpoint?
 
     public init(
         text: String, sentAt: Date = .now, delivery: SendOutcome? = nil, images: [AttachedImage] = [], files: [AttachedFile] = [], from: MessageSender? = nil,
-        cardAnswer: String? = nil
+        cardAnswer: String? = nil, checkpoint: MessageCheckpoint? = nil
     ) {
         self.text = text
         self.sentAt = sentAt
@@ -618,6 +632,7 @@ public struct UserMessage: Codable, Hashable, Sendable {
         self.files = files
         self.from = from
         self.cardAnswer = cardAnswer
+        self.checkpoint = checkpoint
     }
 
     public init(from decoder: any Decoder) throws {
@@ -630,6 +645,7 @@ public struct UserMessage: Codable, Hashable, Sendable {
         files = try container.decodeIfPresent([AttachedFile].self, forKey: .files) ?? []
         from = try container.decodeIfPresent(MessageSender.self, forKey: .from)
         cardAnswer = try container.decodeIfPresent(String.self, forKey: .cardAnswer)
+        checkpoint = try container.decodeIfPresent(MessageCheckpoint.self, forKey: .checkpoint)
     }
 }
 

@@ -217,6 +217,55 @@ extension RecoveryBackend: QueueControlling {
 }
 
 @main struct NativeRecoveryTests {
+    static func editingPreservesDraftsAndPayloads(root: URL, agent: Agent, image: ImageAttachment, file: FileAttachment) async throws {
+        let (chat, backend, store) = try await existingModeFixture(root: root, agent: agent, name: "message-edit")
+        let original = ComposerDraft(text: "Unsent draft", images: [image], files: [file], mentions: ["draft.swift"])
+        chat.composer = original
+        let journal = SubmissionStore(threads: store)
+        try journal.save(SavedConversation(id: chat.localID, agent: agent.id))
+        try journal.savePayloads(images: [image], files: [file], in: chat.localID)
+        let checkpoint = MessageCheckpoint(id: "native-message", canFork: true, canEdit: true)
+        let message = UserMessage(text: "Earlier message", images: [image.reference], files: [file.reference], checkpoint: checkpoint)
+        try await chat.editMessage(message, at: checkpoint)
+        precondition(chat.composer.text == "Earlier message" && chat.composer.images == [image] && chat.composer.files == [file])
+        let key = ComposerDrafts.key(thread: chat.thread, agent: agent.id, folder: nil)
+        precondition(ComposerDrafts.shared.text(for: key) == "Unsent draft", "an edit replaced the source's persisted draft")
+        chat.composer.text = "Edited message"
+        precondition(ComposerDrafts.shared.text(for: key) == "Unsent draft")
+        chat.cancelMessageEdit()
+        precondition(chat.editingMessage == nil && chat.composer == original)
+        let textOnly = UserMessage(text: "Text-only history", checkpoint: checkpoint)
+        try await chat.editMessage(textOnly, at: checkpoint)
+        precondition(chat.composer.images.isEmpty && chat.composer.files.isEmpty && chat.composer.mentions.isEmpty)
+        precondition(chat.isAtRest && chat.keepsDraftInMemory, "idle eviction can lose the original draft behind a text-only edit")
+        chat.cancelMessageEdit()
+        precondition(chat.composer == original)
+        try await chat.editMessage(message, at: checkpoint)
+        chat.composer.text = "Ready to send"
+        try chat.beginMessageEditSend(at: checkpoint)
+        chat.cancelMessageEdit()
+        precondition(chat.isSendingMessageEdit && chat.composer.text == "Ready to send", "Cancel took an in-flight edited send away")
+        do {
+            try chat.beginMessageEditSend(at: checkpoint)
+            preconditionFailure("an edited message was sent twice")
+        } catch {}
+        chat.finishMessageEditSend(sent: false)
+        precondition(chat.editingMessage != nil && chat.composer.text == "Ready to send", "failed fork lost the edited draft")
+        try chat.beginMessageEditSend(at: checkpoint)
+        chat.finishMessageEditSend(sent: true)
+        precondition(chat.editingMessage == nil && chat.composer == original)
+        let sourceSends = await backend.sent
+        precondition(sourceSends.isEmpty, "editing or cancelling sent a message to the source")
+        let missing = UserMessage(text: "Unavailable file", files: [AttachedFile(filename: "missing.txt")], checkpoint: checkpoint)
+        do {
+            try await chat.editMessage(missing, at: checkpoint)
+            preconditionFailure("missing attachment was silently dropped")
+        } catch MessageEditError.missingAttachments {}
+        precondition(chat.editingMessage == nil && chat.composer == original)
+        chat.close()
+        print("PASS editing preserves source drafts and all attachment bytes; Cancel and failed forks never send or lose them")
+    }
+
     static func existingModeFixture(root: URL, agent: Agent, name: String) async throws -> (ThreadController, RecoveryBackend, ThreadStore) {
         let store = ThreadStore(directory: root.appendingPathComponent(name))
         let backend = RecoveryBackend()
@@ -705,6 +754,7 @@ extension RecoveryBackend: QueueControlling {
         let agent = Agent(id: .init(host: backend.host, name: "agent"))
         let image = ImageAttachment(data: Data([1, 2]), filename: "photo.jpg")
         let file = FileAttachment(data: Data([3, 4]), filename: "notes.txt")
+        try await editingPreservesDraftsAndPayloads(root: root, agent: agent, image: image, file: file)
         try await aModePickedDuringSendPreparationMustPrecedeSend(root: root, agent: agent, file: file, responding: false)
         try await aModePickedDuringSendPreparationMustPrecedeSend(root: root, agent: agent, file: file, responding: true)
         try await aJournalOnlyModeChoiceNotifiesItsOwner(root: root, agent: agent)

@@ -129,6 +129,11 @@ export class CodexStream {
     return this.turnId;
   }
 
+  /** A native user opener, rather than a synthetic compaction turn. */
+  get hasUserMessages(): boolean {
+    return this.userMessages > 0;
+  }
+
   /** The context use known so far. */
   get usage(): ContextUsage | undefined {
     return this.contextUsed > 0 && this.contextWindow > 0 ? { used: this.contextUsed, max: this.contextWindow } : undefined;

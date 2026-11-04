@@ -530,6 +530,24 @@ Hermes also sends `session_key` and `status`; the app decodes and ignores them. 
 
 ### Stored messages
 
+With feature `message_fork`, a completed turn's opening user message may carry
+`checkpoint: {id, can_fork, can_edit}`. Its opaque native id is separate from the
+device's `message_id`. A steered message has no checkpoint of its own. The live
+`message.checkpoint` event carries `{checkpoint}` for the current turn's opener,
+before `message.complete`. Missing checkpoints and false capabilities offer no action.
+
+`session.fork` takes `{session_id, checkpoint_id, before}` on a followed, writable,
+idle thread. `before: false` copies through that completed turn; `before: true`
+copies the conversation before it, ready for an edited prompt. A complete native
+run includes messages steered into it; these cannot be branched individually.
+The result is
+`{session_id, stored_session_id, info}`, and the new thread is followed on this
+connection. It keeps the source's model, thinking level and approval mode. The
+source conversation stays intact. Both threads use the same folder and its current
+files; forking does not restore older file contents. Clients send this call only to
+hosts advertising `message_fork`. Unsupported agents, ambiguous native boundaries,
+active work and stale checkpoint ids are refused.
+
 Each message has `role` and `timestamp` (Unix seconds, may be fractional; a missing one
 takes the previous message's). Other roles are ignored. Every `user` message starts a turn;
 messages before the first one make a turn of their own; turns with nothing to show are

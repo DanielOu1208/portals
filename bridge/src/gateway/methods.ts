@@ -864,6 +864,27 @@ export const methods: Record<string, MethodSpec> = {
     },
   },
 
+  "session.fork": {
+    summary: "Creates and follows a new thread through a completed turn, or before it for editing (feature message_fork). Uses the same folder and current files; leaves the source conversation unchanged.",
+    params: { session_id: "string", checkpoint_id: "string", before: "boolean" },
+    required: ["session_id", "checkpoint_id", "before"],
+    async handle(params, context) {
+      const source = writable(followed(context, params.session_id));
+      let session: Session;
+      try {
+        session = await context.gateway.sessions.fork(source, params.checkpoint_id as string, params.before as boolean);
+      } catch (error) {
+        if (error instanceof DeskRefused) throw invalidParams(error.message);
+        throw error;
+      }
+      return new Atomic(() => {
+        const now = present(context.gateway, session);
+        now.follow(context.caller);
+        return { session_id: now.id, stored_session_id: now.id, info: now.info() };
+      });
+    },
+  },
+
   "session.adopt": {
     summary: "Makes a session from desk.list a thread and follows it on this connection: continued, forked or only read (feature desk_sessions); a thread taken off the list goes back on it.",
     params: { profile: "string", session_id: "string", mode: "string" },

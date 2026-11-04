@@ -855,6 +855,34 @@
       ]
     },
     {
+      "name": "session.fork",
+      "summary": "Creates and follows a new thread through a completed turn, or before it for editing (feature message_fork). Uses the same folder and current files; leaves the source conversation unchanged.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "session_id": {
+                "type": "string"
+              },
+              "checkpoint_id": {
+                "type": "string"
+              },
+              "before": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "session_id",
+              "checkpoint_id",
+              "before"
+            ]
+          }
+        }
+      ]
+    },
+    {
       "name": "session.adopt",
       "summary": "Makes a session from desk.list a thread and follows it on this connection: continued, forked or only read (feature desk_sessions); a thread taken off the list goes back on it.",
       "params": [
@@ -1836,6 +1864,10 @@
       "summary": "A turn started; queue_id: the waiting message that opened it (feature queue); text, sender, message_id: that message (feature turn_messages)."
     },
     {
+      "name": "message.checkpoint",
+      "summary": "The current turn's opening user message has a native checkpoint for forking or editing (feature message_fork). Sent before message.complete."
+    },
+    {
       "name": "message.steered",
       "summary": "A message was handed to the running turn: text, sender, message_id (feature turn_messages)."
     },
@@ -1965,6 +1997,7 @@
     }
   ],
   "x-bridge-features": [
+    "message_fork",
     "mcp_auth",
     "folders",
     "model_levels",

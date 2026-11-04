@@ -420,3 +420,22 @@ extension HermesBackend: NetReporting {
         }
     }
 }
+
+// MARK: - Message-level forks
+
+extension HermesBackend: MessageForking {
+    public var offersMessageFork: Bool? {
+        gatewayReady.map { _ in offers(BridgeWire.Feature.messageFork) }
+    }
+
+    public func fork(_ thread: ThreadRef, at checkpoint: MessageCheckpoint, before: Bool) async throws -> ThreadRef {
+        guard offers(BridgeWire.Feature.messageFork), !checkpoint.id.isEmpty,
+              before ? checkpoint.canEdit : checkpoint.canFork else { throw MessageForkError.unavailable }
+        let created: HermesWire.SessionCreateResult = try await peer().call(
+            BridgeWire.Method.sessionFork,
+            BridgeWire.SessionForkParams(sessionID: thread.id.rawValue, checkpointID: checkpoint.id, before: before),
+            timeout: .seconds(120)
+        )
+        return follow(created, with: thread.agent, title: nil, workingDirectory: thread.workingDirectory)
+    }
+}

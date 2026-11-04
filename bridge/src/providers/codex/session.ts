@@ -87,6 +87,8 @@ export interface Applied {
 
 /** What the connection to Codex gives a session. */
 export interface CodexCalls {
+  /** Native message boundaries are supported by the current app-server handshake. */
+  readonly supportsMessageForks?: boolean;
   call<T = any>(method: string, params: unknown, timeoutMs?: number): Promise<T>;
   /** Waits until connected, for a while; throws when Codex stays away. */
   whenReady(): Promise<void>;
@@ -280,6 +282,9 @@ export class CodexSession implements ProviderSession {
   private turnOpen = false;
   /** Codex's id for it, once known. */
   private turnID: string | null = null;
+  /** Native completed turn for this opener; composite plan continuations have no single boundary. */
+  private completedCheckpoint: string | null = null;
+  private compositeTurn = false;
   /** The bridge's own `turn/start` is on its way and its id not known yet. */
   private starting = false;
   /** The pending start/compact call: notifications may end its turn before its reply. */
@@ -413,7 +418,7 @@ export class CodexSession implements ProviderSession {
     if (this.readOnly) {
       // Its turns as they are, a running one included; nothing that follows it.
       await this.learnNicknames(thread);
-      this.stored = historyFromThread(thread, this.cwd, false, this.nicknames).messages;
+      this.stored = historyFromThread(thread, this.cwd, false, this.nicknames, this.host.client.supportsMessageForks).messages;
       if (typeof thread.name === "string" && thread.name.trim() !== "") this.title = thread.name.trim();
       return;
     }
@@ -425,7 +430,7 @@ export class CodexSession implements ProviderSession {
     await this.noteFolderDefaults();
     const active = thread.status?.type === "active";
     await this.learnNicknames(thread);
-    const history = historyFromThread(thread, this.cwd, active, this.nicknames);
+    const history = historyFromThread(thread, this.cwd, active, this.nicknames, this.host.client.supportsMessageForks);
     // One the stored thread leaves at work may have ended since: its own thread says,
     // read once the session has taken these in (`attached`).
     this.past = this.agents.remember((thread.turns ?? []) as Turn[]);
@@ -573,12 +578,14 @@ export class CodexSession implements ProviderSession {
   async reload(): Promise<StoredMessage[]> {
     const thread = await this.read();
     await this.learnNicknames(thread);
-    return historyFromThread(thread, this.cwd, false, this.nicknames).messages;
+    return historyFromThread(thread, this.cwd, false, this.nicknames, this.host.client.supportsMessageForks).messages;
   }
 
   startTurn(prompt: Prompt): void {
     this.turnOpen = true;
     this.turnID = null;
+    this.completedCheckpoint = null;
+    this.compositeTurn = false;
     this.starting = true;
     this.compacting = isCompact(prompt);
     this.reviewing = !this.compacting && isReview(prompt);
@@ -1008,6 +1015,9 @@ export class CodexSession implements ProviderSession {
     if (this.interruptTimer) clearTimeout(this.interruptTimer);
     this.interruptTimer = null;
     for (const wake of this.idWaiters.splice(0)) wake(null);
+    if (this.completedCheckpoint && !this.compositeTurn) this.sink.emit({ type: "checkpoint", checkpoint: { id: this.completedCheckpoint, can_fork: true, can_edit: true } });
+    this.completedCheckpoint = null;
+    this.compositeTurn = false;
     this.sink.emit(event);
     void this.removeImages();
   }
@@ -1077,6 +1087,8 @@ export class CodexSession implements ProviderSession {
 
   /** A turn of Codex's that the app's running turn goes on with. */
   private goOn(text: string): void {
+    this.compositeTurn = true;
+    this.completedCheckpoint = null;
     this.starting = true;
     void this.begin({ text, images: [] });
   }
@@ -1465,6 +1477,8 @@ export class CodexSession implements ProviderSession {
    */
   private reportEnd(events: ProviderEvent[], status: string | undefined): void {
     const end = events.find((event): event is TurnEnd => event.type === "turn.end");
+    // A review's turn has no user message of its own (the one in its stream is Codex's prompt to its reviewer): nothing to fork or edit from.
+    if (end && this.host.client.supportsMessageForks !== false && !this.compositeTurn && !this.reviewing && this.turnID && this.stream.hasUserMessages) this.completedCheckpoint = this.turnID;
     const plan = this.proposed;
     if (!end || !this.planning || this.stopAsked || !plan?.trim() || status !== "completed") {
       this.report(events);

@@ -375,12 +375,19 @@ export class FakeFiles implements SessionFiles {
     const stored = this.stored.get(id);
     if (stored) stored.title = title;
   }
-  async fork(id: string, cwd: string): Promise<string> {
-    const from = this.sessions.find((session) => session.sessionId === id)!;
+  async fork(id: string, cwd: string, upToMessageId?: string): Promise<string> {
+    const from = [...this.sessions, ...this.started].find((session) => session.sessionId === id);
+    if (!from) throw new Error("Session not found");
     const fork = randomUUID();
     const title = `${from.customTitle ?? from.summary} (fork)`;
     this.sessions.push({ ...from, sessionId: fork, customTitle: title, cwd, lastModified: Date.now() });
-    this.stored.set(fork, { title, messages: structuredClone(this.stored.get(id)?.messages ?? []) });
+    const messages = this.stored.get(id)?.messages ?? [];
+    const end = upToMessageId ? messages.findIndex((entry) => (entry as { uuid?: string })?.uuid === upToMessageId) : messages.length - 1;
+    if (upToMessageId && end < 0) throw new Error("Fork message not found");
+    this.stored.set(fork, { title, messages: structuredClone(messages.slice(0, end + 1)).map((entry) => {
+      const message = entry as { uuid?: string };
+      return typeof message?.uuid === "string" ? { ...message, uuid: randomUUID() } : entry;
+    }) });
     this.forks.push([id, fork]);
     return fork;
   }
@@ -388,13 +395,14 @@ export class FakeFiles implements SessionFiles {
 
 /** A Claude provider whose queries are FakeQuery objects, in the order they start. */
 export function fakeClaude(
-  options: { maxWarm?: number; idleMinutes?: number; files?: FakeFiles; agents?: () => Promise<unknown>; authStatus?: () => Promise<unknown>; appliedModel?: string | null; now?: () => number; interruptGraceMs?: number; titleWatchMs?: number[]; home?: string; managedSettings?: string } = {},
+  options: { maxWarm?: number; idleMinutes?: number; files?: FakeFiles; agents?: () => Promise<unknown>; authStatus?: () => Promise<unknown>; appliedModel?: string | null; now?: () => number; interruptGraceMs?: number; titleWatchMs?: number[]; home?: string; managedSettings?: string; checkpointPath?: string } = {},
 ) {
   const queries: FakeQuery[] = [];
   const files = options.files ?? new FakeFiles();
   const provider = new ClaudeProvider({
     settings: { path: "/nonexistent/claude", idleMinutes: options.idleMinutes ?? 15, maxWarm: options.maxWarm ?? 6, apiKey: null, folder: "/tmp" },
     files,
+    checkpointPath: options.checkpointPath,
     // A home of its own, never Dana's: Claude Code's settings there count (`mentionLimit`).
     env: { PATH: "/usr/bin", HOME: options.home ?? "/nonexistent/home", CLAUDE_CODE_ENTRYPOINT: "cli", ANTHROPIC_API_KEY: "sk-from-env" },
     managedSettings: options.managedSettings ?? "/nonexistent/managed-settings.json",

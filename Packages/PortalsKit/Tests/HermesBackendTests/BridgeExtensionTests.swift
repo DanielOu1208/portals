@@ -581,6 +581,54 @@ import Testing
         }
     }
 
+    // MARK: Message-level forks
+
+    @Test(arguments: [false, true])
+    func messageForkUsesProviderPositionAndFollowsTheNewStoredThread(before: Bool) async throws {
+        let ready: JSONValue = ["replay_epoch": "e1", "heartbeat": false, "bridge": ["protocol": 1, "features": ["message_fork"]]]
+        let (backend, transport) = try await connect(ready: ready)
+        #expect(await backend.offersMessageFork == true)
+        let source = ThreadRef(id: .init(rawValue: "stored-source"), agent: claude, workingDirectory: "/project")
+        let checkpoint = MessageCheckpoint(id: "provider/opaque:turn-4", canFork: true, canEdit: true)
+        let forking = Task { try await backend.fork(source, at: checkpoint, before: before) }
+        let request = try #require(await transport.nextSentRequest())
+        #expect(request["method"] == "session.fork")
+        #expect(request["params"] == ["session_id": "stored-source", "checkpoint_id": "provider/opaque:turn-4", "before": .bool(before)])
+        transport.deliver(["jsonrpc": "2.0", "id": try #require(request["id"]), "result": [
+            "session_id": "runtime-fork", "stored_session_id": "stored-fork", "info": ["cwd": "/project", "title": "Forked request"],
+        ]])
+        let fork = try await forking.value
+        #expect(fork.id.rawValue == "stored-fork")
+        #expect(fork.agent == source.agent)
+        #expect(fork.workingDirectory == "/project")
+        #expect(!fork.isReadOnly)
+        let events = await backend.events(for: fork.id)
+        var iterator = events.makeAsyncIterator()
+        #expect(await iterator.next() == .caughtUp(ThreadInfo(title: "Forked request", workingDirectory: "/project")))
+        await backend.disconnect()
+    }
+
+    @Test func messageForkRejectsOldHostsAndDeniedActionsWithoutSendingAnRPC() async throws {
+        let cases: [(JSONValue, MessageCheckpoint)] = [
+            (Self.bridgeReady, MessageCheckpoint(id: "position", canFork: true, canEdit: true)),
+            (["replay_epoch": "e1", "heartbeat": false, "bridge": ["protocol": 1, "features": ["message_fork"]]],
+             MessageCheckpoint(id: "position", canFork: false, canEdit: false)),
+        ]
+        for (ready, checkpoint) in cases {
+            let (backend, transport) = try await connect(ready: ready)
+            let source = ThreadRef(id: .init(rawValue: "stored-source"), agent: claude)
+            for before in [false, true] {
+                await #expect(throws: MessageForkError.unavailable) { try await backend.fork(source, at: checkpoint, before: before) }
+            }
+            let listing = Task { try await backend.listAgents() }
+            let next = try #require(await transport.nextSentRequest())
+            #expect(next["method"] == "profiles.list")
+            transport.deliver(["jsonrpc": "2.0", "id": try #require(next["id"]), "result": ["profiles": []]])
+            _ = try await listing.value
+            await backend.disconnect()
+        }
+    }
+
     // MARK: Sessions from the desk
 
     private static let deskReady: JSONValue = [

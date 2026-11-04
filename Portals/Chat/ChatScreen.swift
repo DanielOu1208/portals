@@ -49,6 +49,8 @@ struct ChatScreen: View {
     /// Forks a thread that is only read into one that can be continued.
     var offersFork = false
     var onFork: () async throws -> Void = {}
+    var canForkMessage = false
+    var onForkMessage: (MessageCheckpoint, Bool, ComposerDraft?) async throws -> Void = { _, _, _ in }
     /// The threads agents started from this one (`Fleet.startedThreads`): asked for by
     /// the line at the chat's foot as it is drawn, so that only it follows their news.
     var startedThreads: () -> [StartedThread] = { [] }
@@ -81,6 +83,9 @@ struct ChatScreen: View {
     /// The window's image opened on its own, over the chat (`ImageLightbox`).
     @Environment(\.imageLightbox) private var lightbox
 
+    @State private var messageActionProblem: String?
+    @State private var isWorkingOnMessage = false
+    @State private var openedMessageForkForDebug = false
     /// When this chat was put on screen: a long reply new to it after a moment came while
     /// someone looked, and plays in (`ReplyTextView`).
     @State private var shownSince = Date.now
@@ -583,7 +588,14 @@ struct ChatScreen: View {
                             )
                             .transition(.opacity)
                         }
+                        if chat.editingMessage != nil || chat.isPreparingMessageEdit {
+                            EditingMessageRow(isLoading: chat.isPreparingMessageEdit, isSending: chat.isSendingMessageEdit || isWorkingOnMessage) {
+                                chat.cancelMessageEdit()
+                            }
+                            .transition(.opacity)
+                        }
                         composer
+                            .disabled(chat.isSendingMessageEdit || chat.isPreparingMessageEdit || isWorkingOnMessage)
                     }
                 }
                 .padding(.horizontal, composerMargin)
@@ -667,6 +679,19 @@ struct ChatScreen: View {
             // take it with it. Select Text from any copy menu in the chat; a widget
             // expanded; the detail of a subagent or workflow from its line, while it is
             // still on the line; what a turn changed.
+            .onChange(of: debugMessageForkTurn?.id, initial: true) { _, id in
+                guard id != nil, let turn = debugMessageForkTurn,
+                      let opener = turn.items.first(where: \.isUserMessage),
+                      case let .user(message) = opener.content, let checkpoint = message.checkpoint,
+                      let before = DebugLaunch.opensMessageFork else { return }
+                openedMessageForkForDebug = true
+                messageAction(message, checkpoint: checkpoint, before: before, focus: !Platform.isMac)
+            }
+            .alert("Couldn’t finish", isPresented: Binding(get: { messageActionProblem != nil }, set: { if !$0 { messageActionProblem = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(messageActionProblem ?? "")
+            }
             .selectsTextHere()
             .expandsWidgetsHere()
             .showsTurnDiffsHere()
@@ -718,6 +743,17 @@ struct ChatScreen: View {
                     isComposing = true
                 }
             }
+    }
+
+    private var debugMessageForkTurn: Turn? {
+        guard !openedMessageForkForDebug, isShown, !isCovered, !hidesChat,
+              !chat.isLoadingHistory, canForkMessage, let before = DebugLaunch.opensMessageFork else { return nil }
+        return chat.turns.first { turn in
+            guard !turn.isRunning, let opener = turn.items.first(where: \.isUserMessage),
+                  case let .user(message) = opener.content, let checkpoint = message.checkpoint else { return false }
+            if before { return checkpoint.canEdit }
+            return checkpoint.canFork
+        }
     }
 
     /// Does what a command or the app asked of the screen (`ThreadController.screenRequest`).
@@ -816,6 +852,8 @@ struct ChatScreen: View {
                                 status: hasLast ? chat.runStatus : nil,
                                 plan: hasRunning ? chat.state.runningPlan : nil,
                                 canRetry: chat.canRetry,
+                                offersMessageFork: chat.offersMessageFork,
+                                canForkMessage: canForkMessage,
                                 listing: listing.flatMap { id in blockTurns.contains { $0.id == id } ? id : nil },
                                 staysBuilt: block.index >= lastBlocks || hasRunning
                             )) { turn in
@@ -826,6 +864,11 @@ struct ChatScreen: View {
                                     plan: turn.isRunning ? chat.state.runningPlan : nil,
                                     canRetry: chat.canRetry,
                                     onRetry: { swipeGuard { chat.retry(turn.id) } },
+                                    offersMessageFork: chat.offersMessageFork,
+                                    canForkMessage: canForkMessage,
+                                    onForkMessage: { message, checkpoint, before in
+                                        swipeGuard { messageAction(message, checkpoint: checkpoint, before: before) }
+                                    },
                                     // The latest ended turn's footer lists the threads the agent started.
                                     startedThreads: turn.id == listing
                                         ? StartedThreadsLink(threads: startedThreads, onOpen: onOpenThread, onShare: onShareThread) : nil
@@ -1672,6 +1715,7 @@ struct ChatScreen: View {
             placeholder: "Message \(chat.agent.displayName) on \(hostName)",
             isRunning: chat.isRunning,
             takesFiles: chat.takesFiles,
+            sendEnabled: chat.editingMessage == nil || (canForkMessage && !isWorkingOnMessage),
             onSend: send,
             onStop: { chat.stop() },
             isOutOfSight: { [chat] in chat.isKeptOffScreen || ScreenCommands.shared.showsSettings },
@@ -1739,11 +1783,39 @@ struct ChatScreen: View {
     private func send() {
         let draft = chat.composer
         guard !draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draft.images.isEmpty || !draft.files.isEmpty else { return }
+        if let editing = chat.editingMessage {
+            guard !chat.isSendingMessageEdit, !isWorkingOnMessage, canForkMessage else { return }
+            isWorkingOnMessage = true
+            Task {
+                defer { isWorkingOnMessage = false }
+                do { try await onForkMessage(editing.checkpoint, true, draft) }
+                catch { messageActionProblem = error.localizedDescription }
+            }
+            return
+        }
         chat.composer = ComposerDraft()
         // Every one picked that the text still names: its chips' (`SentMentionsMemory`); the
         // host gets them only where it takes them (`ThreadController.deliver`).
         let picked = FileMentionDraft.mentions(picked: draft.mentions, in: draft.text, hostTakesThem: true)
         chat.send(draft.text, images: draft.images, files: draft.files, mentions: picked)
+    }
+
+    private func messageAction(_ message: UserMessage, checkpoint: MessageCheckpoint, before: Bool, focus: Bool = true) {
+        guard canForkMessage, !isWorkingOnMessage, !chat.isPreparingMessageEdit, !chat.isSendingMessageEdit else { return }
+        isWorkingOnMessage = true
+        Task {
+            defer { isWorkingOnMessage = false }
+            if before {
+                do {
+                    try await chat.editMessage(message, at: checkpoint)
+                    caret = nil
+                    if focus { isComposing = true }
+                } catch { messageActionProblem = error.localizedDescription }
+            } else {
+                do { try await onForkMessage(checkpoint, false, nil) }
+                catch { messageActionProblem = error.localizedDescription }
+            }
+        }
     }
 }
 

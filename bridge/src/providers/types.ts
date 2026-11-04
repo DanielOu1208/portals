@@ -118,6 +118,13 @@ export interface TurnUsage {
   tokens?: number;
 }
 
+/** A completed turn's native boundary, kept on its opening user message. */
+export interface MessageCheckpoint {
+  id: string;
+  can_fork: boolean;
+  can_edit: boolean;
+}
+
 /**
  * One message of a stored conversation, in the shape `session.resume` returns
  * (docs/gateway-protocol.md, section 8). The last message of an ended turn may carry what
@@ -136,6 +143,8 @@ type StoredMessageBody =
       display_metadata?: Record<string, unknown>;
       /** The id the device gave the message (`prompt.submit` `message_id`, feature `message_ids`): kept only while the bridge runs. */
       message_id?: string;
+      /** The agent's boundary for branching this turn (feature message_fork). */
+      checkpoint?: MessageCheckpoint;
       /** Who sent it through the fleet (feature `senders`), read from its first line when it goes out: never stored. */
       from?: From;
       /**
@@ -193,6 +202,7 @@ export interface ContextUsage {
  * so the app styles them; mapping an agent's own tools onto them is the provider's job.
  */
 export type ProviderEvent =
+  | { type: "checkpoint"; checkpoint: MessageCheckpoint }
   /** Invalidate live MCP sign-in cards; no authentication data is carried by an event. */
   | { type: "mcp.auth" }
   | { type: "queue.consumed"; requestId: string }
@@ -834,6 +844,8 @@ export interface Provider {
    * fork's folder check) left behind holds the session to that folder.
    */
   adopt?(id: string, mode: AdoptMode, readOnly?: boolean): Promise<DeskAdoption>;
+  /** A new conversation through a completed turn, or before it when editing. */
+  forkAt?(id: string, checkpointId: string, before: boolean, expectedCwd: string): Promise<DeskAdoption>;
   /**
    * Where the agent keeps the conversation of the thread `id` that runs in `cwd`, and how
    * it is written, for search (feature thread_search, src/search/): read by the bridge
