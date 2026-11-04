@@ -1,8 +1,8 @@
 import XCTest
 
 /// The welcome's states for measuring the app at rest with no host (the battery hunt
-/// of 2026-10-30): the welcome alone, under Add a host, under the scanner's sheet, and the
-/// demo. Each state is held for `hold` seconds, quiet (no query meanwhile, as each look the
+/// of 2026-10-30): the welcome alone, under Add a host, and under the scanner's sheet. Each
+/// state is held for `hold` seconds, quiet (no query meanwhile, as each look the
 /// test takes at the app costs it main-thread time), and named in `markers.txt` in the
 /// folder as it begins (`<unix time> <state>`), for a script outside to measure the app
 /// then. Skipped unless the folder, `/private/tmp/portals-welcome-rest/uitest-<simulator>/`,
@@ -64,15 +64,6 @@ final class WelcomeRestUITests: XCTestCase {
         if app.buttons["host-settings-cancel"].exists { app.buttons["host-settings-cancel"].tap() }
         Thread.sleep(forTimeInterval: 2)
 
-        // The demo.
-        let tryDemo = app.buttons["welcome-try-demo"]
-        XCTAssertTrue(tryDemo.waitForExistence(timeout: 10), "no Try a demo")
-        if !tryDemo.isHittable { app.swipeUp() }
-        tryDemo.tap()
-        Thread.sleep(forTimeInterval: 3)
-        mark("demo")
-        Thread.sleep(forTimeInterval: hold)
-        shot("demo")
         mark("end")
     }
 }

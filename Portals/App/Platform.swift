@@ -15,6 +15,21 @@ enum Platform {
         #endif
     }
 
+    /// Tailscale in the App Store: the iPhone and iPad app, or the Mac's.
+    static let tailscaleURL = URL(string: isMac
+        ? "https://apps.apple.com/app/tailscale/id1475387142"
+        : "https://apps.apple.com/app/tailscale/id1470499037")!
+
+    /// Whether 127.0.0.1 here can't be a host: on an iPhone or iPad it is the device itself,
+    /// though in the simulator it is the Mac that runs it, where development hosts are.
+    static var loopbackIsNeverAHost: Bool {
+        #if targetEnvironment(simulator)
+        false
+        #else
+        !isMac
+        #endif
+    }
+
     /// Whether the code the bridge's setup shows can be scanned here. A Mac has no
     /// camera to hold up to it: there the link under the code is opened or pasted.
     static var scansCodes: Bool { !isMac }

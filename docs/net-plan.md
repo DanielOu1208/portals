@@ -236,8 +236,9 @@ sealing; a socket-like object the gateway takes as it takes a `ws` WebSocket. Co
 `relay.enabled` (default true) and `relay.url` (default the deployed relay's address, as
 `push.relay`).
 
-**Not yet:** a Mac without Tailscale (setup still needs it, and joining needs the
-issuing Mac's url); compression over the relay; files over 16 MiB in pieces.
+**Not yet:** a Mac reached without Tailscale from another device (joining needs the issuing
+Mac's url; for Portals on the same Mac, see "A Mac for itself" below); compression over the
+relay; files over 16 MiB in pieces.
 
 ## Decided for the build: the app
 
@@ -331,9 +332,36 @@ tests and typechecks passing, then a commit.
 | N3 | **the user's Macs and devices**, with the OK | MBP16 and the mini in one net, the devices joined, the relay deployed |
 | N4 | **Poor cellular**: measurements, the quicker stall, the message | Before-and-after numbers on a phone |
 
+## A Mac for itself (2026-11-03)
+
+"if they are just on their mac and want to use portals they shouldnt have to setup
+tailscale", with users told a phone does need it. The host listens on 127.0.0.1 anyway, so
+Portals on the same Mac needs nothing in between.
+
+- **Setup.** Tailscale stays the way setup leads with ("should be an exception to not use
+  tailscale"). A Mac with no address goes without it only when the person says so: **Use just
+  this Mac without it** beside Check again while Tailscale isn't ready, No to the mapping, or
+  `--no-tailscale`. `--yes` and a Tailscale that fails do not count: they leave no address, as
+  before, and say how. Setup then writes `http://127.0.0.1:<port>` as the address in
+  `setup.json`, and shows a link, not a code. A Mac that already has a tailnet address keeps
+  it: its devices count on it, so Tailscale being off is to be put right. Linux has no Portals
+  of its own to reach it, and stays as it was.
+- **What makes a host one.** Setup's address being a loopback one with no `net.url` set
+  (`Net.thisMacOnly`), never the address alone: scratch bridges, the simulator and the tests
+  use loopback addresses for real joins between them.
+- **The host.** `net.invite` answers only a password sign-in, which is how Portals on that Mac
+  joins. Anyone else, `net.join_with`, and a Mac at `POST /net/join` are refused with what to
+  do: 127.0.0.1 in a code or an entry would have whoever got it dial themselves. It opens no
+  standby to the relay.
+- **The app.** A Mac whose net has only loopback hosts (`portalsNeedTailscale`) shows the
+  steps in Add a portal in place of a code. An iPhone or iPad given such a link says why it
+  can't use it. A Mac in a net with real hosts adds a loopback host by itself, outside the net.
+- **Later.** Setup run again with Tailscale replaces the address. The host starts with the new
+  one, its entry changes, the app moves to it, and Add a portal, open or not, shows a code.
+
 ## Later
 
-- A Mac without Tailscale, through the relay alone.
+- A Mac without Tailscale, reached from other devices through the relay alone.
 - A home Mac that owns the list.
 - The Macs' order (`machine_order`, newest wins per bridge today) kept in the list.
 - Notifications for every thread on every device (the backlog entry on them): every

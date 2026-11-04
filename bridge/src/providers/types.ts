@@ -519,6 +519,10 @@ export interface ProviderSession {
    * nothing runs. Agents whose turns all start from the app need not have it.
    */
   attached?(): { user: string } | null;
+  /** Whether any connected device retains this thread's event stream. */
+  setFollowed?(followed: boolean): void;
+  /** Catches up native work before a device takes its resume snapshot. */
+  prepareOpen?(): Promise<void>;
   settings(): SessionSettings;
   /**
    * Stops one subagent or workflow the agent started (reported as `subagent`), leaving
@@ -845,6 +849,8 @@ export interface Provider {
    * which the bridge follows from the start after a restart.
    */
   liveThreads?(ids: string[]): Promise<string[]>;
+  /** Watches registered threads that may run elsewhere while their sessions are unloaded. */
+  watchThreads?(threads: () => { id: string; updatedAt: number }[], changed: (id: string) => Promise<void>): void;
   /**
    * Sessions started at the desk, newest first: at least the newest `wanted`, as far
    * as there are that many. The bridge leaves out its own threads and folders it never

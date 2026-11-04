@@ -261,6 +261,12 @@ public struct NetMembership: Codable, Hashable, Sendable {
     /// The Macs of the net the device can reach, in the list's order.
     public var macs: [NetMember] { members.filter(\.isReachableMac) }
 
+    /// Whether every host of the net answers only on its own computer: a Mac set up without
+    /// Tailscale, whose net nothing else can use until it has an address that reaches it.
+    public var isOnlyOnItsOwnMac: Bool {
+        !macs.isEmpty && macs.allSatisfy { $0.url?.isLoopback == true }
+    }
+
     /// Every member not removed, Macs first, each kind in the list's order: the Devices list.
     public var shownMembers: [NetMember] {
         let kept = members.filter { !$0.isRemoved }
