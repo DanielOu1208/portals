@@ -218,10 +218,14 @@ export function responseFor(method: string, params: Params, answer: RequestAnswe
 /**
  * The same request as Codex sends it again after a reconnect (it may come with another
  * id): its method, item and approval id; for a tool approval, which has neither, its
- * turn, server, question and the tool's arguments.
+ * thread, turn, server, tool, question and the tool's arguments. Two calls of one tool
+ * with the same arguments have the same key: telling them apart is the caller's.
  */
 export function requestKey(method: string, params: Params): string {
-  if (method === elicitation) return `${method}|${params.turnId ?? ""}|${params.serverName ?? ""}|${params.message ?? ""}|${JSON.stringify(params._meta?.tool_params ?? null)}`;
+  if (method === elicitation) {
+    const tool = params._meta?.tool_name ?? params._meta?.tool_title ?? "";
+    return `${method}|${params.threadId ?? ""}|${params.turnId ?? ""}|${params.serverName ?? ""}|${tool}|${params.message ?? ""}|${JSON.stringify(params._meta?.tool_params ?? null)}`;
+  }
   return `${method}|${params.itemId ?? ""}|${params.approvalId ?? ""}`;
 }
 

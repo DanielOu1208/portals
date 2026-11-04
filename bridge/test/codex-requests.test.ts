@@ -96,7 +96,10 @@ test("an MCP tool Codex asks about is an approval card offering what its persist
   assert.deepEqual(responseFor(method, params, { kind: "withdrawn", reason: "interrupted" }), { action: "cancel", content: null, _meta: null });
   assert.deepEqual(responseFor(method, params, { kind: "withdrawn", reason: "withdrawn" }, true), { action: "decline", content: null, _meta: null });
   assert.equal(responseFor(method, params, { kind: "withdrawn", reason: "withdrawn" }), null);
-  assert.equal(requestKey(method, params), 'mcpServer/elicitation/request|u|scratch|Allow the scratch MCP server to run tool "shout"?|{"text":"hi"}');
+  assert.equal(requestKey(method, params), 'mcpServer/elicitation/request|t|u|scratch||Allow the scratch MCP server to run tool "shout"?|{"text":"hi"}');
+  // A sub-agent's, or another tool's, with the same turn id and arguments is another request.
+  assert.notEqual(requestKey(method, { ...params, threadId: "child" }), requestKey(method, params));
+  assert.notEqual(requestKey(method, named), requestKey(method, { ...named, _meta: { ...named._meta, tool_name: "whisper" } }));
 });
 
 test("requestUserInput is a clarify card, answered by question id; dismissing it answers nothing", () => {
