@@ -36,7 +36,7 @@ struct MessageForkSheet: View {
 
     var body: some View {
         PanelChrome(
-            title: request.before ? "Edit in a new thread" : "Fork from here",
+            title: request.before ? "Edit message" : "Fork from here",
             doneIdentifier: "message-fork-cancel", cancels: true,
             onDone: { if !isCreating { onDone() } },
             action: Button(action: create) {
