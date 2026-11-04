@@ -114,6 +114,10 @@ final class Net {
 
     var isInNet: Bool { membership.isInNet }
 
+    /// Portals is on a Mac whose net only that Mac can reach: another portal needs Tailscale
+    /// first (Add a portal says how). Not in the simulator, whose scratch hosts share its Mac.
+    var portalsNeedTailscale: Bool { Platform.isMac && membership.isOnlyOnItsOwnMac }
+
     /// The token, for a net host's sign-in.
     var token: String? { credentials.netToken() }
 
@@ -252,6 +256,9 @@ final class Net {
         case let .pairIntoNet(pairing):
             return try await pairIntoNet(pairing, attempt)
         case let .addMac(pairing):
+            // A host only this Mac reaches can't share a net with hosts elsewhere, whose
+            // portals would dial themselves to reach it: it is added by itself.
+            if pairing.url.isLoopback, !membership.isOnlyOnItsOwnMac { return .withoutNet }
             return try await addMac(pairing, attempt)
         }
     }

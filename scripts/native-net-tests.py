@@ -40,7 +40,10 @@ def main():
     template = (root / "scripts/native-net-tests.swift").read_text()
     sheet = (root / "Portals/Settings/HostSettingsSheet.swift").read_text()
     template = template.replace("// APP_OUTCOME", method(source, "enum Outcome: Equatable"))
-    template = template.replace("// SHEET_RUN", method(sheet, "private func run("))
+    # run(), and what its guard on a loopback address reads.
+    template = template.replace("// SHEET_RUN", "\n\n".join(method(sheet, signature) for signature in [
+        "private func run(", "private var addressIsTheDeviceItself:", "private var isOnlyOnThisMac:",
+    ]))
     with tempfile.TemporaryDirectory(prefix="portals-native-net-") as temporary:
         out = pathlib.Path(temporary)
         core = support["build_agent_core"](root, fresh=args.fresh_core)

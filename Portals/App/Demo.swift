@@ -2,9 +2,10 @@ import AgentCore
 import Foundation
 import SwiftUI
 
-/// The demo the welcome offers to anyone with no host to add (2026-10-29: testers
-/// are invited by email, so a build goes through Beta App Review first, whose reviewers
-/// cannot set up a Mac). A host named Demo plays the fake backend's demo script
+/// The demo, opened only by a development switch (`DebugLaunch.opensDemo`), for launch videos
+/// and tests. The welcome offered it to anyone with no host to add from 2026-10-29, for Beta
+/// App Review, whose reviewers cannot set up a Mac, until 2026-11-03 ("remove the thing thats
+/// like a demo"). A host named Demo plays the fake backend's demo script
 /// (`FakeBackend+Demo`), in a fleet of its own that the screens show in place of the app's
 /// while the demo is on (`RootView`). Nothing of it goes to the hosts list, the Keychain or
 /// the net; nothing is sent to the relay; it registers for no notifications, its backend
