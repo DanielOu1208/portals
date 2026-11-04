@@ -1,7 +1,11 @@
 import "./environment.ts";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { HermesError, type Frame } from "../src/providers/hermes/client.ts";
+import { HermesHost as HermesProviderHost } from "../src/providers/hermes/provider.ts";
 import { HermesSession, noticeText, type HermesHost, type Loaded } from "../src/providers/hermes/session.ts";
 import type { ProviderEvent, ThreadMode } from "../src/providers/types.ts";
 import type { Registry, ThreadRecord } from "../src/sessions/registry.ts";
@@ -170,3 +174,66 @@ test("on a profile that asks for no approvals, Hermes's yes for every session's 
     assert.deepEqual(adapter.mode(), { mode: "default" });
   } finally { await core.close(); }
 });
+
+for (const after of ["a restart of the bridge", "a reconnect that lost events"] as const) {
+  test(`a Hermes command made a message of reads back as the user typed it, not as Hermes's message, after ${after}`, async () => {
+    const state = mkdtempSync(join(tmpdir(), "portals-hermes-typed-"));
+    // The provider's own keeping, a new one for each run of the bridge.
+    const provider = () => new HermesProviderHost({
+      settings: { path: "/nonexistent/hermes", start: false, folder: state, logPath: join(state, "hermes-serve.log") },
+      cachePath: join(state, "hermes.json"),
+      connect: async () => { throw new Error("no Hermes here"); },
+    });
+    const expanded = "Write a plan for: the move";
+    const written: Loaded = { session_id: "runtime", running: false, messages: [{ role: "user", text: expanded, timestamp: 1, row_id: 7 } as never, { role: "assistant", text: "Planned.", timestamp: 2 }] };
+    const thread = (kept: HermesProviderHost) => {
+      const record: ThreadRecord = { id: "stored", agent: "hermes", cwd: "/tmp", title: null, ...settings, createdAt: 0, updatedAt: 0, origin: "phone", ongoing: true };
+      const core = new Session(record, { has: () => false } as unknown as Registry);
+      const host: HermesHost = {
+        call: async <T>(method: string) => {
+          if (method === "command.dispatch") return { type: "send", message: expanded } as T;
+          if (method === "prompt.submit") return { status: "streaming", user_row_id: 7 } as T;
+          if (method === "session.resume") return written as T;
+          if (method === "session.events.since") return { events: [], truncated: true, latest_seq: 9, open_requests: [] } as T;
+          return {} as T;
+        },
+        bind() {}, forget() {}, respond() {}, respondError() {},
+        botChatMark: async () => "mark",
+        turnCommand: async (_profile, name) => name === "plan",
+        typedCommands: (id) => kept.typedCommands(id),
+        keepTyped: (id, row, text) => kept.keepTyped(id, row, text),
+      };
+      return { core, host };
+    };
+    const users = (core: Session) => core.messages.filter((message) => message.role === "user").map((message) => message.text);
+    const { core, host } = thread(provider());
+    const adapter = new HermesSession({ id: "stored", cwd: "/tmp", settings, ongoing: true }, "default", core.sink, host, { session_id: "runtime", messages: [] }, "mark");
+    await core.attach(adapter);
+    await step();
+    let restarted: Session | null = null;
+    try {
+      await begin(core, adapter, "/plan the move", 1);
+      assert.deepEqual(users(core), ["/plan the move"]);
+      if (after === "a reconnect that lost events") {
+        adapter.connectionLost();
+        await adapter.reconnected(true);
+        for (let tries = 0; tries < 100 && !core.messages.some((message) => message.role === "assistant" && message.text === "Planned."); tries++) await new Promise((resolve) => setTimeout(resolve, 5));
+        assert.ok(core.messages.some((message) => message.role === "assistant" && message.text === "Planned."), "Hermes's stored copy was taken");
+        assert.deepEqual(users(core), ["/plan the move"]);
+      } else {
+        adapter.event("message.complete", 2, { status: "complete", text: "Planned." });
+        await step();
+        await core.close();
+        const again = thread(provider());
+        restarted = again.core;
+        await again.core.attach(new HermesSession({ id: "stored", cwd: "/tmp", settings, ongoing: true }, "default", again.core.sink, again.host, written, "mark"));
+        await step();
+        assert.deepEqual(users(again.core), ["/plan the move"]);
+      }
+    } finally {
+      await core.close();
+      await restarted?.close();
+      rmSync(state, { recursive: true, force: true });
+    }
+  });
+}

@@ -68,6 +68,24 @@ export class HermesSubagents {
   running(id: string): boolean {
     return this.known.get(id)?.status === "running";
   }
+
+  /** Whether any child still runs, as far as their events said: one may outlive the turn that started it. */
+  anyRunning(): boolean {
+    return [...this.known.values()].some((info) => info.status === "running");
+  }
+
+  /** Ends each child still running as stopped, for a Hermes that no longer has them (another runtime): each as it stands now. */
+  stopAll(): SubagentInfo[] {
+    const stopped: SubagentInfo[] = [];
+    for (const info of this.known.values()) {
+      if (info.status !== "running") continue;
+      info.status = "stopped";
+      info.endedAt = this.now();
+      delete info.summary;
+      stopped.push({ ...info });
+    }
+    return stopped;
+  }
 }
 
 function stringOf(value: unknown): string {

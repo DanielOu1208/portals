@@ -537,3 +537,30 @@ test("a message sent while the connection is down is still sent when the replay 
     assert.ok(core.messages.some((message) => message.role === "assistant" && message.text === "Next reply"));
   } finally { await core.close(); }
 });
+
+for (const run of ["the same run of Hermes", "another run of Hermes"] as const) {
+  test(`a child Hermes's delegate_task left running in the background after its turn ended is followed again after a drop, on ${run}`, async () => {
+    const { core, adapter, loaded, setCall } = await fixture();
+    const calls: string[] = [];
+    const child = { subagent_id: "child", goal: "Count the files", depth: 0 };
+    setCall(async (method) => {
+      calls.push(method);
+      if (method === "session.resume") return run === "the same run of Hermes" ? { ...loaded, running: false, inflight: undefined } : { session_id: "new-runtime", running: false, messages: [] };
+      if (method === "session.events.since") return { events: [{ type: "subagent.complete", seq: 4, payload: { ...child, status: "completed", summary: "12 files" } }], latest_seq: 4, open_requests: [] };
+      return {};
+    });
+    const status = () => core.subagentList().find((info) => info.subagent_id === "child")?.status;
+    try {
+      adapter.event("subagent.start", 2, child);
+      adapter.event("message.complete", 3, { status: "complete", text: "A child is counting." });
+      assert.equal(core.isRunning, false);
+      assert.equal(status(), "running");
+      adapter.connectionLost();
+      await adapter.reconnected(run === "the same run of Hermes");
+      assert.ok(calls.includes("session.resume"), calls.join(", "));
+      // Its end came with the replay; another run of Hermes no longer has it.
+      assert.equal(status(), run === "the same run of Hermes" ? "completed" : "stopped");
+      assert.equal(core.isAtWork, false);
+    } finally { await core.close(); }
+  });
+}

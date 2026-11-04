@@ -1,3 +1,4 @@
+import { dirname, join } from "node:path";
 import { log } from "../../log.ts";
 import { machineWord } from "../../platform.ts";
 import { readJSON, writeJSON } from "../../store/jsonFile.ts";
@@ -5,6 +6,7 @@ import { thinkingLevels, type AgentCommand, type AgentProfile, type ModelCatalog
 import { HermesClient, serveConnector, type ClientListener, type Connector, type Frame } from "./client.ts";
 import { ServeLocator } from "./serve.ts";
 import { HermesSession, type Loaded } from "./session.ts";
+import { TypedCommands } from "./typed.ts";
 
 // Hermes as agents of the bridge: one per Hermes profile (its `default` is `hermes` in
 // profiles.list), all through one connection to the `hermes serve` this Mac runs
@@ -133,11 +135,14 @@ export class HermesHost {
   private changeTimer: NodeJS.Timeout | null = null;
   /** Each profile's commands as Hermes last listed them (`commands.catalog`), and when. */
   private readonly catalogs = new Map<string, { catalog: Promise<Frame>; at: number }>();
+  /** What the user typed for the messages Hermes stored in place of a command, beside the profiles' file. */
+  private readonly typed: TypedCommands;
 
   constructor(options: HermesHostOptions) {
     this.options = options;
     this.interruptGraceMs = options.interruptGraceMs ?? 15_000;
     this.oneThread = options.oneThread ?? true;
+    this.typed = new TypedCommands(join(dirname(options.cachePath), "hermes-commands.json"));
     const locator = new ServeLocator({
       path: options.settings.path,
       start: options.settings.start,
@@ -376,6 +381,15 @@ export class HermesHost {
       if (this.catalogs.get(profile)?.catalog === catalog) this.catalogs.delete(profile);
     });
     return catalog;
+  }
+
+  /** What the user typed for the thread's messages Hermes stored in place of a command, by the stored row's id. */
+  typedCommands(thread: string): Map<number, string> {
+    return this.typed.of(thread);
+  }
+
+  keepTyped(thread: string, row: number, text: string): void {
+    this.typed.keep(thread, row, text);
   }
 
   /** Whether `/name` is a command Hermes makes a message of for the profile: one of the app's (`hermesCommands`) or a skill. */
