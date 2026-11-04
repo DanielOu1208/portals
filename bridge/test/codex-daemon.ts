@@ -15,6 +15,9 @@ import { fixture, fixtureCwd, recordedThread, rewrite } from "./codex-fixtures.t
 
 type Json = any;
 
+/** What Codex (0.166) says when asked for the turns of a thread it has loaded that has none yet. */
+const noTurnsYet = "list_turns is not supported yet";
+
 export class DaemonConnection {
   readonly socket: WebSocket;
   /** Every message from the client, in order. */
@@ -422,7 +425,7 @@ export class FakeDaemon {
       case "thread/resume": {
         await this.onResume(params);
         const thread = this.thread(params.threadId);
-        if (thread.turns.length === 0 && !thread.loaded) throw new Error(`no rollout found for thread id ${thread.id}`);
+        if (thread.turns.length === 0) throw new Error(thread.loaded ? noTurnsYet : `no rollout found for thread id ${thread.id}`);
         thread.loaded = true;
         if (thread.status.type === "notLoaded") thread.status = { type: "idle" };
         connection.subscribed.add(thread.id);
@@ -436,9 +439,12 @@ export class FakeDaemon {
         }
         return { thread: this.threadJSON(thread, params.excludeTurns !== true, true), ...this.settings(thread) };
       }
-      case "thread/read":
+      case "thread/read": {
         await this.onRead(params);
-        return { thread: this.threadJSON(this.thread(params.threadId), params.includeTurns === true) };
+        const thread = this.thread(params.threadId);
+        if (params.includeTurns === true && thread.turns.length === 0 && thread.loaded) throw new Error(noTurnsYet);
+        return { thread: this.threadJSON(thread, params.includeTurns === true) };
+      }
       case "thread/fork": {
         const from = this.thread(params.threadId);
         if (from.turns.length === 0) throw new Error(`no rollout found for thread id ${from.id}`);

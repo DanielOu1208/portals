@@ -66,6 +66,39 @@ test("a file change approval reads Edit <path> and the diff, and never offers al
   ]);
 });
 
+test("an MCP tool Codex asks about is an approval card offering what its persist allows, answered as Codex reads an elicitation's answer", () => {
+  const method = "mcpServer/elicitation/request";
+  // As Codex 0.166 asks in /mode ask.
+  const params = {
+    threadId: "t", turnId: "u", serverName: "scratch", mode: "form",
+    _meta: {
+      codex_approval_kind: "mcp_tool_call", persist: ["session", "always"], tool_description: "Says the text back in capitals.",
+      tool_params: { text: "hi" }, tool_params_display: [{ name: "text", value: "hi", display_name: "text" }],
+    },
+    message: 'Allow the scratch MCP server to run tool "shout"?',
+    requestedSchema: { type: "object", properties: {} },
+  };
+  assert.deepEqual(approvalRequest(method, params, "/w", undefined), {
+    kind: "approval",
+    command: 'scratch {"text":"hi"}',
+    description: 'Allow the scratch MCP server to run tool "shout"?',
+    choices: ["once", "session", "always", "deny"],
+  });
+  assert.deepEqual(approvalResponse(method, params, "once"), { action: "accept", content: null, _meta: null });
+  assert.deepEqual(approvalResponse(method, params, "session"), { action: "accept", content: null, _meta: { persist: "session" } });
+  assert.deepEqual(approvalResponse(method, params, "always"), { action: "accept", content: null, _meta: { persist: "always" } });
+  assert.deepEqual(approvalResponse(method, params, "deny"), { action: "decline", content: null, _meta: null });
+  // One remembered for the thread only, named by the tool, with no arguments.
+  const named = { ...params, _meta: { codex_approval_kind: "mcp_tool_call", persist: "session", tool_name: "shout", tool_params: {} } };
+  const card = approvalRequest(method, named, "/w", undefined);
+  assert.deepEqual(card.kind === "approval" ? [card.command, card.choices] : [], ["scratch/shout", ["once", "session", "deny"]]);
+  // Stop cancels it; a sub-agent's taken back as the turn ended is a no.
+  assert.deepEqual(responseFor(method, params, { kind: "withdrawn", reason: "interrupted" }), { action: "cancel", content: null, _meta: null });
+  assert.deepEqual(responseFor(method, params, { kind: "withdrawn", reason: "withdrawn" }, true), { action: "decline", content: null, _meta: null });
+  assert.equal(responseFor(method, params, { kind: "withdrawn", reason: "withdrawn" }), null);
+  assert.equal(requestKey(method, params), 'mcpServer/elicitation/request|u|scratch|Allow the scratch MCP server to run tool "shout"?|{"text":"hi"}');
+});
+
 test("requestUserInput is a clarify card, answered by question id; dismissing it answers nothing", () => {
   const params = recordedRequest("clarify", "item/tool/requestUserInput");
   assert.deepEqual(clarifyRequest(params), {
