@@ -274,6 +274,7 @@ export class CodexSession implements ProviderSession {
   private applied: Applied | null;
   /** This connection gets the thread's notifications and requests. */
   private subscribed: boolean;
+  private subscriptionLosses = 0;
   private followed = false;
   private letGo = false;
   private runtimeActive = false;
@@ -577,6 +578,7 @@ export class CodexSession implements ProviderSession {
     if (this.closed || this.busy || this.letGo) return;
     if (this.releasing) return this.releasing;
     const drops = this.drops;
+    let unsubscribe: { thread: Thread; subscribed: boolean; following: boolean; losses: number } | undefined;
     this.releasing = (async () => {
       const { thread } = await this.host.client.call<{ thread: Thread }>("thread/read", { threadId: this.id, includeTurns: false });
       if (this.closed || this.busy || drops !== this.drops) return;
@@ -588,6 +590,7 @@ export class CodexSession implements ProviderSession {
         if (terminals.data.length > 0 || terminals.nextCursor) return;
       }
       if (this.closed || this.busy || drops !== this.drops) return;
+      unsubscribe = { thread, subscribed: this.subscribed, following: this.following, losses: this.subscriptionLosses };
       this.subscribed = false;
       this.following = false;
       this.letGo = true;
@@ -595,8 +598,16 @@ export class CodexSession implements ProviderSession {
       await this.host.client.call("thread/unsubscribe", { threadId: this.id });
       if (!this.closed && drops === this.drops) this.host.released?.(this, thread);
     })().catch((error: Error) => {
-      this.letGo = false;
-      this.following = true;
+      if (unsubscribe) {
+        // A timeout may have lost only the acknowledgement. Only a definite refusal
+        // without a native subscription loss proves its subscription is still there.
+        const refused = error instanceof CodexError && error.notTaken && drops === this.drops
+          && unsubscribe.subscribed && unsubscribe.losses === this.subscriptionLosses;
+        this.letGo = !refused;
+        this.subscribed = refused ? unsubscribe.subscribed : false;
+        this.following = refused ? unsubscribe.following : false;
+        if (!refused && !this.closed) this.host.released?.(this, unsubscribe.thread);
+      }
       log.debug("could not let go of an idle Codex thread", { session: this.id, error: error.message });
     }).finally(() => {
       this.releasing = null;
@@ -1351,11 +1362,15 @@ export class CodexSession implements ProviderSession {
       }
       case "thread/status/changed":
         this.runtimeActive = params.status?.type === "active";
-        if (params.status?.type === "notLoaded") this.subscribed = false;
+        if (params.status?.type === "notLoaded") {
+          this.subscribed = false;
+          this.subscriptionLosses += 1;
+        }
         return;
       case "thread/closed":
         this.runtimeActive = false;
         this.subscribed = false;
+        this.subscriptionLosses += 1;
         return;
       case "warning":
         // the config.toml makes one at every thread start; nothing for the phone.

@@ -2270,12 +2270,13 @@ export class Session {
    */
   private watchReach(): void {
     const provider = this.provider;
-    const catchingUp = this.closing || this.retired ? undefined : provider?.catchingUp?.();
+    const waiting = this.running ? undefined : this.queue.find((queued) => !queued.resent && !queued.starting);
+    const catchingUp = !waiting || this.closing || this.retired ? undefined : provider?.catchingUp?.();
     // Back in step, or a turn runs (one missed at the desk, told meanwhile, or the next
     // message's): each message's wait starts afresh, at the next drop or once that turn
     // has ended, as for one that waited behind a running turn.
     if (!catchingUp || this.running) for (const queued of this.queue) queued.since = undefined;
-    const first = catchingUp && !this.running ? this.queue.find((queued) => !queued.resent && !queued.starting) : undefined;
+    const first = catchingUp ? waiting : undefined;
     if (this.reachWatch?.entry === first) return;
     this.reachWatch?.stop.abort();
     this.reachWatch = null;

@@ -115,6 +115,8 @@ interface Catalog {
 const idleMs = 10 * 60_000;
 const idleCheckMs = 60_000;
 const idlePageSize = 100;
+/** Targeted metadata checks per scan, rotating through cold threads outside that page. */
+const idleBackfillSize = 10;
 
 /** Unloading alone changes runtime status, not the conversation. */
 function idleVersion(thread: Thread): string {
@@ -237,6 +239,7 @@ export class CodexProvider implements Provider, CodexHost {
   private watchedThreads: (() => { id: string; updatedAt: number }[]) | null = null;
   private changedThread: ((id: string) => Promise<void>) | null = null;
   private readonly idleVersions = new Map<string, string>();
+  private idleBackfill: string[] = [];
   /** Threads made by `newThread`, until their session is started. */
   private readonly made = new Map<string, ThreadStartResponse>();
   private catalog: Catalog | null = null;
@@ -760,26 +763,37 @@ export class CodexProvider implements Provider, CodexHost {
     this.changedThread = changed;
   }
 
-  /** One index page while threads are let go; no history reads for unchanged rows. */
+  /** One recent index page plus bounded cold-thread metadata checks; history only when changed. */
   private async checkIdle(): Promise<void> {
     if (this.checkingIdle || !this.client.isConnected || !this.started) return;
     const records = new Map((this.watchedThreads?.() ?? []).map((thread) => [thread.id, thread.updatedAt]));
     for (const [id, session] of this.sessions) if (session.isReleased && !records.has(id)) records.set(id, 0);
     const cold = new Set([...records.keys()].filter((id) => !this.sessions.has(id) || this.sessions.get(id)!.isReleased));
     for (const id of this.idleVersions.keys()) if (!records.has(id)) this.idleVersions.delete(id);
-    if (cold.size === 0) return;
+    if (cold.size === 0) { this.idleBackfill = []; return; }
     this.checkingIdle = true;
     try {
       const page: ThreadListResponse = await this.client.call("thread/list", { cursor: null, limit: idlePageSize, sortKey: "updated_at", sortDirection: "desc", useStateDbOnly: true });
+      const indexed = new Set(page.data.map((thread) => thread.id));
+      const checks: { id: string; thread?: Thread }[] = page.data.filter((thread) => cold.has(thread.id)).map((thread) => ({ id: thread.id, thread }));
+      if (this.idleBackfill.length === 0) this.idleBackfill = [...cold].reverse();
+      let added = 0;
+      while (this.idleBackfill.length > 0 && added < idleBackfillSize) {
+        const id = this.idleBackfill.pop()!;
+        if (!cold.has(id) || indexed.has(id)) continue;
+        checks.push({ id });
+        added += 1;
+      }
       let next = 0;
       const read = async () => {
-        while (next < page.data.length) {
-          const thread = page.data[next++]!;
-          if (!this.started || !cold.has(thread.id)) continue;
-          const version = idleVersion(thread);
-          const previous = this.idleVersions.get(thread.id);
-          const changed = previous !== undefined ? previous !== version : thread.status?.type === "active" || thread.updatedAt > records.get(thread.id)!;
+        while (next < checks.length) {
+          const check = checks[next++]!;
+          if (!this.started || this.sessions.get(check.id)?.isReleased === false) continue;
           try {
+            const thread = check.thread ?? (await this.client.call<{ thread: Thread }>("thread/read", { threadId: check.id, includeTurns: false })).thread;
+            const version = idleVersion(thread);
+            const previous = this.idleVersions.get(thread.id);
+            const changed = previous !== undefined ? previous !== version : thread.status?.type === "active" || thread.updatedAt > records.get(thread.id)!;
             if (changed) {
               const session = this.sessions.get(thread.id);
               if (session) await session.prepareOpen();
@@ -787,11 +801,11 @@ export class CodexProvider implements Provider, CodexHost {
             }
             this.idleVersions.set(thread.id, version);
           } catch (error) {
-            log.debug("could not catch up a Codex thread left idle", { thread: thread.id, error: (error as Error).message });
+            log.debug("could not catch up a Codex thread left idle", { thread: check.id, error: (error as Error).message });
           }
         }
       };
-      await Promise.all(Array.from({ length: Math.min(4, page.data.length) }, read));
+      await Promise.all(Array.from({ length: Math.min(4, checks.length) }, read));
     } catch (error) {
       log.debug("could not check Codex threads left idle", { error: (error as Error).message });
     } finally {
@@ -1109,6 +1123,7 @@ export class CodexProvider implements Provider, CodexHost {
     this.pool.stop();
     if (this.idleTimer) clearInterval(this.idleTimer);
     this.idleTimer = null;
+    this.idleBackfill = [];
     if (this.folderTimer) clearInterval(this.folderTimer);
     this.folderTimer = null;
     await Promise.all([...this.sessions.values()].map((session) => session.close()));

@@ -4,7 +4,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { CodexProvider } from "../src/providers/codex/provider.ts";
-import { socketConnector } from "../src/providers/codex/client.ts";
+import { CodexError, socketConnector } from "../src/providers/codex/client.ts";
 import type { CodexSession } from "../src/providers/codex/session.ts";
 import type { SessionOptions, SessionSink } from "../src/providers/types.ts";
 import { FakeDaemon } from "./codex-daemon.ts";
@@ -304,3 +304,119 @@ test("a server that cannot report background work keeps its subscription", async
   assert.equal(f.provider.opened.get(id)!.isReleased, false);
   assert.equal(f.daemon.callsOf("thread/unsubscribe").length, 0);
 });
+
+test("review: a lost unsubscribe acknowledgement stays cold and reopening catches up", async (t) => {
+  const f = await fixture(t, 600_000, 60_000);
+  const id = await f.create();
+  await f.finish(id, await f.work(id));
+  await f.leave(id);
+  const call = f.provider.client.call.bind(f.provider.client);
+  f.provider.client.call = async (method, params, timeout) => {
+    const result = await call(method, params, timeout);
+    if (method === "thread/unsubscribe") throw new CodexError(-32001, "Timed out waiting for thread/unsubscribe", false);
+    return result;
+  };
+  await f.cool(id);
+  assert.equal(f.daemon.connections.some((connection) => connection.subscribed.has(id)), false);
+  assert.equal(f.provider.opened.get(id)!.isReleased, true, "a usable connection does not prove unsubscribe was rejected");
+  deskTurn(f.daemon, id, "desk", "After a lost acknowledgement.");
+  f.daemon.finishTurn(id, "desk", "Recovered after timeout.");
+  const resumes = f.daemon.callsOf("thread/resume").length;
+  const result = await f.client.call("session.resume", { session_id: id });
+  assert.equal(f.daemon.callsOf("thread/resume").length, resumes + 1);
+  assert.equal(result.messages.at(-1).text, "Recovered after timeout.");
+});
+
+test("a definitely rejected unsubscribe retains its known subscription", async (t) => {
+  const f = await fixture(t, 600_000, 60_000);
+  const id = await f.create();
+  await f.finish(id, await f.work(id));
+  await f.leave(id);
+  const call = f.provider.client.call.bind(f.provider.client);
+  f.provider.client.call = async (method, params, timeout) => {
+    if (method === "thread/unsubscribe") throw new CodexError(-32600, "Unsubscribe was rejected", true);
+    return call(method, params, timeout);
+  };
+  await f.cool(id);
+  assert.equal(f.provider.opened.get(id)!.isReleased, false);
+  assert.equal(f.daemon.connections.some((connection) => connection.subscribed.has(id)), true);
+});
+
+test("review: a changed cold thread outside the newest page is discovered without opening", async (t) => {
+  const f = await fixture(t, 600_000, 60_000);
+  const id = await f.create();
+  await f.finish(id, await f.work(id));
+  await f.leave(id);
+  await f.cool(id);
+  deskTurn(f.daemon, id, "desk", "Below the first page.");
+  f.daemon.finishTurn(id, "desk", "Found beyond the first page.");
+  const row = { ...f.daemon.thread(id), turns: [] };
+  const call = f.provider.client.call.bind(f.provider.client);
+  f.provider.client.call = async (method, params, timeout): Promise<any> => {
+    if (method === "thread/list") return { data: Array.from({ length: 100 }, (_, index) => ({ ...row, id: `newer-${index}`, updatedAt: row.updatedAt + index + 1 })), nextCursor: "older-page" };
+    return call(method, params, timeout);
+  };
+  const resumes = f.daemon.callsOf("thread/resume").length;
+  for (let scan = 0; scan < 3; scan += 1) await (f.provider as any).checkIdle();
+  assert.equal(f.provider.opened.get(id)!.isReleased, false);
+  assert.equal(f.daemon.callsOf("thread/resume").length, resumes + 1);
+  const result = await f.client.call("session.resume", { session_id: id });
+  assert.equal(result.messages.at(-1).text, "Found beyond the first page.");
+});
+
+test("review: bounded cold checks rotate beyond one batch and preserve the cheap index page", async (t) => {
+  const f = await fixture(t, 600_000, 60_000);
+  const ids = Array.from({ length: 13 }, () => f.daemon.addThread(f.daemon.folder, [], { updatedAt: 10 }));
+  const changed = new Set<string>();
+  f.provider.watchThreads(() => ids.map((id) => ({ id, updatedAt: 1 })), async (id) => { changed.add(id); });
+  const call = f.provider.client.call.bind(f.provider.client);
+  f.provider.client.call = async (method, params, timeout): Promise<any> => {
+    if (method === "thread/list") return { data: Array.from({ length: 100 }, (_, index) => ({ id: `newer-${index}` })), nextCursor: "older-page" };
+    return call(method, params, timeout);
+  };
+  for (let scan = 0; scan < 2; scan += 1) {
+    const from = f.daemon.calls.length;
+    await (f.provider as any).checkIdle();
+    assert.ok(f.daemon.calls.slice(from).filter((entry) => entry.method === "thread/read").length <= 10);
+  }
+  assert.deepEqual([...changed].sort(), [...ids].sort());
+});
+
+test("review: a refused file preview leaves an empty-queue sibling released", async (t) => {
+  const f = await fixture(t, 600_000, 60_000);
+  const idle = await f.create();
+  await f.finish(idle, await f.work(idle));
+  await f.leave(idle);
+  await f.cool(idle);
+  const sibling = await f.create();
+  await f.finish(sibling, await f.work(sibling));
+  const resumes = f.daemon.callsOf("thread/resume").filter((entry) => entry.params.threadId === idle).length;
+  await assert.rejects(f.client.call("session.files.preview", { session_id: sibling, checkpoint_id: "stale-checkpoint" }));
+  await f.client.call("sessions.activity");
+  assert.equal(f.provider.opened.get(idle)!.isReleased, true);
+  assert.equal(f.daemon.callsOf("thread/resume").filter((entry) => entry.params.threadId === idle).length, resumes);
+});
+
+for (const notification of ["thread/closed", "thread/status/changed"]) {
+  test(`review: ${notification} during a rejected unsubscribe still requires rejoin`, async (t) => {
+    const f = await fixture(t, 600_000, 60_000);
+    const id = await f.create();
+    await f.finish(id, await f.work(id));
+    await f.leave(id);
+    f.daemon.onUnsubscribe = () => {
+      for (const connection of f.daemon.connections) connection.subscribed.delete(id);
+      f.daemon.thread(id).loaded = false;
+      f.daemon.thread(id).status = { type: "notLoaded" };
+      f.daemon.broadcast(notification, { threadId: id, status: { type: "notLoaded" } });
+      throw new CodexError(-32600, "Thread is no longer loaded", true);
+    };
+    await f.cool(id);
+    assert.equal(f.provider.opened.get(id)!.isReleased, true, "a refusal cannot undo a native subscription loss");
+    deskTurn(f.daemon, id, "desk", "After the native subscription ended.");
+    f.daemon.finishTurn(id, "desk", "Recovered after unloading.");
+    const resumes = f.daemon.callsOf("thread/resume").length;
+    const result = await f.client.call("session.resume", { session_id: id });
+    assert.equal(f.daemon.callsOf("thread/resume").length, resumes + 1);
+    assert.equal(result.messages.at(-1).text, "Recovered after unloading.");
+  });
+}
