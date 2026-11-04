@@ -84,6 +84,8 @@ class FakeSystem implements System {
   /** Port → target of `tailscale serve`, with the ports something else serves. */
   served = new Map<number, string>([[443, "http://127.0.0.1:8787"], [10010, "http://127.0.0.1:8792"]]);
   tailscaleRunning = true;
+  /** `tailscale serve` fails, for a reason nobody can do anything about here. */
+  serveFails = false;
   claudeSignedIn = false;
   /** Where `pi` is on PATH; null on a Mac without it. */
   pi: string | null = null;
@@ -177,6 +179,7 @@ class FakeSystem implements System {
         return ok();
       }
       if (args[0] === "serve" && args[1] === "--bg") {
+        if (this.serveFails) return { code: 1, stdout: "", stderr: "no" };
         if (this.operatorOnly && this.operator === null) {
           return { code: 1, stdout: "", stderr: `Access denied: serve config denied\nUse 'sudo tailscale serve ${args.slice(1).join(" ")}'.\nTo not require root, use 'sudo tailscale set --operator=$USER' once.\n` };
         }
@@ -1547,8 +1550,9 @@ test("own Claude login is a choice, with a note on how to use an API key instead
   assert.equal(config.claude.apiKey, null);
   assert.match(ui.text, /To use an API key instead \(what Anthropic's terms cover most clearly\): npx portals-host setup --claude=api-key/);
   assert.match(ui.text, /not signed in\. Run claude once/);
-  // No address, so no code: setup says what is missing.
-  assert.match(ui.text, /no address the iPhone can reach yet/);
+  // No address for anything else: this Mac's own, its link, and what a phone would need.
+  assert.equal(readSetupState(pathsFor(bridgeHome).setup)!.address, "http://127.0.0.1:39122");
+  assert.match(ui.text, /Add this Mac to Portals/);
 });
 
 test("choosing the own Claude login drops a token from claude setup-token kept in config.json", async () => {
@@ -1993,11 +1997,14 @@ test("with someone at the terminal, setup waits for Tailscale to connect and che
   const system = new FakeSystem();
   system.tailscaleRunning = false;
   const ui = new ScriptedUi();
-  const confirm = ui.confirm.bind(ui);
-  // The person opens Tailscale and signs in, then answers that it is done.
-  ui.confirm = async (question, fallback) => {
-    if (question.includes("Check again")) system.tailscaleRunning = true;
-    return confirm(question, fallback);
+  // The person opens Tailscale and signs in, then takes the default: Check again.
+  const choose = ui.choose.bind(ui);
+  ui.choose = async <T extends string>(question: string, choices: readonly Choice<T>[], fallback: T) => {
+    if (question.includes("Once Tailscale is ready")) {
+      assert.equal(fallback, "check");
+      system.tailscaleRunning = true;
+    }
+    return choose(question, choices, fallback);
   };
   const bridgeHome = join(root, "waits-for-tailscale");
   assert.equal(await setup({ service: false, tailscale: true, port: 39132, claude: "off" }, { ...context(system, ui, { PORTALS_BRIDGE_HOME: bridgeHome }), interactive: true }), 0, ui.text);
@@ -2005,6 +2012,131 @@ test("with someone at the terminal, setup waits for Tailscale to connect and che
   assert.ok(!ui.text.includes("Then run setup again"), ui.text);
   assert.ok(system.calls.some((call) => call.args[0] === "serve" && call.args[1] === "--bg"));
   assert.equal(readSetupState(pathsFor(bridgeHome).setup)!.address, `https://${dnsName}:10011`);
+});
+
+const phoneNeedsTailscale = /To use Portals on your iPhone or iPad, you'll need Tailscale: install it on this Mac and on the device/;
+
+test("no Tailscale on a Mac: going without it is the choice not taken by default, and says what a phone would need", async () => {
+  const system = new FakeSystem();
+  system.tailscaleRunning = false;
+  const ui = new ScriptedUi({ "Once Tailscale is ready": "this-mac" });
+  const env = { PORTALS_BRIDGE_HOME: join(root, "this-mac") };
+  assert.equal(await setup({ service: false, tailscale: true, port: 39150, claude: "off" }, { ...context(system, ui, env), interactive: true }), 0, ui.text);
+  const state = readSetupState(pathsFor(env.PORTALS_BRIDGE_HOME).setup)!;
+  assert.equal(state.address, "http://127.0.0.1:39150");
+  assert.equal(state.servePort, null);
+  assert.match(ui.text, /The iPhone reaches this Mac through Tailscale/);
+  assert.match(ui.text, /Tailscale is not connected/);
+  // No code: a phone that scanned it would dial itself.
+  assert.ok(!ui.text.includes("Pair your iPhone"), ui.text);
+  assert.ok(!ui.text.includes("Camera"), ui.text);
+  assert.match(ui.text, /portals:\/\/pair\?v=1&url=http%3A%2F%2F127\.0\.0\.1%3A39150/);
+  assert.match(ui.text, phoneNeedsTailscale);
+  assert.ok(!system.calls.some((call) => call.args[0] === "serve" && call.args[1] === "--bg"));
+
+  // `pair` and `status` say the same.
+  const paired = new ScriptedUi();
+  assert.equal(await pair(context(system, paired, env)), 0, paired.text);
+  assert.match(paired.text, /Add this Mac to Portals/);
+  assert.ok(!paired.text.includes("Camera"), paired.text);
+  assert.match(paired.text, phoneNeedsTailscale);
+  const shown = new ScriptedUi();
+  await status(context(system, shown, env));
+  assert.match(shown.text, /Address: {2}http:\/\/127\.0\.0\.1:39150 \(this Mac only\)/);
+  assert.match(shown.text, phoneNeedsTailscale);
+});
+
+test("the default answer on a Mac is Tailscale: --yes does not go without it, and says how to", async () => {
+  const system = new FakeSystem();
+  system.tailscaleRunning = false;
+  const ui = new ScriptedUi();
+  const bridgeHome = join(root, "this-mac-yes");
+  assert.equal(await setup({ service: false, tailscale: true, port: 39151, claude: "off" }, context(system, ui, { PORTALS_BRIDGE_HOME: bridgeHome })), 0, ui.text);
+  assert.equal(readSetupState(pathsFor(bridgeHome).setup)!.address, null);
+  assert.match(ui.text, /Tailscale is not connected/);
+  assert.match(ui.text, /no address the iPhone can reach yet/);
+  assert.match(ui.text, /npx portals-host setup --no-tailscale/);
+  assert.ok(!phoneNeedsTailscale.test(ui.text), ui.text);
+});
+
+test("--no-tailscale is asking for this Mac alone", async () => {
+  const system = new FakeSystem();
+  const ui = new ScriptedUi();
+  const bridgeHome = join(root, "this-mac-no-tailscale");
+  assert.equal(await setup({ service: false, tailscale: false, port: 39152, claude: "off" }, context(system, ui, { PORTALS_BRIDGE_HOME: bridgeHome })), 0, ui.text);
+  assert.equal(readSetupState(pathsFor(bridgeHome).setup)!.address, "http://127.0.0.1:39152");
+  assert.ok(!ui.text.includes("Once Tailscale is ready"), ui.text);
+  assert.match(ui.text, phoneNeedsTailscale);
+});
+
+test("Tailscale there, the mapping declined: this Mac alone, not no address", async () => {
+  const system = new FakeSystem();
+  const ui = new ScriptedUi({ "reach Portals host": false });
+  const bridgeHome = join(root, "this-mac-declined");
+  assert.equal(await setup({ service: false, tailscale: true, port: 39153, claude: "off" }, { ...context(system, ui, { PORTALS_BRIDGE_HOME: bridgeHome }), interactive: true }), 0, ui.text);
+  assert.equal(readSetupState(pathsFor(bridgeHome).setup)!.address, "http://127.0.0.1:39153");
+  assert.match(ui.text, phoneNeedsTailscale);
+});
+
+test("Tailscale failing is not asking to go without it: a refused mapping leaves no address", async () => {
+  const system = new FakeSystem();
+  system.serveFails = true;
+  const ui = new ScriptedUi();
+  const bridgeHome = join(root, "this-mac-refused");
+  assert.equal(await setup({ service: false, tailscale: true, port: 39157, claude: "off" }, { ...context(system, ui, { PORTALS_BRIDGE_HOME: bridgeHome }), interactive: true }), 0, ui.text);
+  assert.equal(readSetupState(pathsFor(bridgeHome).setup)!.address, null);
+  assert.match(ui.text, /tailscale serve did not work/);
+});
+
+test("setup run again once Tailscale is there replaces this Mac's own address with the tailnet's", async () => {
+  const system = new FakeSystem();
+  const env = { PORTALS_BRIDGE_HOME: join(root, "this-mac-then-tailscale") };
+  const before = new ScriptedUi();
+  assert.equal(await setup({ service: false, tailscale: false, port: 39154, claude: "off" }, context(system, before, env)), 0, before.text);
+  assert.equal(readSetupState(pathsFor(env.PORTALS_BRIDGE_HOME).setup)!.address, "http://127.0.0.1:39154");
+
+  // Run again with Tailscale still not ready and nobody to ask, it stays as it was.
+  system.tailscaleRunning = false;
+  const waiting = new ScriptedUi();
+  assert.equal(await setup({ service: false, tailscale: true, claude: "off" }, context(system, waiting, env)), 0, waiting.text);
+  assert.equal(readSetupState(pathsFor(env.PORTALS_BRIDGE_HOME).setup)!.address, "http://127.0.0.1:39154");
+
+  system.tailscaleRunning = true;
+  const after = new ScriptedUi();
+  assert.equal(await setup({ service: false, tailscale: true, claude: "off" }, context(system, after, env)), 0, after.text);
+  const state = readSetupState(pathsFor(env.PORTALS_BRIDGE_HOME).setup)!;
+  assert.match(state.address!, /^https:\/\/mac\.example\.ts\.net:/);
+  // The usual ending, with a code to scan, and nothing about needing Tailscale.
+  assert.match(after.text, /Pair your iPhone/);
+  assert.ok(!phoneNeedsTailscale.test(after.text), after.text);
+});
+
+test("a Mac with a tailnet address whose Tailscale is off is not offered this Mac alone: its devices count on it", async () => {
+  const system = new FakeSystem();
+  const env = { PORTALS_BRIDGE_HOME: join(root, "tailnet-then-off") };
+  const first = new ScriptedUi();
+  assert.equal(await setup({ service: false, tailscale: true, port: 39155, claude: "off" }, context(system, first, env)), 0, first.text);
+  const address = readSetupState(pathsFor(env.PORTALS_BRIDGE_HOME).setup)!.address!;
+
+  system.tailscaleRunning = false;
+  const again = new ScriptedUi({ "Check again": false });
+  assert.equal(await setup({ service: false, tailscale: true, claude: "off" }, { ...context(system, again, env), interactive: true }), 0, again.text);
+  assert.equal(readSetupState(pathsFor(env.PORTALS_BRIDGE_HOME).setup)!.address, address);
+  assert.ok(!again.text.includes("Once Tailscale is ready"), again.text);
+  assert.match(again.text, /Done\? Check again/);
+  assert.match(again.text, /Tailscale is not connected/);
+});
+
+test("Linux has no Portals of its own to reach it: no Tailscale still means no address, and no way around it is offered", async () => {
+  const system = new FakeSystem();
+  system.tailscaleRunning = false;
+  const ui = new ScriptedUi();
+  const bridgeHome = join(root, "linux-no-address");
+  assert.equal(await setup({ service: false, tailscale: true, port: 39156, claude: "off" }, linuxContext(system, ui, { PORTALS_BRIDGE_HOME: bridgeHome })), 0, ui.text);
+  assert.equal(readSetupState(pathsFor(bridgeHome).setup)!.address, null);
+  assert.ok(!ui.text.includes("Once Tailscale is ready"), ui.text);
+  assert.ok(!ui.text.includes("--no-tailscale"), ui.text);
+  assert.match(ui.text, /no address the iPhone can reach yet/);
 });
 
 test("signed in to Claude, setup offers the own login first, and takes it without questions", async () => {

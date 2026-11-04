@@ -55,12 +55,12 @@ A native iPhone, iPad and Mac app for Claude Code, Codex, Cursor, Droid, Pi, Her
 You need:
 
 - **A Mac or Linux computer** with [Node 22.18 or newer](https://nodejs.org) and at least one agent signed in.
-- **[Tailscale](https://tailscale.com)** on that computer and your devices, on the same account.
+- **[Tailscale](https://tailscale.com)** on that computer and your devices, on the same account. Only using Portals on the Mac your agents run on? You can skip it, and add it later for your iPhone or iPad.
 - **An iPhone, iPad or Mac** on iOS or macOS 26.1 or newer.
 
 Then:
 
-1. **Get the app.** [Download the DMG](https://github.com/DanielOu1208/portals/releases/latest) for Mac, or [join on TestFlight](https://testflight.apple.com/join/TMV8FWA5) for iPhone and iPad. **Try a demo** on the welcome screen needs no computer.
+1. **Get the app.** [Download the DMG](https://github.com/DanielOu1208/portals/releases/latest) for Mac, or [join on TestFlight](https://testflight.apple.com/join/TMV8FWA5) for iPhone and iPad.
 2. **Set up the host** on the computer your agents run on:
 
    ```sh
@@ -74,7 +74,7 @@ Run setup again to add another computer. See the [host's guide](bridge/README.md
 
 ## How it works
 
-The app doesn't run agents. A small host, `portals-host`, runs beside them on each computer, listening only on `127.0.0.1`. Your devices reach it over your Tailscale network or, when they can't, through the Portals relay, encrypted so only your device and computer can read it.
+The app doesn't run agents. A small host, `portals-host`, runs beside them on each computer, listening only on `127.0.0.1`. Your devices reach it over your Tailscale network or, when they can't, through the Portals relay, encrypted so only your device and computer can read it. Portals on the same Mac can go without Tailscale and reach it directly.
 
 | Folder | What's in it |
 |---|---|
@@ -108,7 +108,7 @@ cd portals
 open Portals.xcodeproj
 ```
 
-Run the `Portals` scheme on a simulator; that needs no signing, and **Try a demo** needs no host.
+Run the `Portals` scheme on a simulator; that needs no signing. To look around with no host, set `PORTALS_DEBUG_HOSTS=[]` and `PORTALS_DEBUG_DEMO=1` in the scheme's environment.
 
 To run on a device, copy `Config/Local.example.xcconfig` to `Config/Local.xcconfig` and set your team. Then replace `com.danielou.portals` on both targets and `PORTALS_APP_GROUP` in `Config/Shared.xcconfig` with IDs of your own.
 
