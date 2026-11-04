@@ -4173,6 +4173,57 @@ test("shutting the bridge down leaves Codex's turns running", async () => {
   daemon.finishTurn(session, turnId);
 });
 
+test("what Codex tells of no thread is in the log once each: its warnings with what they say, and a kind the bridge does not know; what the bridge knows is passed over", async (t) => {
+  // What the bridge logs at its usual level, a line each.
+  const lines: string[] = [];
+  const write = process.stderr.write;
+  process.stderr.write = ((chunk: unknown) => {
+    lines.push(String(chunk));
+    return true;
+  }) as typeof process.stderr.write;
+  setLogLevel("info");
+  const told = new CodexProvider({
+    settings: { mode: "shared", path: "/nonexistent/codex", socket: daemon.socketPath, imagesDir: images },
+    connect: socketConnector(daemon.socketPath),
+    checkVersion: false,
+    configPath: join(daemon.folder, "config.toml"),
+    timeZone: "UTC",
+    backoff: [0.05, 0.1],
+  });
+  t.after(async () => {
+    process.stderr.write = write;
+    setLogLevel("silent");
+    await told.close();
+  });
+  const before = new Set(daemon.connections);
+  told.start();
+  await until(() => daemon.connections.some((connection) => !before.has(connection) && connection.received.some((message) => message.method === "initialized")));
+  // Only to this bridge's connection: another may be open to the stand-in.
+  const connection = daemon.connections.find((connection) => !before.has(connection))!;
+  const hydration = { summary: "Full-history hydration is deprecated for paginated threads.", details: null };
+  // As Codex says them: the same notice at each read of a thread.
+  connection.send({ method: "deprecationNotice", params: hydration });
+  connection.send({ method: "deprecationNotice", params: hydration });
+  connection.send({ method: "configWarning", params: { summary: "Codex is ignoring 1 unrecognized configuration setting.", details: null } });
+  connection.send({ method: "something/new", params: { detail: 1 } });
+  connection.send({ method: "something/new", params: { detail: 2 } });
+  connection.send({ method: "skills/changed", params: {} });
+  connection.send({ method: "account/updated", params: { authMode: "chatgpt" } });
+  connection.send({ method: "warning", params: { threadId: null, message: "Codex could not reach the plugin registry." } });
+  connection.send({ method: "deprecationNotice", params: { summary: "Another call is deprecated.", details: "Use the new one." } });
+  const about = (words: string) => lines.filter((line) => line.includes(words));
+  await until(() => about("Another call is deprecated").length > 0);
+  assert.deepEqual(about("Codex says something the bridge does is deprecated").map((line) => line.split(" ")[1]), ["warn", "warn"]);
+  assert.match(about("Codex says something the bridge does is deprecated")[0], /Full-history hydration is deprecated/);
+  assert.match(about("Codex says something the bridge does is deprecated")[1], /"details":"Use the new one\."/);
+  assert.equal(about("Codex warned of its configuration").length, 1);
+  assert.match(about("Codex warned of its configuration")[0], /ignoring 1 unrecognized configuration setting/);
+  assert.match(about("Codex warned {")[0], /could not reach the plugin registry/);
+  const unknown = about("Codex sent a notification the bridge does not know");
+  assert.equal(unknown.length, 1);
+  assert.match(unknown[0], /"method":"something\/new"/);
+});
+
 test("a Codex that cannot say where its threads ran is in the log once for as long as it lasts, and once more when it can again", async (t) => {
   // What the bridge logs at its usual level, a line each.
   const lines: string[] = [];

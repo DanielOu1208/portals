@@ -8,6 +8,7 @@ import { ClaudeTodos } from "./todos.ts";
 import { gatewayResult, gatewayTool, historyLosesDiff } from "./tools.ts";
 import { claudeTokens } from "../spent.ts";
 import { windowNames } from "./usage.ts";
+import { Unknowns } from "../unknowns.ts";
 
 // What one live Claude query sends, as the bridge's neutral events (providers/types.ts).
 // One of these per query; it sees every SDK message in order and keeps what it needs
@@ -60,6 +61,8 @@ export interface StreamOptions {
   todos?: ClaudeTodos;
   /** The window each model's context fills, as the provider's processes have said, which outlasts a query. */
   windows?: ContextWindows;
+  /** Called once for each kind of message the stream does not know, for the log: a `system` one as `system/<subtype>`. */
+  unknown?: (kind: string) => void;
 }
 
 /**
@@ -93,6 +96,35 @@ export interface Reported {
 }
 
 type Message = Record<string, any>;
+
+/**
+ * The messages Claude Code sends that make no event, the session reading what it needs of
+ * them itself, a `system` one as `system/<subtype>`: those the SDK says it sends (its
+ * `SDKMessage`), and how a message sent goes through its queue (`command_lifecycle`), which
+ * it sends with every one though its types do not say so.
+ */
+const quiet = new Set([
+  "command_lifecycle",
+  "tool_progress",
+  "auth_status",
+  "prompt_suggestion",
+  "conversation_reset",
+  "system/control_request_progress",
+  "system/hook_started",
+  "system/hook_progress",
+  "system/hook_response",
+  "system/plugin_install",
+  "system/thinking_tokens",
+  "system/session_state_changed",
+  "system/worker_shutting_down",
+  "system/commands_changed",
+  "system/notification",
+  "system/files_persisted",
+  "system/memory_recall",
+  "system/elicitation_complete",
+  "system/permission_denied",
+  "system/mirror_error",
+]);
 
 
 export class ClaudeStream {
@@ -129,6 +161,8 @@ export class ClaudeStream {
   private readonly commandCalls = new Map<string, string>();
   /** Output files named in a Bash call's result before its task was told of, by the call. */
   private readonly commandFiles = new Map<string, string>();
+  /** Kinds of message the stream does not know, each told of once (`StreamOptions.unknown`). */
+  private readonly unknowns: Unknowns;
   /** Background work that ended since Claude last called the model: why it begins a turn by itself. */
   private ends: Ended[] = [];
   /** Whose turn Claude is running: for the app's messages, its own, or none. */
@@ -163,6 +197,7 @@ export class ClaudeStream {
     this.todos = options.todos ?? new ClaudeTodos();
     this.windows = options.windows;
     this.commands = new BackgroundCommands(options.background ?? (() => {}), { now: this.now });
+    this.unknowns = new Unknowns(options.unknown ?? (() => {}), quiet);
   }
 
   /** A message was sent with this uuid; the turn lasts until a result answers it. */
@@ -227,6 +262,7 @@ export class ClaudeStream {
       case "result":
         return [...this.retried(), ...this.result(m)];
       default:
+        this.unknowns.note(m.type);
         return [];
     }
   }
@@ -451,7 +487,11 @@ export class ClaudeStream {
         // kept the turn going, a message a hook turned down), at its level. The warnings
         // only: the others are tips, or lines its terminal shows only when asked.
         return m.level === "warning" && typeof m.content === "string" && m.content.trim() !== "" ? [{ type: "notice", level: "warn", text: m.content.trim() }] : [];
+      case "model_refusal_fallback":
+      case "model_refusal_no_fallback":
+        return [{ type: "notice", level: "warn", text: refused(m) }];
       default:
+        if (typeof m.subtype === "string") this.unknowns.note(`system/${m.subtype}`);
         return [];
     }
   }
@@ -687,6 +727,19 @@ function failureText(m: Message): string {
       return errors.length > 0 ? `Claude Code stopped with an error: ${errors.join("; ")}` : "Claude Code stopped with an error.";
     }
   }
+}
+
+/**
+ * What the thread is told when the model declined to answer (a reply that stopped for a
+ * `refusal`): Claude Code had another model answer (`model_refusal_fallback`; `local`
+ * when only a subagent's or a side question's answer, the session's model unchanged), or
+ * none (`model_refusal_no_fallback`). What the declined reply had said stays as it was shown.
+ */
+function refused(m: Message): string {
+  const original = typeof m.original_model === "string" && m.original_model !== "" ? m.original_model : "The model";
+  const fallback = m.subtype === "model_refusal_fallback" && typeof m.fallback_model === "string" && m.fallback_model !== "" ? m.fallback_model : null;
+  if (fallback === null) return `${original} declined to answer.`;
+  return m.scope === "local" ? `${original} declined to answer part of the work, so Claude Code had ${fallback} do that part.` : `${original} declined to answer, so Claude Code switched to ${fallback} and answered with it.`;
 }
 
 /**

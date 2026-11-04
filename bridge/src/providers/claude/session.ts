@@ -502,7 +502,13 @@ export class ClaudeSession implements ProviderSession, Warmable {
     const live: Live = {
       query,
       input,
-      stream: new ClaudeStream({ cwd: this.cwd, background: (event) => this.sink.emit(event), todos: this.todos, windows: this.host.windows }),
+      stream: new ClaudeStream({
+        cwd: this.cwd,
+        background: (event) => this.sink.emit(event),
+        todos: this.todos,
+        windows: this.host.windows,
+        unknown: (kind) => log.info("Claude Code sent a message the bridge does not know", { session: this.id, kind }),
+      }),
       controls: Promise.resolve(),
       permission: Promise.resolve(),
       closing: false,
