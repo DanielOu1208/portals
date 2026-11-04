@@ -781,6 +781,53 @@ test("/review after a Full access turn and a switch to Ask, or to a default that
   }
 });
 
+test("/review after a change of model, or of thinking level, is refused until a message has taken it to Codex", async () => {
+  const session = await createThread({ model: "gpt-6-luna", reasoning_effort: "low" });
+  let start = client.frames.length;
+  await send(session, "First on Luna.");
+  daemon.finishTurn(session, await daemon.activeTurn(session));
+  await completed(session, start);
+
+  const refused = async (): Promise<void> => {
+    start = client.frames.length;
+    const from = daemon.calls.length;
+    assert.equal((await client.call("prompt.submit", { session_id: session, text: "/review" })).status, "streaming");
+    const done = await completed(session, start);
+    assert.equal(done.payload.status, "error");
+    assert.match(done.payload.text, /Send a message first/);
+    assert.equal(daemon.calls.slice(from).some((call) => call.method === "review/start"), false);
+  };
+  const reviews = async (): Promise<void> => {
+    start = client.frames.length;
+    const from = daemon.calls.length;
+    await client.call("prompt.submit", { session_id: session, text: "/review" });
+    await daemon.waitForCall((call) => call.method === "review/start", from);
+    daemon.finishReview(session, await daemon.activeTurn(session), "Nothing to fix.");
+    assert.equal((await completed(session, start)).payload.text, "Nothing to fix.");
+  };
+  const carried = async (text: string): Promise<Frame> => {
+    start = client.frames.length;
+    const turn = await send(session, text);
+    daemon.finishTurn(session, await daemon.activeTurn(session));
+    await completed(session, start);
+    return turn;
+  };
+
+  // Another model.
+  await client.call("config.set", { session_id: session, key: "model", value: "gpt-6.1-sol --provider openai --session" });
+  await refused();
+  assert.equal((await carried("Now on Sol.")).params.model, "gpt-6.1-sol");
+  await reviews();
+
+  // Another level, the model as it was.
+  await client.call("config.set", { session_id: session, key: "reasoning", value: "high" });
+  await refused();
+  const turn = await carried("Now thinking harder.");
+  assert.equal(turn.params.model, undefined);
+  assert.equal(turn.params.effort, "high");
+  await reviews();
+});
+
 /** The review's command, as `finishReview` keeps it in the review's own turn. */
 function reviewCommandItem(turnId: string, session: string): void {
   const command = { type: "commandExecution", id: `exec-${turnId}`, command: "/bin/zsh -lc 'git diff'", cwd, processId: null, status: "inProgress", commandActions: [], aggregatedOutput: null, exitCode: null, durationMs: null };

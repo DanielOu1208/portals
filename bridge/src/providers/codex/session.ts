@@ -808,8 +808,9 @@ export class CodexSession implements ProviderSession {
   /**
    * `/review`. Codex answers with the review's turn, which runs on the thread with the
    * settings Codex has for it (`review/start` takes no others): with the sandbox of the
-   * thread's last turn, and never asking. While the mode chosen since would run with
-   * another sandbox, which only a turn's start gives Codex, the review is refused.
+   * thread's last turn, and never asking, on its model and level. While the mode, model
+   * or level chosen since differ, which only a turn's start gives Codex, the review is
+   * refused.
    */
   private async review(prompt: Prompt): Promise<void> {
     if (this.closed) return;
@@ -821,9 +822,14 @@ export class CodexSession implements ProviderSession {
       const folder = this.pendingReset && this.workMode() === "default" ? await this.host.defaultsFor(this.cwd) : null;
       if (this.beginning !== beginning) return;
       const overrides = this.overrides(folder ?? this.host.defaults(), folder !== null);
-      if (overrides.sandboxPolicy !== undefined && !same(overrides.sandboxPolicy, this.applied?.sandboxPolicy)) {
+      const unsent = overrides.sandboxPolicy !== undefined && !same(overrides.sandboxPolicy, this.applied?.sandboxPolicy)
+        ? "the access of this thread's last turn, not the mode chosen since"
+        : overrides.model !== undefined || overrides.effort !== undefined
+          ? "the model and thinking level of this thread's last turn, not the ones chosen since"
+          : null;
+      if (unsent) {
         this.starting = false;
-        this.endTurn({ type: "turn.end", status: "error", error: "Codex would review with the access of this thread's last turn, not the mode chosen since. Send a message first, then /review again.", retryable: false });
+        this.endTurn({ type: "turn.end", status: "error", error: `Codex would review with ${unsent}. Send a message first, then /review again.`, retryable: false });
         return;
       }
       const result = await this.host.client.call("review/start", { threadId: this.id, target: reviewTarget(prompt.text), delivery: "inline" });
