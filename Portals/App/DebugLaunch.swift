@@ -326,8 +326,8 @@ enum DebugLaunch {
         }
     }
 
-    /// `PORTALS_DEBUG_DEMO`: open the demo (`Demo`) as the app starts, as Try a demo on the
-    /// welcome does, where there is no host (`PORTALS_DEBUG_HOSTS='[]'`).
+    /// `PORTALS_DEBUG_DEMO`: open the demo (`Demo`) as the app starts, the only way in, where
+    /// there is no host (`PORTALS_DEBUG_HOSTS='[]'`).
     static var opensDemo: Bool { value("PORTALS_DEBUG_DEMO") != nil }
 
     /// `PORTALS_DEBUG_NOTE`: an approval card opens with its field for what to do

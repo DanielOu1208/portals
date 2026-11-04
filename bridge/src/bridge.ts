@@ -17,6 +17,7 @@ import { createLocalServer, listenLocal, writeLauncher } from "./http/local.ts";
 import { createHttpServer } from "./http/server.ts";
 import { log } from "./log.ts";
 import { Looks } from "./looks.ts";
+import { isLoopbackAddress } from "./net/members.ts";
 import { Net } from "./net/net.ts";
 import { machineID, SidebarOrder } from "./order.ts";
 import { ClaudeProvider } from "./providers/claude/provider.ts";
@@ -282,10 +283,14 @@ export async function startBridge(options: BridgeOptions = {}): Promise<RunningB
     ...options.counters,
   });
   const host = config.host.includes(":") ? `[${config.host}]` : config.host;
-  // Its address in the net: the phone's (setup's), else config's, else this Mac's own.
-  net.start(netAddress(paths.setup) ?? config.net.url ?? `http://${host}:${port}`);
+  // Its address in the net: the phone's (setup's), else config's, else this Mac's own. Setup
+  // giving 127.0.0.1 means no Tailscale: this Mac's own Portals is all that reaches it.
+  const fromSetup = netAddress(paths.setup);
+  const thisMacOnly = fromSetup !== undefined && isLoopbackAddress(fromSetup) && !config.net.url;
+  net.start((fromSetup && !isLoopbackAddress(fromSetup) ? fromSetup : config.net.url) ?? fromSetup ?? `http://${host}:${port}`, { thisMacOnly });
   // The backup way in: devices that cannot reach this Mac directly come through the relay.
-  const standby = config.relay.enabled ? new Standby({ url: config.relay.url, net, accept: (socket, member) => gateway.accept(socket, member) }) : undefined;
+  // A Mac set up for itself has no such devices, and no reason to hold a connection open for them.
+  const standby = config.relay.enabled && !thisMacOnly ? new Standby({ url: config.relay.url, net, accept: (socket, member) => gateway.accept(socket, member) }) : undefined;
   if (standby) {
     gateway.relayProblem = () => standby.problem;
     standby.start();

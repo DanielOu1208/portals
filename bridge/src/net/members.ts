@@ -153,6 +153,16 @@ export function isAddress(value: unknown): value is string {
   }
 }
 
+/** Whether `value` is an address only the computer using it can reach: itself. */
+export function isLoopbackAddress(value: string): boolean {
+  try {
+    const name = new URL(value).hostname.toLowerCase();
+    return name === "localhost" || name === "[::1]" || /^127\.\d+\.\d+\.\d+$/.test(name);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Whether `one` replaces `other`, an entry with the same id: changed later, or at the
  * same moment by a greater member id. A member's own word under the token it was

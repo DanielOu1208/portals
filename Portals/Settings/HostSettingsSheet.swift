@@ -209,6 +209,9 @@ struct HostSettingsSheet: View {
                 if let renameProblem {
                     Text(renameProblem)
                         .foregroundStyle(.red)
+                } else if Platform.isMac, isOnlyOnThisMac {
+                    Text("This host is on this Mac, and only this Mac can reach it. Your iPhone or iPad needs Tailscale: install it on this Mac and on the device, then run npx portals-host setup again."
+                        + (renamesEverywhere ? " A new name renames it on all your portals and hosts." : ""))
                 } else if isNetHost {
                     Text("Where \(Platform.thisDevice) reaches the host over Tailscale, as your net says. Portals signs in to it as one of your net's portals, with no password."
                         + (renamesEverywhere ? " A new name renames it on all your portals and hosts." : ""))
@@ -284,7 +287,9 @@ struct HostSettingsSheet: View {
             CodeCard(symbol: "laptopcomputer", name: config?.name ?? suggestedName, address: Self.shortAddress(address))
         } footer: {
             Group {
-                if let macRefused {
+                if codeIsForAnotherMac {
+                    Text(Self.needsTailscaleOnMac)
+                } else if let macRefused {
                     Text("\(macRefused) You can switch \(Platform.thisDevice) to that host's net instead.")
                 } else if let netProblem {
                     Text(netProblem)
@@ -312,7 +317,7 @@ struct HostSettingsSheet: View {
                     .accessibilityIdentifier("switch-net")
             } else {
                 CodeButton(title: matched == nil ? "Add this host" : "Update this host", isWorking: isWorking, action: addFromCode)
-                    .disabled(config == nil)
+                    .disabled(config == nil || codeIsForAnotherMac)
                     .accessibilityIdentifier("add-from-code")
             }
         }
@@ -326,7 +331,9 @@ struct HostSettingsSheet: View {
             CodeCard(symbol: "point.3.filled.connected.trianglepath.dotted", name: link.macName, address: Self.shortAddress(link.url.absoluteString))
         } footer: {
             Group {
-                if let netProblem {
+                if Platform.loopbackIsNeverAHost, link.url.isLoopback {
+                    Text(Self.needsTailscaleOnMac)
+                } else if let netProblem {
                     Text(netProblem)
                         .foregroundStyle(.red)
                 } else if case .known = decision {
@@ -349,6 +356,7 @@ struct HostSettingsSheet: View {
                     .accessibilityIdentifier("switch-net")
             default:
                 CodeButton(title: "Join", isWorking: isWorking) { run { try await $0.open(.join(link)) } }
+                    .disabled(Platform.loopbackIsNeverAHost && link.url.isLoopback)
                     .accessibilityIdentifier("join-net")
             }
         }
@@ -480,6 +488,19 @@ struct HostSettingsSheet: View {
     private var isNetHost: Bool {
         host?.isNetHost == true
     }
+
+    /// The address is one only its own computer answers at: a Mac set up without Tailscale.
+    private var isOnlyOnThisMac: Bool {
+        HostConfig.url(fromTyped: address)?.isLoopback == true
+    }
+
+    /// A code with such an address, here on an iPhone or iPad, which would dial itself.
+    private var codeIsForAnotherMac: Bool {
+        Platform.loopbackIsNeverAHost && isOnlyOnThisMac
+    }
+
+    /// Why that code can't be used here, and what to do instead.
+    private static let needsTailscaleOnMac = "This code is for Portals on the Mac it came from, which isn't reachable from here yet. To use that Mac from \(Platform.thisDevice), install Tailscale on both, signed in to the same account, then run npx portals-host setup again on the Mac and scan the code it shows."
 
     /// What the one button of a sheet filled in from a code does (`DebugLaunch.pressesFromCode`).
     private func pressFromCode() {
@@ -618,7 +639,8 @@ struct HostSettingsSheet: View {
         case let .success(count):
             trial.end(id, with: .success(count), cancelled: Task.isCancelled)
         case .failure(is Deadline.Passed):
-            trial.end(id, with: .failure("The host did not answer in time. Check the address, and that Tailscale is on here and on the host."), cancelled: Task.isCancelled)
+            let advice = config.url.isLoopback ? "Check that it is running: npx portals-host status." : "Check the address, and that Tailscale is on here and on the host."
+            trial.end(id, with: .failure("The host did not answer in time. \(advice)"), cancelled: Task.isCancelled)
         case let .failure(error):
             trial.end(id, with: .failure(error.localizedDescription), cancelled: Task.isCancelled)
         }

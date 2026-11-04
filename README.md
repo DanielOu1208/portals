@@ -57,12 +57,12 @@ Portals is in alpha. The Mac app is a download here, the iPhone and iPad apps ar
 You need:
 
 - **A Mac or Linux computer** for your agents, with [Node 22.18 or newer](https://nodejs.org) and at least one agent installed and signed in.
-- **[Tailscale](https://tailscale.com)** on that computer and on your devices, signed in to the same account.
+- **[Tailscale](https://tailscale.com)** on that computer and on your devices, signed in to the same account. You can skip it to use Portals only on the Mac your agents run on, and add it later for your iPhone or iPad.
 - **An iPhone, iPad or Mac** on iOS or macOS 26.1 or newer.
 
 Then:
 
-1. **Get the app.** On a Mac, [download the DMG](https://github.com/DanielOu1208/portals/releases/latest) and drag Portals to Applications. It keeps itself up to date. On an iPhone or iPad, [join on TestFlight](https://testflight.apple.com/join/TMV8FWA5). To look around first, **Try a demo** on the welcome screen needs no computer.
+1. **Get the app.** On a Mac, [download the DMG](https://github.com/DanielOu1208/portals/releases/latest) and drag Portals to Applications. It keeps itself up to date. On an iPhone or iPad, [join on TestFlight](https://testflight.apple.com/join/TMV8FWA5).
 2. **Set up the host.** On the computer your agents run on:
 
    ```sh
@@ -70,13 +70,13 @@ Then:
    ```
 
    Setup finds your agents, makes the computer reachable over Tailscale, and keeps the host running across logins. It asks before changing Tailscale or installing anything.
-3. **Add it to the app.** Scan the QR code setup shows, or paste the link under it on an iPad or Mac.
+3. **Add it to the app.** Scan the QR code setup shows, or paste the link under it on an iPad or Mac. On the Mac the host runs on, setup offers to open Portals with that Mac filled in.
 
 Run setup again on any other computer to add it. The [host's guide](bridge/README.md) covers every option, Linux and updates, and the [tester's guide](https://portals.build/start) covers using the app.
 
 ## How it works
 
-The app doesn't run agents. A small host, `portals-host`, runs beside them on each computer. It listens only on `127.0.0.1`, and your devices reach it through your own Tailscale network. When a device can't reach it directly, the Portals relay can carry the connection, encrypted so that only your device and your computer can read it.
+The app doesn't run agents. A small host, `portals-host`, runs beside them on each computer. It listens only on `127.0.0.1`: Portals on the same Mac reaches it directly, and your other devices reach it through your own Tailscale network. When a device can't reach it directly, the Portals relay can carry the connection, encrypted so that only your device and your computer can read it.
 
 | Folder | What's in it |
 |---|---|
@@ -110,7 +110,7 @@ cd portals
 open Portals.xcodeproj
 ```
 
-Run the `Portals` scheme on a simulator; that needs no signing, and **Try a demo** needs no host.
+Run the `Portals` scheme on a simulator; that needs no signing. To look around with no host, set `PORTALS_DEBUG_HOSTS=[]` and `PORTALS_DEBUG_DEMO=1` in the scheme's environment.
 
 To run on a device, copy `Config/Local.example.xcconfig` to `Config/Local.xcconfig` and set your team. Then replace `com.danielou.portals` on both targets and `PORTALS_APP_GROUP` in `Config/Shared.xcconfig` with IDs of your own.
 

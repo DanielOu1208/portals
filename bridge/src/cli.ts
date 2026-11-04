@@ -20,8 +20,8 @@ const mac = process.platform === "darwin";
 const usage = `Usage: portals-host <command> [options]
 
 Commands:
-  setup       Set up Portals host on this ${mac ? "Mac" : "Linux computer"} and pair your iPhone
-  pair        Show the pairing code again
+  setup       Set up Portals host on this ${mac ? "Mac" : "Linux computer"} and add it to the app
+  pair        Show the pairing code or link again
   status      Show whether Portals host is running, and where
   update      Install this version of Portals host and restart it
   relay reset Give Portals host a new relay id (for a copy of another host's folder)
@@ -30,7 +30,8 @@ Commands:
 Options for setup:
   --yes                  Take the default answer to every question
   --claude <how>         How Claude Code signs in: api-key, login or off
-  --no-tailscale         Leave tailscale serve alone
+  --no-tailscale         Leave tailscale serve alone${mac ? `; with no other address, Portals works
+                         on this Mac only, and your iPhone or iPad needs Tailscale later` : ""}
   --address <url>        The address the iPhone uses, if not set up through Tailscale
   --port <number>        Portals host's port on 127.0.0.1 (a new install only)
   --no-service           Install without a ${mac ? "LaunchAgent" : "systemd user service"}; start Portals host yourself

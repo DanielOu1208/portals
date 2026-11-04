@@ -1,7 +1,7 @@
 import XCTest
 
-/// The demo the welcome offers (`Demo`, for Beta App Review, 2026-10-29), as a reviewer goes
-/// through it: Try a demo on the welcome; the tour's reply streaming; its approval card,
+/// The demo (`Demo`), opened by its switch since the welcome stopped offering it (2026-11-03),
+/// gone through as a reviewer would: the tour's reply streaming; its approval card,
 /// allowed; its question card, answered; the code block and the visual; Codex's review at
 /// work on the line at the chat's foot, opened, and back; the sidebar with the Demo host; a
 /// new thread with a message typed, which the scripted agent answers; a notification choice
@@ -47,16 +47,11 @@ final class DemoUITests: XCTestCase {
         let bundle = try String(contentsOfFile: planPath, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
         let app = XCUIApplication(bundleIdentifier: bundle.isEmpty ? "com.danielou.portals" : bundle)
         app.terminate()
-        // No host: the welcome, as on a new device.
-        app.launchEnvironment = ["PORTALS_DEBUG_HOSTS": "[]"]
+        // No host, and the demo by its switch: the welcome no longer offers it.
+        app.launchEnvironment = ["PORTALS_DEBUG_HOSTS": "[]", "PORTALS_DEBUG_DEMO": "1"]
         app.launch()
-
-        // The welcome, with Try a demo under the way in.
-        let tryDemo = app.buttons["welcome-try-demo"]
-        XCTAssertTrue(tryDemo.waitForExistence(timeout: 30), "no Try a demo on the welcome")
-        if !tryDemo.isHittable { app.swipeUp() }
-        shot("01-welcome")
-        tryDemo.tap()
+        // Each new demo is a new launch, the switch still set; the welcome is what's left when one ends.
+        let backAtWelcome = app.buttons["welcome-scan"]
 
         // The tour: its message sent, the reply streaming.
         let welcome = text(app, containing: "Welcome to the Portals demo")
@@ -173,12 +168,13 @@ final class DemoUITests: XCTestCase {
         endDemo.tap()
 
         // Back at the welcome, as it was.
-        XCTAssertTrue(tryDemo.waitForExistence(timeout: 10), "not back at the welcome")
+        XCTAssertTrue(backAtWelcome.waitForExistence(timeout: 10), "not back at the welcome")
         Thread.sleep(forTimeInterval: 0.6)
         shot("14-welcome-again")
 
         // A second demo: the choice is as it was before the first.
-        tryDemo.tap()
+        app.terminate()
+        app.launch()
         XCTAssertTrue(welcome.waitForExistence(timeout: 20), "the second tour did not begin")
         openSidebar(app)
         app.buttons["Settings"].tap()
@@ -197,13 +193,14 @@ final class DemoUITests: XCTestCase {
         if !endFromSidebar.waitForExistence(timeout: 3) || !endFromSidebar.isHittable { openSidebar(app) }
         XCTAssertTrue(endFromSidebar.waitForExistence(timeout: 5), "no End the demo in the sidebar")
         endFromSidebar.tap()
-        XCTAssertTrue(tryDemo.waitForExistence(timeout: 10), "not back at the welcome from the sidebar")
+        XCTAssertTrue(backAtWelcome.waitForExistence(timeout: 10), "not back at the welcome from the sidebar")
         Thread.sleep(forTimeInterval: 0.6)
         shot("16-welcome-from-sidebar")
 
         // A third, the choice turned off and the app killed in it: the next launch puts the
         // settings back before anything reads them.
-        tryDemo.tap()
+        app.terminate()
+        app.launch()
         XCTAssertTrue(welcome.waitForExistence(timeout: 20), "the third tour did not begin")
         openSidebar(app)
         app.buttons["Settings"].tap()
@@ -215,8 +212,6 @@ final class DemoUITests: XCTestCase {
         XCTAssertNotEqual(needsYou.value as? String, before, "the choice did not change the third time")
         app.terminate()
         app.launch()
-        XCTAssertTrue(tryDemo.waitForExistence(timeout: 30), "no welcome after the relaunch")
-        tryDemo.tap()
         XCTAssertTrue(welcome.waitForExistence(timeout: 20), "the tour after the relaunch did not begin")
         openSidebar(app)
         app.buttons["Settings"].tap()

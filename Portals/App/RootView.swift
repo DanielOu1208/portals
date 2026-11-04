@@ -83,7 +83,7 @@ struct RootView: View {
                     // Its host's settings are not to be opened: it is no host to edit.
                     MainScreen(fleet: demo, onShowHosts: { openSettings() })
                 } else if fleet.hosts.isEmpty {
-                    HostWelcome(onScan: { sheet = .scan }, onAddByHand: { sheet = .add }, onTryDemo: startDemo, waitsForSettings: waitsForSettings)
+                    HostWelcome(onScan: { sheet = .scan }, onAddByHand: { sheet = .add }, waitsForSettings: waitsForSettings)
                         // Under a sheet on an iPhone or iPad (adding a host, the camera) its
                         // avatar holds still; a Mac's sheet leaves the window in view.
                         .outOfSight(sheet != nil && !Platform.isMac)
@@ -252,7 +252,7 @@ extension RootView {
         showsSettings = false
     }
 
-    /// Opens the demo, from the welcome: never once a host is added.
+    /// Opens the demo (`DebugLaunch.opensDemo`): never once a host is added.
     private func startDemo() {
         guard demo == nil, fleet.hosts.isEmpty else { return }
         do {
@@ -310,19 +310,13 @@ extension RootView {
 /// Shown on a device before any Mac is added: the three steps to the first one, with the
 /// bridge's setup on the Mac at the centre. Scrolls only on a screen too short for it.
 /// The last step is scanning the code setup shows; on a Mac, which has no camera to
-/// hold up to it, opening or pasting the link under the code.
+/// hold up to it, opening or pasting the link under the code. Tailscale is the first step
+/// everywhere; on a Mac, going without it is the exception that step mentions (2026-11-03).
 private struct HostWelcome: View {
     var onScan: () -> Void
     var onAddByHand: () -> Void
-    /// Opens the demo (`Demo`), for a look with no computer to add.
-    var onTryDemo: () -> Void
     /// Settings a demo changed are still to be put back: nothing is offered until they are.
     var waitsForSettings = false
-
-    /// Tailscale in the App Store: the iPhone and iPad app, or the Mac's.
-    private static let tailscaleURL = URL(string: Platform.isMac
-        ? "https://apps.apple.com/app/tailscale/id1475387142"
-        : "https://apps.apple.com/app/tailscale/id1470499037")!
 
     var body: some View {
         ViewThatFits(in: .vertical) {
@@ -353,15 +347,12 @@ private struct HostWelcome: View {
                     } else {
                         Text("Install it on \(Platform.thisDevice) and on your Mac or Linux computer, signed in to the same account.")
                     }
-                    Link(destination: Self.tailscaleURL) {
-                        Label("Get Tailscale", systemImage: "arrow.up.right")
-                            .labelStyle(TrailingIconLabelStyle())
+                    GetTailscaleLink(identifier: "welcome-get-tailscale")
+                    if Platform.isMac {
+                        Text("Only using Portals on this Mac? You can go without it: setup lets you skip it, and you can add it later for your iPhone or iPad.")
+                            .font(.app.caption)
+                            .foregroundStyle(.tertiary)
                     }
-                    .font(.app.subheadline.weight(.medium))
-                    .foregroundStyle(.primary)
-                    // Text, also on a Mac, where a link is a push button unless told.
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("welcome-get-tailscale")
                 }
                 WelcomeStep(number: 2, title: Platform.isMac ? "Make this Mac or another machine a host" : "Make your Mac or Linux computer a host") {
                     Text(Platform.isMac ? "In Terminal, run:" : "In a terminal there, run:")
@@ -410,20 +401,6 @@ private struct HostWelcome: View {
                         .accessibilityIdentifier("welcome-add-by-hand")
                 }
             }
-
-            // Quiet, under the way in: for a look first, or with no computer to add (an App
-            // Store reviewer's case).
-            VStack(spacing: Theme.grid / 2) {
-                Text("No computer at hand?")
-                    .foregroundStyle(.tertiary)
-                Button("Try a demo", action: onTryDemo)
-                    .fontWeight(.medium)
-                    .foregroundStyle(.secondary)
-                    .buttonStyle(.plain)
-                    .accessibilityHint("Opens a made-up host with scripted agents. Nothing is connected.")
-                    .accessibilityIdentifier("welcome-try-demo")
-            }
-            .font(.app.footnote)
         }
         .disabled(waitsForSettings)
         .pageMargins()
@@ -433,8 +410,8 @@ private struct HostWelcome: View {
     }
 }
 
-/// One numbered step of the welcome: a title, and what to do under it.
-private struct WelcomeStep<Content: View>: View {
+/// One numbered step of a list of them: a title, and what to do under it.
+struct WelcomeStep<Content: View>: View {
     let number: Int
     let title: LocalizedStringKey
     @ViewBuilder var content: () -> Content
@@ -459,6 +436,23 @@ private struct WelcomeStep<Content: View>: View {
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+}
+
+/// "Get Tailscale ↗": to the App Store, as text, also on a Mac, where a link is a push
+/// button unless told.
+struct GetTailscaleLink: View {
+    let identifier: String
+
+    var body: some View {
+        Link(destination: Platform.tailscaleURL) {
+            Label("Get Tailscale", systemImage: "arrow.up.right")
+                .labelStyle(TrailingIconLabelStyle())
+        }
+        .font(.app.subheadline.weight(.medium))
+        .foregroundStyle(.primary)
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(identifier)
     }
 }
 

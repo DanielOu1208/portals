@@ -128,6 +128,18 @@ public struct HostConfig: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
+extension URL {
+    /// Whether this address reaches only the computer using it: 127.x.x.x, localhost or ::1.
+    /// A host at one was set up for Portals on its own Mac alone (the host's
+    /// `isLoopbackAddress`, docs/net-plan.md); anything else reaches it through Tailscale.
+    public var isLoopback: Bool {
+        guard let name = host()?.lowercased() else { return false }
+        if name == "localhost" || name == "::1" || name == "[::1]" { return true }
+        let parts = name.split(separator: ".", omittingEmptySubsequences: false)
+        return parts.count == 4 && parts[0] == "127" && parts.allSatisfy { UInt8($0) != nil }
+    }
+}
+
 /// Where sign-in passwords are kept: the Keychain in the app, memory in tests.
 public protocol CredentialStore: Sendable {
     func password(for host: HostID) -> String?

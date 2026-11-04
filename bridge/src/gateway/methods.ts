@@ -6,7 +6,7 @@ import { readFrom } from "../fleet/line.ts";
 import { defaultFolderLimit, folderLimitMax, type FolderSearch } from "../folderSearch.ts";
 import { FolderRefused, type Folders } from "../folders.ts";
 import { highestLookIndex, isLookCondition, isLookIndex, isLookOrigin, lookConditions, lookOrigins, type Look, type Looks } from "../looks.ts";
-import type { Net, SignedIn } from "../net/net.ts";
+import { NetError, thisMacOnlyRefusal, type Net, type SignedIn } from "../net/net.ts";
 import { isOrderMoment, longestOrder, orderNames, type Order, type OrderChange, type SidebarOrder } from "../order.ts";
 import { machineWord } from "../platform.ts";
 import { adoptModes, DeskRefused, isAdoptMode, isThreadMode, threadModes, type Provider, type UsageReport } from "../providers/types.ts";
@@ -1295,7 +1295,10 @@ export const methods: Record<string, MethodSpec> = {
   "net.invite": {
     summary: "A join code for another device or Mac, one use, ten minutes, and the portals://join link that carries it (feature net).",
     params: {},
-    handle(_params, { gateway }) {
+    handle(_params, { caller, gateway }) {
+      // Portals on this Mac joins with its password and a code, the way in that still works.
+      // Anyone else would be handed a code with this Mac's own address, which leads them nowhere.
+      if (gateway.net.thisMacOnly && caller.signedIn.kind !== "password") throw new NetError(thisMacOnlyRefusal);
       return gateway.net.invite();
     },
   },

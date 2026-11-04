@@ -6,10 +6,10 @@ your agents. You start threads, answer their questions and approve what they wan
 from the app, while the agents work on your computer with your files, your settings and
 your logins.
 
-The host listens only on your computer (127.0.0.1). The app reaches it through
-[Tailscale](https://tailscale.com), on your own private network. When a device in your
-net can't reach it directly, the Portals relay can carry the connection, sealed end to
-end so that the relay can't read it.
+The host listens only on your computer (127.0.0.1). Portals on the same Mac reaches it
+directly. Any other device reaches it through [Tailscale](https://tailscale.com), on your
+own private network. When a device in your net can't reach it directly, the Portals relay
+can carry the connection, sealed end to end so that the relay can't read it.
 
 It was called `portals-bridge` up to 0.1.0, and its folder and its log still go by that
 name.
@@ -32,8 +32,9 @@ name.
   - Droid: follow the [Factory quickstart](https://docs.factory.ai/cli/getting-started/quickstart),
     then run `droid` in a terminal and use `/login`
   - Hermes: setup offers to install it, or `curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash`
-- **Tailscale on that computer and on your iPhone** (and on any iPad or Mac you use
-  Portals on), signed in to the same account. On Linux, get it from
+- **Tailscale on that computer and on your iPhone** (and on any iPad or other Mac you use
+  Portals on), signed in to the same account. You don't need it to use Portals only on the
+  Mac the host runs on: see [Just this Mac](#just-this-mac). On Linux, get it from
   [tailscale.com/download/linux](https://tailscale.com/download/linux) and connect with
   `sudo tailscale up`. In the [admin console's DNS page](https://login.tailscale.com/admin/dns),
   MagicDNS and HTTPS certificates must be on (they are for most new tailnets).
@@ -70,6 +71,21 @@ the version you ran it with. Run it again:
 - after you install an agent it didn't find: it offers to turn that agent on;
 - after you switch Node versions (with nvm, say): what keeps the host running names the
   `node` it was set up with, and `pi.path` the `pi` installed for that Node.
+
+### Just this Mac
+
+Tailscale is the recommended way to set up: it's what lets your iPhone and iPad reach your
+agents. If you'll only ever use Portals on the Mac the host runs on, you can go without it.
+When setup says Tailscale isn't ready, choose **Use just this Mac without it**, or run
+`npx portals-host setup --no-tailscale`. Portals on that Mac then reaches the host at
+`http://127.0.0.1:<port>`, and setup gives you a link to add it instead of a QR code.
+
+**To use your iPhone or iPad later, you'll need Tailscale.** Nothing else can reach the host
+until then, so Add a portal explains this instead of showing a code, and the host refuses to
+join a net with other Macs. Install Tailscale on the Mac and on the device, signed in to the
+same account, then run `npx portals-host setup` again. Your threads and settings stay, and
+Portals on the Mac moves to the new address by itself. Until then the host keeps no
+connection to the Portals relay, since nothing could come through it.
 
 ### On a Mac
 
@@ -114,7 +130,7 @@ journal. The agents keep their own conversations where they always do.
 |---|---|
 | `--yes` | Takes the default answer to every question |
 | `--claude <how>` | How Claude Code signs in, instead of asking: `login`, `api-key` or `off` |
-| `--no-tailscale` | Leaves `tailscale serve` alone |
+| `--no-tailscale` | Leaves `tailscale serve` alone. On a Mac with no other address, Portals works on [just this Mac](#just-this-mac) |
 | `--address <url>` | The address the app uses, if not set up through Tailscale |
 | `--port <number>` | The host's port on 127.0.0.1 (a new install only) |
 | `--no-service` | Installs without a LaunchAgent or systemd user service: you start the host yourself |

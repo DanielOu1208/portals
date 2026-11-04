@@ -184,7 +184,9 @@ struct NetSettings: View {
             Text("Portals")
                 .formHeader()
         } footer: {
-            Text("The iPhones, iPads and Macs you use Portals on. Each reaches every host above, and any of them can add another.")
+            Text(fleet.net.portalsNeedTailscale
+                ? "The iPhones, iPads and Macs you use Portals on. Only this Mac can reach your host for now: your iPhone or iPad needs Tailscale. Add a portal shows how."
+                : "The iPhones, iPads and Macs you use Portals on. Each reaches every host above, and any of them can add another.")
                 .formFooter()
         }
         .settingsRows()
