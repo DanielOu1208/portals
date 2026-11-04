@@ -2350,7 +2350,7 @@ function replayed(handle: Handle, records: Record<string, any>[], from: number, 
 }
 
 for (const name of ["task-stop-background", "task-stop-foreground", "task-stop-tool-id", "task-stop-idle"]) {
-  test(`Droid 1.0 stop probe (${name}): a worker-kill response is not a Task outcome, and no unsafe Stop is offered`, async (t) => {
+  test(`Droid stop probe (${name}): a worker-kill response is not a Task outcome, and no unsafe Stop is offered`, async (t) => {
     const r = await rig(t);
     const records = recording(name, r.handle.id);
     const firstResult = records.findIndex((record) => record.kind === "event" && record.event.type === "result");
@@ -2364,8 +2364,11 @@ for (const name of ["task-stop-background", "task-stop-foreground", "task-stop-t
       assert.deepEqual(records.find((record) => record.kind === "response" && record.call === "kill_background_process")!.result, { killed: false });
     } else {
       assert.deepEqual(response.result, {});
+      // It stops the parent: its turn as interrupted, or (Droid 1.3, the parent waiting on the
+      // Task's output) the parent's running tool as cancelled, its turn then ending as completed.
       assert.ok(records.some((record) => record.kind === "notification"
-        && record.notification.params?.notification?.message?.content?.some((block: { text?: string }) => block.text === "Request interrupted by user")));
+        && (record.notification.params?.notification?.message?.content?.some((block: { text?: string }) => block.text === "Request interrupted by user")
+          || record.notification.params?.notification?.content === "Error: Tool execution cancelled by user")));
     }
     r.sink.answer = async () => ({ kind: "approval", choice: "once" });
     r.handle.script = replayed(r.handle, records, records.findIndex((record) => record.kind === "send") + 1, firstResult + 1);
