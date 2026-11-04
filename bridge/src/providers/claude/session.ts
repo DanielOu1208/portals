@@ -138,6 +138,8 @@ export interface ClaudeHost {
   modelInfo(model: string): ModelInfo | undefined;
   /** Whether a terminal on the Mac has the session open now (`claude agents`). */
   isOpenInTerminal(id: string): Promise<boolean>;
+  /** The commands a session's Claude Code says need a terminal (`terminal_slash_commands` in its `system/init`), which the app does not offer. */
+  terminalCommands(names: unknown): void;
   /** A query started: the provider can refresh what it knows (models, commands). */
   learn(query: QueryLike, reported: { permissionMode: string | null; effort: string | null }, overridden: boolean): void;
   /** Claude Code said how much of a usage limit is used (`rate_limit_event`), for `/usage`. */
@@ -573,7 +575,10 @@ export class ClaudeSession implements ProviderSession, Warmable {
       else this.emit(event);
     }
     this.observeMode(live);
-    if (message.type === "system" && (message as { subtype?: unknown }).subtype === "init") this.askWindow(live);
+    if (message.type === "system" && (message as { subtype?: unknown }).subtype === "init") {
+      this.host.terminalCommands((message as { terminal_slash_commands?: unknown }).terminal_slash_commands);
+      this.askWindow(live);
+    }
   }
 
   /**

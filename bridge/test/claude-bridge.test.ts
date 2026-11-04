@@ -116,7 +116,16 @@ test("with a Claude Code that cannot say its window, the meter waits for the tur
 test("profiles.list and model.options describe Claude Code from what a running Claude Code says", async () => {
   const profiles = (await client.call("profiles.list")).profiles;
   assert.deepEqual(profiles, [
-    { name: "claude", kind: "claude", display_name: "Claude Code", description: `Claude Code on this ${machineWord()}, with your own settings and sign-in.`, model: "default", provider: "anthropic", is_default: true, adopt_modes: ["continue", "fork", "read"] },
+    { name: "claude", kind: "claude", display_name: "Claude Code", description: `Claude Code on this ${machineWord()}, with your own settings and sign-in.`, model: "default", provider: "anthropic", is_default: true, adopt_modes: ["continue", "fork", "read"], mode_options: provider.modeOptions },
+  ]);
+  // The app's five in its own words, and Claude Code's auto mode as Medium.
+  assert.deepEqual(profiles[0].mode_options.map((mode: Frame) => [mode.id, mode.label]), [
+    ["full", "Full access"],
+    ["medium", "Auto"],
+    ["edits", "Accept edits"],
+    ["ask", "Ask first"],
+    ["plan", "Plan"],
+    ["default", "Your settings"],
   ]);
   assert.deepEqual(await client.call("model.options", { profile: "claude" }), {
     // `opus` runs what `default` does, so only the default is listed.
@@ -137,6 +146,7 @@ test("profiles.list and model.options describe Claude Code from what a running C
     model_default_levels: { default: "xhigh", opus: "xhigh", sonnet: "medium", "claude-opus-4-6": "high" },
     // Its threads take a mode; Dana's settings come to full access (bypassPermissions).
     modes: { default: "full" },
+    mode_options: provider.modeOptions,
   });
   assert.deepEqual(await client.call("config.get", { key: "reasoning", profile: "claude" }), { value: "xhigh" });
   // The startup check ran without a session and asked nothing.
@@ -308,7 +318,7 @@ test("/mode plan: the plan is a plan card; Start carries it out in the mode the 
   let start = client.frames.length;
   assert.equal((await client.call("slash.exec", { session_id: session, command: "mode plan" })).output, "This thread now plans first, and asks before carrying the plan out.");
   // The thread's followers hear the change (feature modes).
-  assert.deepEqual((await client.from(start, (frame) => isEvent(frame, "session.mode", session))).params.payload, { mode: "plan", mode_default: "full" });
+  assert.deepEqual((await client.from(start, (frame) => isEvent(frame, "session.mode", session))).params.payload, { mode: "plan", mode_default: "full", mode_options: provider.modeOptions });
   start = client.frames.length;
   const query = await send(session, "Plan a file.");
   assert.equal(query.options.permissionMode, "plan");
@@ -341,8 +351,8 @@ test("session.set_mode changes a thread's mode as /mode does, and info says it",
   assert.equal(before.mode, "default");
   assert.equal(before.mode_default, "full");
   const start = client.frames.length;
-  assert.deepEqual(await client.call("session.set_mode", { session_id: session, mode: "edits" }), { mode: "edits", mode_default: "full" });
-  assert.deepEqual((await client.from(start, (frame) => isEvent(frame, "session.mode", session))).params.payload, { mode: "edits", mode_default: "full" });
+  assert.deepEqual(await client.call("session.set_mode", { session_id: session, mode: "edits" }), { mode: "edits", mode_default: "full", mode_options: provider.modeOptions });
+  assert.deepEqual((await client.from(start, (frame) => isEvent(frame, "session.mode", session))).params.payload, { mode: "edits", mode_default: "full", mode_options: provider.modeOptions });
   assert.equal((await client.call("session.resume", { session_id: session })).info.mode, "edits");
   await assert.rejects(client.call("session.set_mode", { session_id: session, mode: "yolo" }), (error: RpcFailure) => error.code === -32602);
 });
@@ -351,9 +361,9 @@ test("/mode with no argument, a wrong one, and default (Dana's own settings)", a
   const session = await createThread();
   assert.equal(
     (await client.call("slash.exec", { session_id: session, command: "mode" })).output,
-    "Mode: default. This thread follows your Claude Code settings: it edits files and runs commands without asking.\nChange it with /mode ask, edits, plan, full or default.",
+    "Mode: default. This thread follows your Claude Code settings: it edits files and runs commands without asking.\nChange it with /mode full, medium, edits, ask, plan or default.",
   );
-  await assert.rejects(client.call("slash.exec", { session_id: session, command: "mode careful" }), (error: RpcFailure) => error.code === -32602 && error.message === "Use /mode ask, edits, plan, full or default.");
+  await assert.rejects(client.call("slash.exec", { session_id: session, command: "mode careful" }), (error: RpcFailure) => error.code === -32602 && error.message === "Use /mode full, medium, edits, ask, plan or default.");
   await client.call("slash.exec", { session_id: session, command: "mode full" });
 
   // On a warm thread the mode changes at once; default goes back to what Dana's settings said.
@@ -373,6 +383,70 @@ test("/mode with no argument, a wrong one, and default (Dana's own settings)", a
   );
 });
 
+test("/mode medium is Claude Code's auto mode, at start and on a warm thread; Claude reporting auto is Medium", async () => {
+  const session = await createThread();
+  assert.equal(
+    (await client.call("slash.exec", { session_id: session, command: "mode medium" })).output,
+    "This thread now uses Claude Code's auto mode: it runs safe actions without asking, blocks risky ones, and asks when unsure.",
+  );
+  const query = await send(session, "Hello.");
+  assert.equal(query.options.permissionMode, "auto");
+  let start = client.frames.length;
+  void play(query, "plain");
+  await completed(session, start);
+  await client.call("session.set_mode", { session_id: session, mode: "ask" });
+  await client.call("session.set_mode", { session_id: session, mode: "medium" });
+  assert.deepEqual(
+    query.calls.filter((call) => call[0] === "setPermissionMode"),
+    [
+      ["setPermissionMode", "default"],
+      ["setPermissionMode", "auto"],
+    ],
+  );
+
+  // A thread on Dana's settings that Claude moves into auto mode by itself shows Medium.
+  const other = await createThread();
+  const next = await send(other, "Hello.");
+  start = client.frames.length;
+  next.emit({ type: "system", subtype: "init", model: "claude-haiku-5-5", permissionMode: "bypassPermissions", session_id: other });
+  next.emit({ type: "system", subtype: "status", status: null, permissionMode: "auto", session_id: other });
+  assert.equal((await client.from(start, (frame) => isEvent(frame, "session.mode", other))).params.payload.mode, "medium");
+  next.emit({ type: "result", subtype: "success", is_error: false, user_message_uuids: [next.received[0].uuid], usage: {}, session_id: other });
+  await completed(other, start);
+});
+
+test("commands: what Claude Code says needs a terminal leaves the menu; without its word, the bridge's own list holds", async (t) => {
+  const own = fakeClaude();
+  const other = await startTestBridge({ providers: new Map([["claude", own.provider]]), config: { generalFolder: cwd } });
+  const phone = await TestClient.open(other);
+  t.after(async () => {
+    await phone.close();
+    await other.dispose();
+  });
+  const offered = async () => ((await phone.call("commands.catalog", { profile: "claude" })).pairs as string[][]).map(([key]) => key);
+  // Before any session has said: the list alone keeps /doctor and /send-to-project out.
+  assert.deepEqual(await offered(), ["/status", "/mode", "/usage", "/compact", "/context", "/grill-me"]);
+
+  const session = (await phone.call("session.create", { profile: "claude", cwd })).session_id as string;
+  const start = phone.frames.length;
+  await phone.call("prompt.submit", { session_id: session, text: "Hello." });
+  const query = own.queries.find((entry) => entry.options.persistSession !== false)!;
+  await until(() => query.received.length === 1);
+  query.emit({ type: "system", subtype: "init", model: "claude-haiku-5-5", permissionMode: "bypassPermissions", terminal_slash_commands: ["doctor", "Context"], session_id: session });
+  query.emit({ type: "result", subtype: "success", is_error: false, user_message_uuids: [query.received[0].uuid], usage: {}, session_id: session });
+  await phone.from(start, (frame) => isEvent(frame, "message.complete", session));
+  assert.deepEqual(await offered(), ["/status", "/mode", "/usage", "/compact", "/grill-me"]);
+
+  // A Claude Code that lists none (or predates the list) leaves only the bridge's own out.
+  const again = phone.frames.length;
+  await phone.call("prompt.submit", { session_id: session, text: "And again." });
+  await until(() => query.received.length === 2);
+  query.emit({ type: "system", subtype: "init", model: "claude-haiku-5-5", permissionMode: "bypassPermissions", session_id: session });
+  query.emit({ type: "result", subtype: "success", is_error: false, user_message_uuids: [query.received[1].uuid], usage: {}, session_id: session });
+  await phone.from(again, (frame) => isEvent(frame, "message.complete", session));
+  assert.deepEqual(await offered(), ["/status", "/mode", "/usage", "/compact", "/context", "/grill-me"]);
+});
+
 test("commands: Claude's own and the user's skills are offered and sent as messages; some are withheld", async () => {
   const catalog = await client.call("commands.catalog", { profile: "claude" });
   assert.deepEqual(catalog.categories, [
@@ -380,7 +454,7 @@ test("commands: Claude's own and the user's skills are offered and sent as messa
       name: "Bridge",
       pairs: [
         ["/status", "Show this thread's agent, folder, branch and model"],
-        ["/mode", "Show or change how much this thread asks before acting (usage: /mode [ask|edits|plan|full|default])"],
+        ["/mode", "Show or change how much this thread asks before acting (usage: /mode [full|medium|edits|ask|plan|default])"],
         ["/usage", "Show how much of your plan's usage limits is used, and when each resets"],
       ],
     },

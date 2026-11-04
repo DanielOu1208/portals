@@ -99,14 +99,11 @@ test("other tools' cards say what they would do in one line", () => {
   assert.match(approvalCommand("Edit", { file_path: "/tmp/aeriportal-cwd/a.txt", old_string: "x\ny", new_string: "z" }, cwd), /^Edit \/tmp\/aeriportal-cwd\/a\.txt\n--- a\/a\.txt\n\+\+\+ b\/a\.txt\n-x\n-y\n\+z\n$/);
 });
 
-test("/mode words map onto Claude's permission modes and back", () => {
-  assert.deepEqual(
-    threadModes.filter((mode) => mode !== "medium").map((mode) => permissionModeFor(mode)),
-    ["default", "acceptEdits", "plan", "bypassPermissions", null],
-  );
-  for (const mode of ["ask", "edits", "plan", "full"] as const) assert.equal(threadModeFor(permissionModeFor(mode)), mode);
-  assert.throws(() => permissionModeFor("medium"), /does not offer Medium/);
-  assert.equal(threadModeFor("auto"), null);
+test("/mode words map onto Claude's permission modes and back; medium is Claude's auto mode", () => {
+  assert.deepEqual(threadModes.map((mode) => permissionModeFor(mode)), ["default", "acceptEdits", "auto", "plan", "bypassPermissions", null]);
+  for (const mode of ["ask", "edits", "medium", "plan", "full"] as const) assert.equal(threadModeFor(permissionModeFor(mode)), mode);
+  // Claude's mode that denies what is not allowed already, without asking, has no word.
+  assert.equal(threadModeFor("dontAsk"), null);
 });
 
 test("the app's thinking levels go to the nearest Claude has", () => {
