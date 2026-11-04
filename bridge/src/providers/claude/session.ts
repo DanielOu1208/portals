@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { realpathSync, statSync } from "node:fs";
 import type {
   CanUseTool,
   EffortLevel,
@@ -14,6 +15,7 @@ import { log } from "../../log.ts";
 import { machineWord } from "../../platform.ts";
 import { imageType, skippedImagesText } from "../images.ts";
 import type {
+  FileRewindResult,
   ModeState,
   ModelChangeResult,
   Prompt,
@@ -25,12 +27,15 @@ import type {
   StoredMessage,
   ThreadMode,
 } from "../types.ts";
+import type { ClaudeCheckpoints } from "./checkpoints.ts";
 import { historyFromSession } from "./history.ts";
 import { ClaudeTodos } from "./todos.ts";
 import { InputQueue } from "./input.ts";
-import { claudeEffort, permissionModeFor, queryOptions, thinkingBudget, threadModeFor } from "./options.ts";
+import { checkClaudeLaunch, claudeEffort, claudeVersion, permissionModeFor, queryOptions, thinkingBudget, threadModeFor, verifyClaudeLaunch, type ClaudeLaunchProof } from "./options.ts";
 import { permissionRequest, permissionResult } from "./permissions.ts";
+import type { ClaudeSignIn } from "./signIn.ts";
 import type { CommandAccess } from "../../portals/access.ts";
+import type { VersionCheck } from "../program.ts";
 import type { Warmable, WarmPool } from "../pool.ts";
 import { ClaudeStream, isWritesLost, writesLost, type ContextWindows } from "./stream.ts";
 import type { PastSubagent } from "./tasks.ts";
@@ -45,7 +50,13 @@ import type { PastSubagent } from "./tasks.ts";
 
 /** The parts of the SDK's `Query` the bridge uses, so tests can stand in for it. */
 export interface QueryLike extends AsyncIterable<SDKMessage> {
-  interrupt(): Promise<unknown>;
+  /**
+   * Stops the running turn. With `cancelQueued`, Claude Code also takes back the
+   * messages it has not read yet, which then never run, and lists them under
+   * `cancelled` (`InterruptReceipt`). The SDK takes the option, though its types do not
+   * declare it yet (0.3.292 to 0.3.318); a Claude Code from before it ignores it.
+   */
+  interrupt(options?: { cancelQueued?: boolean }): Promise<unknown>;
   /** Stops one task (a subagent, a workflow); Claude Code then reports it stopped. */
   stopTask(taskId: string): Promise<void>;
   setModel(model?: string): Promise<void>;
@@ -55,6 +66,8 @@ export interface QueryLike extends AsyncIterable<SDKMessage> {
   supportedModels(): Promise<ModelInfo[]>;
   supportedCommands(): Promise<SlashCommand[]>;
   initializationResult(): Promise<{ models?: ModelInfo[]; commands?: SlashCommand[]; current_permission_mode?: string }>;
+  /** Each MCP server and how it is (`McpServerStatus`), for `/mcp`. A Claude Code from before it may refuse it. */
+  mcpServerStatus?(): Promise<{ name: string; status: string; error?: string; tools?: unknown[] }[]>;
   /**
    * The settings in force, `applied.model` being the model the session runs on now
    * (`claude-opus-5-5`). The SDK's query has it but does not declare it, so it may be
@@ -72,6 +85,8 @@ export interface QueryLike extends AsyncIterable<SDKMessage> {
    * Code may refuse it.
    */
   getContextUsage?(options?: { detail?: "summary" | "full" }): Promise<{ model: string; rawMaxTokens: number }>;
+  /** Native file-only restore; never changes the conversation. Absent on older SDKs. */
+  rewindFiles?(userMessageId: string, options: { dryRun: boolean }): Promise<FileRewindResult>;
   close(): void;
 }
 
@@ -80,6 +95,11 @@ export interface PlanUsage {
   subscription_type?: string | null;
   rate_limits_available?: boolean;
   rate_limits?: Record<string, unknown> | null;
+}
+
+/** What `interrupt` answers: the uuids of the messages it took back, from a Claude Code that can. */
+interface InterruptReceipt {
+  cancelled?: unknown;
 }
 
 export type QueryFactory = (prompt: AsyncIterable<SDKUserMessage>, options: Options) => QueryLike;
@@ -109,7 +129,7 @@ export interface SessionFiles {
   /** One session, whatever its folder; undefined when Claude has none by that id. */
   info(id: string): Promise<StoredSession | undefined>;
   /** Copies a session into a new one with the same history, and returns the new one's id. */
-  fork(id: string, cwd: string): Promise<string>;
+  fork(id: string, cwd: string, upToMessageId?: string): Promise<string>;
   /** Gives a session a title of its own, which `title` then reads. */
   rename(id: string, cwd: string, title: string): Promise<void>;
   /**
@@ -122,11 +142,13 @@ export interface SessionFiles {
 /** What a session needs from its provider. */
 export interface ClaudeHost {
   readonly claudePath: string;
+  readonly launchVersion?: (path: string) => Promise<string | null>;
   readonly env: Record<string, string | undefined>;
   /** The `portals` command, when the bridge offers it to its agents. */
   readonly portals?: CommandAccess;
   readonly query: QueryFactory;
   readonly files: SessionFiles;
+  readonly checkpoints?: ClaudeCheckpoints;
   readonly pool: WarmPool;
   /** How long a turn may take to end after Stop before its process is stopped. */
   readonly interruptGraceMs: number;
@@ -137,18 +159,38 @@ export interface ClaudeHost {
   modelInfo(model: string): ModelInfo | undefined;
   /** Whether a terminal on the Mac has the session open now (`claude agents`). */
   isOpenInTerminal(id: string): Promise<boolean>;
+  /** The commands a session's Claude Code says need a terminal (`terminal_slash_commands` in its `system/init`), which the app does not offer. */
+  terminalCommands(names: unknown): void;
   /** A query started: the provider can refresh what it knows (models, commands). */
   learn(query: QueryLike, reported: { permissionMode: string | null; effort: string | null }, overridden: boolean): void;
   /** Claude Code said how much of a usage limit is used (`rate_limit_event`), for `/usage`. */
   limitsHeard(info: Record<string, unknown>): void;
+  /** Which Claude Code runs, which each process says in its `system/init` (`claude_code_version`). */
+  readonly version: VersionCheck;
   /** A session closed: the provider keeps track of it no longer. */
   forget(session: ClaudeSession): void;
   /** The window each model's context fills, as its processes have said. */
   readonly windows: ContextWindows;
+  /** When the sign-in ends, as its processes have said. */
+  readonly signIn: ClaudeSignIn;
+}
+
+/** Versions before this floor have not been verified to honor read-only dryRun. */
+function supportsFileUndo(version: string | null): boolean {
+  if (!version || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) return false;
+  const [major, minor, patch] = version.split(".").map(Number);
+  return major > 2 || (major === 2 && (minor > 1 || (minor === 1 && patch >= 318)));
 }
 
 interface Live {
   query: QueryLike;
+  /** Version from this query's own system/init, never an installed binary probe. */
+  nativeVersion: string | null;
+  initSeen: boolean;
+  launchProof?: ClaudeLaunchProof;
+  initHeard: Promise<void>;
+  heardInit(): void;
+  fileCheckpointing: boolean;
   input: InputQueue;
   stream: ClaudeStream;
   /** Controls on this query finish before its next prompt, never another query's. */
@@ -164,6 +206,24 @@ interface Live {
   lastMode: string | null;
   /** Claude Code was asked the window its model's context fills. */
   windowAsked: boolean;
+  /** The messages steered into a turn, by the uuid each was sent with, until a result answers them. */
+  steers: Map<string, Prompt>;
+}
+
+/** Why Claude Code was not started, said as it is rather than as a failure of its start. */
+class NotStarted extends Error {}
+
+/** Why nothing can run in the thread's folder, as Pi's threads say it. */
+function folderGone(cwd: string): string {
+  return `The thread's folder, ${cwd}, is no longer there.`;
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 /** Why a session from the desk is not continued while a terminal has it. */
@@ -226,6 +286,9 @@ export class ClaudeSession implements ProviderSession, Warmable {
   private starting: Promise<Live> | null = null;
   private closed = false;
   private turnOpen = false;
+  private rewinding = false;
+  /** Allows read-only postflight after consumption, never another real restore. */
+  private lastFileRestore: string | null = null;
   /** How many turns have opened, so what was meant for one turn never acts on the next. */
   private turns = 0;
   private asking = 0;
@@ -233,6 +296,11 @@ export class ClaudeSession implements ProviderSession, Warmable {
   private modelChanged = false;
   private effortChanged = false;
   private stopTimer: NodeJS.Timeout | null = null;
+  /**
+   * Messages steered in that are not written to Claude Code yet, behind a setting change
+   * it has not answered: a Stop takes them back before they are (`withdrawn`).
+   */
+  private readonly unsent = new Set<{ prompt: Prompt; withdrawn: boolean }>();
   private readonly stderr: string[] = [];
 
   constructor(options: SessionOptions, sink: SessionSink, host: ClaudeHost, history: StoredMessage[] = [], past: PastSubagent[] = [], cutOff = false) {
@@ -254,7 +322,7 @@ export class ClaudeSession implements ProviderSession, Warmable {
   }
 
   get busy(): boolean {
-    return this.turnOpen || this.asking > 0 || this.starting !== null || this.hasBackgroundWork();
+    return this.rewinding || this.turnOpen || this.asking > 0 || this.starting !== null || this.hasBackgroundWork();
   }
 
   /** Background commands, subagents or workflows still run in Claude's process: they stop if it does. */
@@ -288,7 +356,90 @@ export class ClaudeSession implements ProviderSession, Warmable {
   }
 
   async reload(): Promise<StoredMessage[]> {
-    return historyFromSession(await this.host.files.messages(this.id, this.cwd), this.cwd);
+    const messages = await this.host.files.messages(this.id, this.cwd);
+    return historyFromSession(messages, this.cwd, this.host.checkpoints?.forSession(this.id, messages));
+  }
+
+  /** Restores native file snapshots for the latest completed turn, without a prompt. */
+  async rewindFiles(checkpointId: string, dryRun: boolean): Promise<FileRewindResult> {
+    if (this.busy || this.closed) throw new Error("Wait for Claude Code and its background work to finish before undoing files.");
+    if (!dryRun && this.lastFileRestore === checkpointId) throw new Error("This file undo checkpoint has already been used.");
+    this.rewinding = true;
+    const turn = this.turns;
+    const postflight = dryRun && this.lastFileRestore === checkpointId;
+    try {
+      await this.checkFileUndo(checkpointId, turn, postflight);
+      const launchProof = this.live ? undefined : await verifyClaudeLaunch(this.host.claudePath, (path) => this.host.launchVersion ? this.host.launchVersion(path) : claudeVersion(path, this.host.env, true));
+      this.checkFileUndoIdle(turn);
+      const live = await this.warm(launchProof);
+      this.checkFileUndoIdle(turn, live);
+      await live.query.initializationResult();
+      this.checkFileUndoIdle(turn, live);
+      if (!live.launchProof) {
+        let timer: NodeJS.Timeout | undefined;
+        try {
+          await Promise.race([live.initHeard, new Promise<void>((resolve) => { timer = setTimeout(resolve, 5000); })]);
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+      this.checkFileUndoIdle(turn, live);
+      this.checkFileUndoVersion(live);
+      for (;;) {
+        const controls = live.controls;
+        const permission = live.permission;
+        await controls;
+        this.checkFileUndoIdle(turn, live);
+        await permission;
+        this.checkFileUndoIdle(turn, live);
+        if (controls === live.controls && permission === live.permission) break;
+      }
+      if (!live.query.rewindFiles) throw new Error("This Claude Code SDK does not support native file undo.");
+      await this.checkFileUndo(checkpointId, turn, postflight);
+      this.checkFileUndoIdle(turn, live);
+      this.checkFileUndoVersion(live);
+      const preview = await live.query.rewindFiles(checkpointId, { dryRun: true });
+      this.checkFileUndoIdle(turn, live);
+      if (dryRun || !preview.canRewind || (preview.skippedLinks ?? 0) > 0) return preview;
+      await this.checkFileUndo(checkpointId, turn, false);
+      this.checkFileUndoIdle(turn, live);
+      this.checkFileUndoVersion(live);
+      this.host.checkpoints!.consumeFiles(this.id, checkpointId);
+      this.lastFileRestore = checkpointId;
+      return await live.query.rewindFiles(checkpointId, { dryRun: false });
+    } finally {
+      this.rewinding = false;
+      this.host.pool.touch(this);
+    }
+  }
+
+  private checkFileUndoVersion(live: Live): void {
+    if (live.launchProof) checkClaudeLaunch(live.launchProof);
+    const version = live.initSeen ? live.nativeVersion : live.launchProof?.version ?? null;
+    if (!supportsFileUndo(version)) throw new Error("Native file undo requires this Claude Code query to report version 2.1.318 or newer, or a verified launch of that exact native executable. Its version is unknown or unsupported.");
+  }
+
+  private checkFileUndoIdle(turn: number, live?: Live): void {
+    if (this.closed || this.turnOpen || this.asking > 0 || this.turns !== turn || this.hasBackgroundWork() || (live && (this.live !== live || live.closing))) throw new Error("Claude Code changed or started work while file undo was being checked. Try again when it is idle.");
+  }
+
+  private async checkFileUndo(checkpointId: string, turn: number, postflight: boolean): Promise<void> {
+    this.checkFileUndoIdle(turn);
+    const session = await this.host.files.info(this.id);
+    this.checkFileUndoIdle(turn);
+    try {
+      if (session?.sessionId !== this.id || !session.cwd || realpathSync(session.cwd) !== realpathSync(this.cwd)) throw new Error("folder changed");
+    } catch {
+      throw new Error("The native Claude Code session's folder no longer matches this Portals thread. File undo was refused.");
+    }
+    const messages = await this.host.files.messages(this.id, this.cwd);
+    this.checkFileUndoIdle(turn);
+    const checkpoints = this.host.checkpoints;
+    const eligible = postflight ? checkpoints?.isLatest(this.id, checkpointId, messages) : checkpoints?.canUndoFiles(this.id, checkpointId, messages);
+    if (!eligible) throw new Error("File undo is available only for the latest completed turn with native file snapshots. This checkpoint is unknown, stale, or unavailable.");
+    const open = await this.host.isOpenInTerminal(this.id);
+    this.checkFileUndoIdle(turn);
+    if (open) throw new Error("Close this Claude Code session in the terminal before undoing its files.");
   }
 
   // MARK: Turns
@@ -309,6 +460,8 @@ export class ClaudeSession implements ProviderSession, Warmable {
 
   private async send(prompt: Prompt, steering = false): Promise<true | "refused"> {
     let live: Live;
+    const waiting = steering ? { prompt, withdrawn: false } : null;
+    if (waiting) this.unsent.add(waiting);
     try {
       live = await this.warm();
       for (;;) {
@@ -318,14 +471,20 @@ export class ClaudeSession implements ProviderSession, Warmable {
         await permission;
         if (controls === live.controls && permission === live.permission) break;
       }
+      // Taken back by a Stop meanwhile, and the devices told: it is not sent, nor sent again.
+      if (waiting?.withdrawn) return true;
       if (this.closed || this.live !== live || live.closing) return "refused";
     } catch (error) {
+      if (waiting?.withdrawn) return true;
       // The original native turn still runs when a steer was never sent. Keep it
       // open; the session will retain this input for a turn of its own.
       if (this.closed || steering) return "refused";
       const message = (error as Error).message;
-      this.endTurn({ type: "turn.end", status: "error", error: message === terminalHasIt ? message : `Claude Code could not start: ${message}` });
+      if (error instanceof NotStarted) this.endTurn({ type: "turn.end", status: "error", error: message, retryable: false });
+      else this.endTurn({ type: "turn.end", status: "error", error: message === terminalHasIt ? message : `Claude Code could not start: ${message}` });
       return "refused";
+    } finally {
+      if (waiting) this.unsent.delete(waiting);
     }
     const uuid = randomUUID();
     const { message, skipped } = userMessage(prompt, uuid);
@@ -333,8 +492,10 @@ export class ClaudeSession implements ProviderSession, Warmable {
       this.emit({ type: "notice", level: "warn", text: skippedImagesText(skipped, "Claude") });
     }
     live.stream.sent(uuid);
+    if (steering) live.steers.set(uuid, prompt);
     try {
       live.input.push(message);
+      if (steering || !prompt.text.trimStart().startsWith("/")) this.host.checkpoints?.sent(this.id, uuid, steering, live.fileCheckpointing);
     } catch (error) {
       if (!steering) this.endTurn({ type: "turn.end", status: "error", error: (error as Error).message });
       return "refused";
@@ -357,12 +518,46 @@ export class ClaudeSession implements ProviderSession, Warmable {
       if (this.turnOpen && this.turns === turn && this.live === live) live.query.close();
     }, this.host.interruptGraceMs);
     this.stopTimer.unref();
+    // A message steered in that Claude has not read yet would run once the turn has
+    // stopped, as a turn of its own: Claude Code takes it back too, and it goes back to
+    // the composer of the device that sent it. Asked only then, so a Stop with none is as
+    // it always was.
+    const steered = new Map([...live.steers].filter(([uuid]) => live.stream.awaits(uuid)));
+    // One still waiting to be written is taken back here, before it is.
+    for (const waiting of this.unsent) {
+      if (waiting.withdrawn) continue;
+      waiting.withdrawn = true;
+      this.sink.emit({ type: "steer.withdrawn", prompt: waiting.prompt });
+    }
     try {
-      await live.query.interrupt();
+      const receipt = await live.query.interrupt(steered.size > 0 ? { cancelQueued: true } : undefined);
+      this.withdraw(live, steered, receipt);
     } catch (error) {
       log.warn("Claude did not take the interrupt", { session: this.id, error: (error as Error).message });
     }
     return true;
+  }
+
+  /**
+   * Of the messages `steered` in before a Stop, those Claude Code took back with it
+   * (`receipt`): the session is told of each. Its receipt may come after the stopped
+   * turn's end.
+   */
+  private withdraw(live: Live, steered: Map<string, Prompt>, receipt: unknown): void {
+    const cancelled = (receipt as InterruptReceipt | undefined)?.cancelled;
+    // Claude Code may list uuids of its own; only the bridge's steered messages are told of.
+    const taken = Array.isArray(cancelled) ? cancelled.filter((uuid): uuid is string => typeof uuid === "string" && steered.has(uuid)) : [];
+    for (const uuid of taken) {
+      this.sink.emit({ type: "steer.withdrawn", prompt: steered.get(uuid)! });
+      live.steers.delete(uuid);
+      this.host.checkpoints?.withdrawn(this.id, uuid);
+    }
+    // A process gone meanwhile has ended the turn already.
+    if (taken.length === 0 || this.live !== live) return;
+    for (const event of live.stream.withdraw(taken)) {
+      if (event.type === "turn.end") this.endTurn(event);
+      else this.emit(event);
+    }
   }
 
   /** Stops one subagent or workflow Claude runs; the turn, if any, goes on. */
@@ -454,23 +649,26 @@ export class ClaudeSession implements ProviderSession, Warmable {
 
   // MARK: The process
 
-  private warm(): Promise<Live> {
+  private warm(launchProof?: ClaudeLaunchProof): Promise<Live> {
     // While it starts, everything waits for it, so messages keep their order.
     if (this.starting) return this.starting;
     if (this.live && !this.live.input.isEnded) return Promise.resolve(this.live);
-    this.starting = this.start().finally(() => {
+    this.starting = this.start(launchProof).finally(() => {
       this.starting = null;
     });
     return this.starting;
   }
 
-  private async start(): Promise<Live> {
+  private async start(launchProof?: ClaudeLaunchProof): Promise<Live> {
     // Resuming a session a terminal has open writes to it behind the terminal's back
     // (docs/bridge-spikes.md, S2).
     if (this.desk && (await this.host.isOpenInTerminal(this.id))) {
       throw new Error(terminalHasIt);
     }
     if (this.closed) throw new Error("Claude session closed before it started.");
+    // Claude Code cannot be started in a folder that is gone, and the SDK then guesses at
+    // why, wrongly (a binary built for another libc), after some seconds.
+    if (!isDirectory(this.cwd)) throw new NotStarted(folderGone(this.cwd));
     const exists = await this.host.files.exists(this.id, this.cwd);
     if (this.closed) throw new Error("Claude session closed before it started.");
     const effort = claudeEffort(this.current.reasoningEffort);
@@ -480,7 +678,7 @@ export class ClaudeSession implements ProviderSession, Warmable {
     this.stderr.length = 0;
     const input = new InputQueue();
     const options = queryOptions({
-      claudePath: this.host.claudePath,
+      claudePath: launchProof?.path ?? this.host.claudePath,
       cwd: this.cwd,
       // The thread says who it is when it uses the `portals` command.
       env: this.host.portals ? { ...this.host.env, PORTALS_THREAD: this.id } : this.host.env,
@@ -497,12 +695,29 @@ export class ClaudeSession implements ProviderSession, Warmable {
         if (this.stderr.length > 20) this.stderr.shift();
       },
     });
+    options.enableFileCheckpointing = true;
     if (counters.on) counters.spawned("claude");
+    if (launchProof) checkClaudeLaunch(launchProof);
     const query = this.host.query(input, options);
+    let heardInit!: () => void;
+    const initHeard = new Promise<void>((resolve) => { heardInit = resolve; });
     const live: Live = {
       query,
+      nativeVersion: null,
+      initSeen: false,
+      launchProof,
+      initHeard,
+      heardInit,
+      fileCheckpointing: options.enableFileCheckpointing === true && typeof query.rewindFiles === "function",
       input,
-      stream: new ClaudeStream({ cwd: this.cwd, background: (event) => this.sink.emit(event), todos: this.todos, windows: this.host.windows }),
+      stream: new ClaudeStream({
+        cwd: this.cwd,
+        background: (event) => this.sink.emit(event),
+        todos: this.todos,
+        windows: this.host.windows,
+        signIn: this.host.signIn.thread(this.id),
+        unknown: (kind) => log.info("Claude Code sent a message the bridge does not know", { session: this.id, kind }),
+      }),
       controls: Promise.resolve(),
       permission: Promise.resolve(),
       closing: false,
@@ -511,6 +726,7 @@ export class ClaudeSession implements ProviderSession, Warmable {
       overridden,
       lastMode: null,
       windowAsked: false,
+      steers: new Map(),
     };
     live.reading = this.read(live);
     this.live = live;
@@ -530,6 +746,7 @@ export class ClaudeSession implements ProviderSession, Warmable {
       // After an interrupt the SDK throws the last error result once the process exits.
       if (!live.closing) failure = (error as Error).message;
     }
+    live.heardInit();
     if (this.live === live) this.live = null;
     // A process cooled while a message was on its way may exit after the next one has
     // started: that one is still warm.
@@ -547,7 +764,11 @@ export class ClaudeSession implements ProviderSession, Warmable {
       this.endTurn({ type: "turn.end", status: "interrupted", usage: live.stream.usage, ...live.stream.spentSoFar() });
       return;
     }
-    const message = `Claude Code stopped unexpectedly${detail ? `: ${detail}` : "."}`;
+    // The SDK blames the program it could not start in words for its own options
+    // (`pathToClaudeCodeExecutable`): the person's setting is `claude.path`.
+    const message = /pathToClaudeCodeExecutable/.test(detail)
+      ? `Claude Code could not be started at ${this.host.claudePath}. ${isDirectory(this.cwd) ? "Check claude.path in config.json." : folderGone(this.cwd)}`
+      : `Claude Code stopped unexpectedly${detail ? `: ${detail}` : "."}`;
     this.emit({ type: "error", message });
     this.endTurn({ type: "turn.end", status: "error", error: message, retryable: true, ...live.stream.spentSoFar() });
   }
@@ -559,7 +780,14 @@ export class ClaudeSession implements ProviderSession, Warmable {
       if (isWritesLost(message)) this.sink.emit(writesLost(message as Record<string, unknown>));
       return;
     }
+    if (message.type === "system" && (message as { subtype?: unknown }).subtype === "init") {
+      const version = (message as { claude_code_version?: unknown }).claude_code_version;
+      live.initSeen = true;
+      live.nativeVersion = typeof version === "string" ? version : null;
+      live.heardInit();
+    }
     if (message.type === "rate_limit_event") this.host.limitsHeard(message.rate_limit_info as Record<string, unknown>);
+    if (message.type === "system" && message.subtype === "init") this.host.version.runningIs(message.claude_code_version);
     // Claude Code also sends `api_retry` after a turn's result, as a heartbeat while a
     // background agent waits out a usage limit: at rest there is no turn to show it in,
     // and a line held from it would stand over the next run (2026-10-26: "Drop
@@ -568,13 +796,24 @@ export class ClaudeSession implements ProviderSession, Warmable {
       log.debug("dropped Claude's API retry between turns", { session: this.id });
       return;
     }
+    this.host.checkpoints?.observed(this.id, message);
     for (const event of live.stream.map(message)) {
-      if (event.type === "turn.end") this.endTurn(event);
-      else if (event.type === "turn.begin") this.beginOwn(event);
+      if (event.type === "turn.end") {
+        try {
+          const checkpoint = this.host.checkpoints?.finish(this.id, event.status === "complete" && supportsFileUndo(live.nativeVersion));
+          if (checkpoint) this.sink.emit({ type: "checkpoint", checkpoint });
+        } catch (error) {
+          log.warn("could not save Claude message checkpoints", { session: this.id, error: (error as Error).message });
+        }
+        this.endTurn(event);
+      } else if (event.type === "turn.begin") this.beginOwn(event);
       else this.emit(event);
     }
     this.observeMode(live);
-    if (message.type === "system" && (message as { subtype?: unknown }).subtype === "init") this.askWindow(live);
+    if (message.type === "system" && (message as { subtype?: unknown }).subtype === "init") {
+      this.host.terminalCommands((message as { terminal_slash_commands?: unknown }).terminal_slash_commands);
+      this.askWindow(live);
+    }
   }
 
   /**
@@ -638,9 +877,12 @@ export class ClaudeSession implements ProviderSession, Warmable {
   private endTurn(event: Extract<ProviderEvent, { type: "turn.end" }>): void {
     if (!this.turnOpen) return;
     this.turnOpen = false;
+    this.host.checkpoints?.abandon(this.id);
     if (this.stopTimer) clearTimeout(this.stopTimer);
     this.stopTimer = null;
     const live = this.live;
+    // Those a result has answered are Claude's now; a Stop can take back none of them.
+    if (live) for (const uuid of live.steers.keys()) if (!live.stream.awaits(uuid)) live.steers.delete(uuid);
     if (live) void this.control(live, () => this.afterTurn(live));
     this.sink.emit(event);
     this.host.pool.touch(this);

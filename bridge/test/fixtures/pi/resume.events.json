@@ -8,13 +8,13 @@
   "type": "turn.end",
   "status": "complete",
   "spent": {
-   "tokens": 1174
+   "tokens": 1156
   }
  },
  {
   "type": "usage",
   "usage": {
-   "used": 1174,
+   "used": 1156,
    "max": 272000
   }
  },
@@ -27,11 +27,11 @@
   "type": "turn.end",
   "status": "complete",
   "usage": {
-   "used": 1174,
+   "used": 1156,
    "max": 272000
   },
   "spent": {
-   "tokens": 1201
+   "tokens": 1183
   }
  }
 ]

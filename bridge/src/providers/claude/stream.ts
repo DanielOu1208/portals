@@ -1,13 +1,16 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { basename, dirname, isAbsolute } from "node:path";
 import { BackgroundCommands } from "../backgroundCommands.ts";
+import { notSignedIn } from "../signIn.ts";
 import type { ContextUsage, ProviderEvent, SubagentStatus } from "../types.ts";
 import { ended, noteFor, type Ended, type TaskInfo } from "./background.ts";
+import type { ThreadSignIn } from "./signIn.ts";
 import { TaskBoard } from "./tasks.ts";
 import { ClaudeTodos } from "./todos.ts";
 import { gatewayResult, gatewayTool, historyLosesDiff } from "./tools.ts";
 import { claudeTokens } from "../spent.ts";
 import { windowNames } from "./usage.ts";
+import { Unknowns } from "../unknowns.ts";
 
 // What one live Claude query sends, as the bridge's neutral events (providers/types.ts).
 // One of these per query; it sees every SDK message in order and keeps what it needs
@@ -45,7 +48,9 @@ import { windowNames } from "./usage.ts";
 //   Either failure, or Claude's own (the API's), on a message with another sent in
 //   behind it is said in passing, as the turn goes on to answer that one. Claude Code
 //   says the API's in a message of its own as well (`<synthetic>`, with an `error`),
-//   which is left out: the result says it once.
+//   which is left out: the result says it once. One for the sign-in
+//   (`authentication_failed`) ends the turn with what to run on the host instead
+//   (signIn.ts), as Claude Code's words name its /login.
 
 export interface StreamOptions {
   /** The thread's folder, for paths in diffs. */
@@ -60,6 +65,10 @@ export interface StreamOptions {
   todos?: ClaudeTodos;
   /** The window each model's context fills, as the provider's processes have said, which outlasts a query. */
   windows?: ContextWindows;
+  /** When the sign-in ends, and what the thread says of it, which outlasts a query. */
+  signIn?: ThreadSignIn;
+  /** Called once for each kind of message the stream does not know, for the log: a `system` one as `system/<subtype>`. */
+  unknown?: (kind: string) => void;
 }
 
 /**
@@ -93,6 +102,35 @@ export interface Reported {
 }
 
 type Message = Record<string, any>;
+
+/**
+ * The messages Claude Code sends that make no event, the session reading what it needs of
+ * them itself, a `system` one as `system/<subtype>`: those the SDK says it sends (its
+ * `SDKMessage`), and how a message sent goes through its queue (`command_lifecycle`), which
+ * it sends with every one though its types do not say so.
+ */
+const quiet = new Set([
+  "command_lifecycle",
+  "tool_progress",
+  "auth_status",
+  "prompt_suggestion",
+  "conversation_reset",
+  "system/control_request_progress",
+  "system/hook_started",
+  "system/hook_progress",
+  "system/hook_response",
+  "system/plugin_install",
+  "system/thinking_tokens",
+  "system/session_state_changed",
+  "system/worker_shutting_down",
+  "system/commands_changed",
+  "system/notification",
+  "system/files_persisted",
+  "system/memory_recall",
+  "system/elicitation_complete",
+  "system/permission_denied",
+  "system/mirror_error",
+]);
 
 
 export class ClaudeStream {
@@ -129,6 +167,8 @@ export class ClaudeStream {
   private readonly commandCalls = new Map<string, string>();
   /** Output files named in a Bash call's result before its task was told of, by the call. */
   private readonly commandFiles = new Map<string, string>();
+  /** Kinds of message the stream does not know, each told of once (`StreamOptions.unknown`). */
+  private readonly unknowns: Unknowns;
   /** Background work that ended since Claude last called the model: why it begins a turn by itself. */
   private ends: Ended[] = [];
   /** Whose turn Claude is running: for the app's messages, its own, or none. */
@@ -137,6 +177,9 @@ export class ClaudeStream {
   private commandFailure: string | null = null;
   /** Why a compaction failed on the way, until the result says whether a command asked for it. */
   private compactFailure: string | null = null;
+  /** Claude Code said the sign-in was refused, until the result that ends that part of the turn. */
+  private signInRefused = false;
+  private readonly signIn: ThreadSignIn | undefined;
   /** Tokens in the context at the last request, and the window they fill. */
   private contextTokens = 0;
   private contextWindow = 0;
@@ -162,7 +205,9 @@ export class ClaudeStream {
     this.board = new TaskBoard(this.now);
     this.todos = options.todos ?? new ClaudeTodos();
     this.windows = options.windows;
+    this.signIn = options.signIn;
     this.commands = new BackgroundCommands(options.background ?? (() => {}), { now: this.now });
+    this.unknowns = new Unknowns(options.unknown ?? (() => {}), quiet);
   }
 
   /** A message was sent with this uuid; the turn lasts until a result answers it. */
@@ -173,6 +218,24 @@ export class ClaudeStream {
   /** The user asked to stop: the next result ends the turn as interrupted. */
   interrupting(): void {
     this.interruptRequested = true;
+  }
+
+  /** Whether a result is still to answer the message sent with this uuid. */
+  awaits(uuid: string): boolean {
+    return this.unanswered.has(uuid);
+  }
+
+  /**
+   * Claude Code took back messages sent with these uuids at a Stop, before it read them
+   * (`interrupt` with `cancelQueued`): no result answers them. Stopped between two of
+   * Claude's turns, the one to come was for them, so the app's turn ends here.
+   */
+  withdraw(uuids: readonly string[]): ProviderEvent[] {
+    for (const uuid of uuids) this.unanswered.delete(uuid);
+    if (!this.interruptRequested || this.running !== null || this.unanswered.size > 0) return [];
+    this.interruptRequested = false;
+    this.openText = "";
+    return [{ type: "turn.end", status: "interrupted", usage: this.usage, ...this.spentSoFar() }];
   }
 
   get isInterrupting(): boolean {
@@ -227,6 +290,7 @@ export class ClaudeStream {
       case "result":
         return [...this.retried(), ...this.result(m)];
       default:
+        this.unknowns.note(m.type);
         return [];
     }
   }
@@ -304,7 +368,10 @@ export class ClaudeStream {
     }
     // Not Claude speaking either: Claude Code saying the API failed on the message (a model
     // it has no access to, say), as the result that follows says too.
-    if (typeof m.error === "string" && m.message?.model === "<synthetic>") return [];
+    if (typeof m.error === "string" && m.message?.model === "<synthetic>") {
+      if (m.error === "authentication_failed") this.signInRefused = true;
+      return [];
+    }
     const events: ProviderEvent[] = [];
     for (const block of Array.isArray(m.message?.content) ? m.message.content : []) {
       if (block.type === "text" && typeof block.text === "string" && block.text !== "" && !this.streamedText.has(id)) {
@@ -451,9 +518,13 @@ export class ClaudeStream {
         // kept the turn going, a message a hook turned down), at its level. The warnings
         // only: the others are tips, or lines its terminal shows only when asked.
         return m.level === "warning" && typeof m.content === "string" && m.content.trim() !== "" ? [{ type: "notice", level: "warn", text: m.content.trim() }] : [];
+      case "model_refusal_fallback":
+      case "model_refusal_no_fallback":
+        return [{ type: "notice", level: "warn", text: refused(m) }];
       case "session_writes_lost":
         return [writesLost(m)];
       default:
+        if (typeof m.subtype === "string") this.unknowns.note(`system/${m.subtype}`);
         return [];
     }
   }
@@ -592,6 +663,12 @@ export class ClaudeStream {
     this.streamedThinking.clear();
 
     const { failure, notices } = this.failures(m);
+    this.signIn?.heard(m.credential_expires_at);
+    const ending = this.signIn?.notice();
+    if (ending) notices.push({ type: "notice", level: "warn", text: ending });
+    // Claude Code's words name its /login; the sentence names what to run on the host.
+    const failed = this.signInRefused ? (this.signIn?.refused() ?? notSignedIn("claude")) : failureText(m);
+    this.signInRefused = false;
     if (this.unanswered.size > 0) {
       // Another of Claude's turns follows for a message sent meanwhile: what it said so
       // far stays above what comes next.
@@ -603,7 +680,7 @@ export class ClaudeStream {
       // A command that did not work, or Claude failing on the message (the API, say), is
       // not the end of the turn: it is said in passing.
       if (failure) events.push({ type: "notice", level: "warn", text: failure.error });
-      else if (m.subtype !== "success" || m.is_error === true) events.push({ type: "notice", level: "error", text: failureText(m) });
+      else if (m.subtype !== "success" || m.is_error === true) events.push({ type: "notice", level: "error", text: failed });
       return [...events, ...notices];
     }
 
@@ -628,7 +705,7 @@ export class ClaudeStream {
     } else if (m.subtype === "success" && m.is_error !== true) {
       events.push({ type: "turn.end", status: "complete", usage, ...spent });
     } else {
-      events.push({ type: "turn.end", status: "error", error: failureText(m), retryable: true, usage, ...spent });
+      events.push({ type: "turn.end", status: "error", error: failed, retryable: true, usage, ...spent });
     }
     return events;
   }
@@ -709,6 +786,19 @@ function failureText(m: Message): string {
       return errors.length > 0 ? `Claude Code stopped with an error: ${errors.join("; ")}` : "Claude Code stopped with an error.";
     }
   }
+}
+
+/**
+ * What the thread is told when the model declined to answer (a reply that stopped for a
+ * `refusal`): Claude Code had another model answer (`model_refusal_fallback`; `local`
+ * when only a subagent's or a side question's answer, the session's model unchanged), or
+ * none (`model_refusal_no_fallback`). What the declined reply had said stays as it was shown.
+ */
+function refused(m: Message): string {
+  const original = typeof m.original_model === "string" && m.original_model !== "" ? m.original_model : "The model";
+  const fallback = m.subtype === "model_refusal_fallback" && typeof m.fallback_model === "string" && m.fallback_model !== "" ? m.fallback_model : null;
+  if (fallback === null) return `${original} declined to answer.`;
+  return m.scope === "local" ? `${original} declined to answer part of the work, so Claude Code had ${fallback} do that part.` : `${original} declined to answer, so Claude Code switched to ${fallback} and answered with it.`;
 }
 
 /**

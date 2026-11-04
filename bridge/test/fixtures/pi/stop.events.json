@@ -1,8 +1,8 @@
 [
  {
   "type": "text",
-  "text": "1",
-  "pieces": 1
+  "text": "1\n2\n3\n",
+  "pieces": 6
  },
  {
   "type": "turn.end",

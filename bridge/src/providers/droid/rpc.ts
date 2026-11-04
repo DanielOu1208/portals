@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { DroidErrorType, FACTORY_PROTOCOL_VERSION, LEGACY_FACTORY_API_VERSION, ProcessTransport, resolveExecCoreDeps, type DroidSession } from "@factory/droid-sdk/node";
+import { DroidErrorType, DroidWorkingState, FACTORY_PROTOCOL_VERSION, LEGACY_FACTORY_API_VERSION, ProcessTransport, resolveExecCoreDeps, SessionNotificationSchema,
+  type DroidSession } from "@factory/droid-sdk/node";
+import { log } from "../../log.ts";
 import { DroidOAuthCallback } from "./oauthCallback.ts";
 import { authRedirectState, safeAuthURL } from "./auth.ts";
 
@@ -10,6 +12,39 @@ type Frame = Record<string, unknown>;
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+/** A turn's usage as the SDK reads it: its five counts, each one Droid left out or sent as no number taken as 0. */
+function usage(value: unknown): Record<string, unknown> {
+  const counts = { ...record(value) };
+  for (const key of ["inputTokens", "outputTokens", "cacheCreationTokens", "cacheReadTokens", "thinkingTokens"]) {
+    if (typeof counts[key] !== "number") counts[key] = 0;
+  }
+  if (counts.factoryCredits !== undefined && typeof counts.factoryCredits !== "number") delete counts.factoryCredits;
+  return counts;
+}
+
+/**
+ * A turn's end the SDK can read. The SDK reads each frame against Droid's protocol as it
+ * was when it shipped, and drops one it cannot read whole; its stream ends only with the
+ * turn's end, so a turn whose end it dropped stayed at work until Stop (a reason it does not
+ * know, a usage count left out). Droid's CLI ships far more often than the SDK. Usage is
+ * filled in, and a reason it does not know is told as an error, the reason kept (`reason`).
+ * Undefined when it cannot be read either way.
+ */
+function readable(frame: Frame, notification: Frame): { frame: Frame; reason?: string } | undefined {
+  const params = record(frame.params)!;
+  const filled: Frame = { ...notification, tokenUsage: usage(notification.tokenUsage) };
+  for (const key of ["cumulativeTokenUsage", "childTokenUsage", "cumulativeChildTokenUsage"]) {
+    if (filled[key] === undefined) continue;
+    if (record(filled[key])) filled[key] = usage(filled[key]); else delete filled[key];
+  }
+  if (filled.durationMs !== undefined && !(typeof filled.durationMs === "number" && filled.durationMs >= 0)) delete filled.durationMs;
+  const told = (notification: Frame): Frame => ({ ...frame, params: { ...params, notification } });
+  if (SessionNotificationSchema.safeParse(told(filled)).success) return { frame: told(filled) };
+  const failed = told({ ...filled, reason: "error" });
+  if (SessionNotificationSchema.safeParse(failed).success) return { frame: failed, reason: typeof notification.reason === "string" ? notification.reason : "" };
+  return undefined;
 }
 
 /** A message the SDK's stream sent, waiting for its end (`DroidTransport.coalesced`). */
@@ -46,6 +81,14 @@ export class DroidTransport extends ProcessTransport {
   /** The SDK stream's messages (`droid.add_user_message` it sent) whose end has not come, the oldest first. */
   private readonly awaited = new Map<string, Awaited>();
   private streaming: { refusal?: string } | undefined;
+  /**
+   * How long Droid may be idle with a message's turn not ended before that turn is ended
+   * here: Droid ends a turn, then goes idle, within a few milliseconds. An end the SDK
+   * dropped all the same (`readable`) must not leave the turn at work until Stop.
+   */
+  idleEndMs = 10_000;
+  /** The session Droid went idle in with a message's turn not ended, and the time it has left (`watchIdle`). */
+  private idle: { session: string; timer: NodeJS.Timeout } | undefined;
   private readonly refused = new Set<string>();
   /** The SDK's `droid.load_session` requests whose answer has not come. */
   private readonly loads = new Set<string>();
@@ -61,6 +104,12 @@ export class DroidTransport extends ProcessTransport {
    * when set, such a request is answered here and never reaches the client.
    */
   pickOptions: ((params: unknown) => Promise<unknown>) | undefined;
+  /**
+   * Told Droid's list of the commands a session runs in the background, whole, each time it
+   * changes (`background_processes_changed`, CLI 1.0): a notification the SDK does not know,
+   * and drops.
+   */
+  backgroundProcesses: ((session: string, processes: unknown) => void) | undefined;
 
   // Since SDK 0.10.0 the transport carries messages decoded, envelopes whose params it
   // leaves as Droid sent them; they are read here as plain objects.
@@ -126,7 +175,7 @@ export class DroidTransport extends ProcessTransport {
     }
   }
 
-  /** Synthetic refused ends settle only an SDK iterator, never a provider's own turn. */
+  /** Synthetic ends (a refusal's, an idle turn's: `watchIdle`) settle only an SDK iterator, never a provider's own turn. */
   refusedEnd(notification: unknown): boolean {
     const inner = record(notification);
     return inner?.type === "agent_turn_completed" && typeof inner.turnId === "string" && this.refused.has(inner.turnId);
@@ -136,6 +185,15 @@ export class DroidTransport extends ProcessTransport {
   private loaded(frame: Frame): void {
     if (this.loads.size === 0 || frame.type !== "response" || typeof frame.id !== "string" || !this.loads.delete(frame.id)) return;
     this.loadedUsage = record(frame.result)?.lastCallTokenUsage;
+  }
+
+  /** Droid's list of a session's background commands (`backgroundProcesses`). */
+  private listed(frame: Frame): void {
+    if (!this.backgroundProcesses || frame.method !== "droid.session_notification") return;
+    const params = record(frame.params);
+    const notification = record(params?.notification);
+    if (notification?.type !== "background_processes_changed" || typeof params?.sessionId !== "string") return;
+    this.backgroundProcesses(params.sessionId, notification.processes);
   }
 
   /** The ends to tell after `frame`: one for each awaited message Droid took into the turn it ends. */
@@ -182,8 +240,70 @@ export class DroidTransport extends ProcessTransport {
     return ends;
   }
 
+  /** A turn's end, made readable to the SDK (`readable`): a stream ended with a reason it does not know says that reason. */
+  private normalized(message: Message): Message {
+    const frame = message as Frame;
+    if (frame.method !== "droid.session_notification") return message;
+    const params = record(frame.params);
+    const notification = record(params?.notification);
+    if (notification?.type !== "agent_turn_completed" || SessionNotificationSchema.safeParse(frame).success) return message;
+    const read = readable(frame, notification);
+    if (!read) {
+      // The SDK drops it: a message's turn is ended once Droid is idle (`watchIdle`).
+      log.warn("Droid sent a turn's end the Droid SDK cannot read", { reason: String(notification.reason) });
+      return message;
+    }
+    log.info("Droid sent a turn's end the Droid SDK could not read as it was; it was made readable", { reason: String(notification.reason) });
+    if (read.reason !== undefined) {
+      // Its stream, and those of the messages Droid took into the turn (`coalesced`).
+      const session = typeof params!.sessionId === "string" ? params!.sessionId : "";
+      for (const [id, awaited] of this.awaited) {
+        if (awaited.stream && (id === notification.turnId || awaited.session === session)) {
+          awaited.stream.refusal ??= `Droid ended the turn with a reason Portals does not know${read.reason ? ` ("${read.reason}")` : ""}.`;
+        }
+      }
+    }
+    return read.frame as Message;
+  }
+
+  /**
+   * Droid went idle in a session with a message's turn not ended (its user row made): should
+   * its end not come in `idleEndMs`, and Droid not go back to work, the turn is ended here as
+   * failed, as a refusal is (`coalesced`), so the SDK's stream ends.
+   */
+  private watchIdle(frame: Frame, handler: (message: Message) => void): void {
+    if (frame.method !== "droid.session_notification") return;
+    const params = record(frame.params);
+    const notification = record(params?.notification);
+    // A process's idle as it starts names no session.
+    const session = params?.sessionId;
+    if (notification?.type !== "droid_working_state_changed" || typeof session !== "string" || !session) return;
+    if (this.idle?.session === session) {
+      clearTimeout(this.idle.timer);
+      this.idle = undefined;
+    }
+    if (notification.newState !== DroidWorkingState.Idle || this.idle) return;
+    if (![...this.awaited.values()].some((awaited) => awaited.stream && awaited.session === session)) return;
+    const timer = setTimeout(() => {
+      this.idle = undefined;
+      for (const [id, waiting] of this.awaited) {
+        if (!waiting.stream || waiting.session !== session) continue;
+        log.warn("Droid went idle without ending a message's turn; it was ended", { session });
+        this.awaited.delete(id);
+        waiting.stream.refusal ??= "Droid stopped working without saying the turn had ended. Send another message to go on.";
+        this.refused.add(id);
+        while (this.refused.size > 64) this.refused.delete(this.refused.values().next().value!);
+        handler({ ...frame, params: { ...params!, notification: { type: "agent_turn_completed", turnId: id, reason: "error",
+          tokenUsage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, thinkingTokens: 0 } } } } as Message);
+      }
+    }, this.idleEndMs);
+    timer.unref();
+    this.idle = { session, timer };
+  }
+
   override onMessage(handler: (message: Message) => void): void {
-    super.onMessage((message) => {
+    super.onMessage((received) => {
+      const message = this.normalized(received);
       const frame = message as Frame;
       this.observeAuth(frame);
       if (this.pickOptions && frame.type === "request" && frame.method === "droid.pick_options" && typeof frame.id === "string") {
@@ -191,9 +311,11 @@ export class DroidTransport extends ProcessTransport {
         return;
       }
       this.loaded(frame);
+      this.listed(frame);
       const ends = this.coalesced(frame);
       this.route(message, handler);
       for (const end of ends) handler(end);
+      this.watchIdle(frame, handler);
     });
   }
 
@@ -253,6 +375,8 @@ export class DroidTransport extends ProcessTransport {
     this.awaited.clear();
     this.refused.clear();
     this.loads.clear();
+    clearTimeout(this.idle?.timer);
+    this.idle = undefined;
     this.rejectPending(new Error("The Droid process closed."));
     await super.close();
   }

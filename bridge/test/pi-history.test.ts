@@ -116,16 +116,16 @@ test("a tool turn: the message, one tool message per call with its result, the r
   // No `structuredContent` in the file: the code comes from Pi's last line, which is taken off.
   assert.deepEqual(JSON.parse(ls.content!), { output: "ls: no-such-file.txt: No such file or directory\n", exit_code: 1 });
   assert.deepEqual(JSON.parse(write.content!), { diff: "--- a/done.txt\n+++ b/done.txt\n+done\n" });
-  assert.equal(textOf(all.at(-1)), "Completed the five steps in order; `ls no-such-file.txt` failed as expected.");
+  assert.equal(textOf(all.at(-1)), "Updated `hello.txt`, ran both commands, and wrote `done` to `done.txt`.");
   // Pi's times are milliseconds; the app reads seconds.
-  assert.equal(all[0].timestamp, 1_791_801_805.288);
-  assert.equal(read.timestamp, 1_791_801_807.402);
+  assert.equal(all[0].timestamp, 1_793_786_658.283);
+  assert.equal(read.timestamp, 1_793_786_661.299);
   for (const message of all) assert.ok(message.timestamp > 1_700_000_000 && message.timestamp < 2_000_000_000);
 });
 
 test("a reply stopped mid-stream is marked interrupted, with what it had said", () => {
   const all = messages("stop");
-  assert.deepEqual(all[1], { role: "assistant", text: "1", timestamp: 1_791_801_832.175, display_metadata: { interrupted: true } });
+  assert.deepEqual(all[1], { role: "assistant", text: "1\n2\n3\n", timestamp: 1_793_786_673.759, display_metadata: { interrupted: true } });
 });
 
 test("a turn stopped while a command ran reads as interrupted, not as a failed turn", () => {
@@ -137,7 +137,7 @@ test("a turn stopped while a command ran reads as interrupted, not as a failed t
   assert.deepEqual(shape(all), ["user", "tool:terminal", "assistant"]);
   assert.deepEqual(JSON.parse(tools(all)[0].content!), { status: "error", error: "Stopped before it finished." });
   // What the stopped turn spent goes with its last message (feature turn_usage).
-  assert.deepEqual(timeless([all[2]]), [{ role: "assistant", text: "", display_metadata: { interrupted: true }, turn_usage: { tokens: 1201 } }]);
+  assert.deepEqual(timeless([all[2]]), [{ role: "assistant", text: "", display_metadata: { interrupted: true }, turn_usage: { tokens: 1183 } }]);
   assert.equal(all.some((message) => message.role === "assistant" && message.display_kind === "failed_turn"), false);
 });
 
@@ -151,7 +151,7 @@ test("a turn the provider refused is a failed turn with its sentence, without th
 
 test("thinking is the reply's reasoning; an image is an @image line; a skill reads as it was typed", () => {
   const reply = messages("thinking")[1];
-  assert.equal(reply.role === "assistant" && reply.reasoning, "**Checking the count two ways**");
+  assert.equal(reply.role === "assistant" && reply.reasoning, "**Cross-checking the count**");
   assert.match(textOf(reply), /^115 — /);
 
   assert.equal(textOf(messages("image")[0]), "What colour is this square? Reply with one word.\n@image:image-1.png");
@@ -166,17 +166,17 @@ test("thinking is the reply's reasoning; an image is an @image line; a skill rea
 test("a compacted file still shows everything that was said, with a mark where Pi summarised", () => {
   const all = messages("compact");
   // The first two turns were summarised; they are still on the path.
-  assert.match(textOf(all[1]), /^The sea keeps secrets/);
-  assert.deepEqual(timeless([all[4]]), [{ role: "compaction", trigger: "auto", tokens_before: 1245, turn_usage: { tokens: 1245 } }]);
+  assert.match(textOf(all[1]), /^The sea hums softly/);
+  assert.deepEqual(timeless([all[4]]), [{ role: "compaction", trigger: "auto", tokens_before: 1230, turn_usage: { tokens: 1230 } }]);
   assert.equal(textOf(all.at(-1)), "bye");
   // One Pi began by itself reads the same way.
-  assert.deepEqual(timeless(messages("compact-auto").slice(-1)), [{ role: "compaction", trigger: "auto", tokens_before: 1213, turn_usage: { tokens: 1213 } }]);
+  assert.deepEqual(timeless(messages("compact-auto").slice(-1)), [{ role: "compaction", trigger: "auto", tokens_before: 1199, turn_usage: { tokens: 1199 } }]);
 });
 
 test("the calls a codemode script made are part of its one row; system messages are not shown", () => {
   const all = messages("own");
   assert.deepEqual(shape(all), ["user", "tool:execute_code", "assistant"]);
-  assert.deepEqual(JSON.parse(tools(all)[0].content!), { output: 'Script completed\nWall time 0.1 seconds\nOutput:\n[["one.txt",11],["two.txt",12]]' });
+  assert.deepEqual(JSON.parse(tools(all)[0].content!), { output: 'Script completed\nWall time 0.1 seconds\nOutput:\n[11,12]' });
   // Every session file starts with a system message, before the user's.
   for (const name of withSession) assert.match(sessionText(name), /"message":\{"role":"system"/, name);
   assert.equal(messages("plain").length, 2);
@@ -186,9 +186,9 @@ test("a thread resumed in a second process reads as one conversation; one killed
   assert.deepEqual(timeless(messages("resume")), [
     { role: "user", text: "Remember the word kiwi. Reply with only: ok" },
     // Each turn's tokens, from Pi's own file: the second turn sends the first again.
-    { role: "assistant", text: "ok", turn_usage: { tokens: 1174 } },
+    { role: "assistant", text: "ok", turn_usage: { tokens: 1156 } },
     { role: "user", text: "Which word did I ask you to remember? Reply with only that word." },
-    { role: "assistant", text: "kiwi", turn_usage: { tokens: 1201 } },
+    { role: "assistant", text: "kiwi", turn_usage: { tokens: 1183 } },
   ]);
   // The resumed process says it has the earlier messages, as the file does.
   const resumed = fixture("resume").filter((entry) => entry.kind === "receive" && entry.record.command === "get_state")[1];
@@ -441,7 +441,7 @@ test("Pi's folder for a working folder's sessions, as Pi names it", () => {
   assert.equal(sessionFolderName("C:\\work\\app"), "--C--work-app--");
   // The recorder kept the resume scenario in Pi's own sessions folder, under that name.
   const [stats] = fixture("resume").filter((entry) => entry.kind === "receive" && entry.record.command === "get_session_stats");
-  assert.equal(stats.record.data.sessionFile, `/home/dev/.pi/agent/sessions/${sessionFolderName(fixtureCwd)}/2026-10-12T10-44-15-584Z_00000000-0000-4000-8000-000000000007.jsonl`);
+  assert.equal(stats.record.data.sessionFile, `/home/dev/.pi/agent/sessions/${sessionFolderName(fixtureCwd)}/2026-11-04T10-04-50-282Z_00000000-0000-4000-8000-000000000007.jsonl`);
 
   assert.equal(agentFolder({}), join(homedir(), ".pi", "agent"));
   assert.equal(agentFolder({ PI_CODING_AGENT_DIR: "/elsewhere/agent" }), "/elsewhere/agent");

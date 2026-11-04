@@ -103,6 +103,11 @@ enum HermesEventMapper {
             }
             return [.turnStarted]
 
+        case "message.checkpoint":
+            guard (features.contains(BridgeWire.Feature.messageFork) || features.contains(BridgeWire.Feature.turnFileUndo)),
+                  let checkpoint = BridgeWire.messageCheckpoint(payload["checkpoint"], features: features) else { return [] }
+            return [.messageCheckpoint(checkpoint)]
+
         case "message.steered":
             // A bridge's: a message handed to the running turn, this app's own or another's.
             guard features.contains(BridgeWire.Feature.turnMessages), let text = payload["text"]?.stringValue else { return [] }
@@ -141,6 +146,14 @@ enum HermesEventMapper {
 
         case "status.update":
             let text = plain(payload["text"]?.stringValue ?? "")
+            // A bridge's: a message steered in that a Stop took back before the agent read
+            // it. This app's own goes back to its composer, in place of the notice.
+            if features.contains(BridgeWire.Feature.steerWithdrawn), let withdrawn = payload["withdrawn"], let stored = withdrawn["text"]?.stringValue {
+                let id = withdrawn["message_id"]?.stringValue
+                if let id, isOwn(id), let own = UUID(uuidString: id) { return [.ownMessageWithdrawn(own, text: stored)] }
+                let gone = ThreadEvent.messageWithdrawn(stored, messageID: id.flatMap(UUID.init(uuidString:)))
+                return text.isEmpty ? [gone] : [gone, .notice(Notice(.warning, text))]
+            }
             switch payload["kind"]?.stringValue {
             case "info": return text.isEmpty ? [] : [.notice(Notice(.info, text))]
             case "warn": return text.isEmpty ? [] : [.notice(Notice(.warning, text))]

@@ -816,6 +816,12 @@ final class HostModel: Identifiable {
         let ref = try await provider.adopt(session, as: mode)
         guard !isRetired else { return }
         deskSessions[session.agent]?.removeAll { $0.id == session.id }
+        showAdopted(ref)
+    }
+
+    /// Registers a newly adopted or forked thread and opens its own composer.
+    @discardableResult
+    private func showAdopted(_ ref: ThreadRef) -> ThreadController? {
         // A thread taken up before (only read, say) is followed anew.
         controllers[ref.id]?.close()
         controllers[ref.id] = nil
@@ -839,12 +845,13 @@ final class HostModel: Identifiable {
         }
         threads.sort { $0.updatedAt > $1.updatedAt }
         saveThreads()
-        guard let agent = agent(ref.agent) else { return }
+        guard let agent = agent(ref.agent) else { return nil }
         let controller = makeController(agent: agent, record: record)
         controllers[ref.id] = controller
         fleet?.show(controller)
         fleet?.threadUsed(controller)
         wasShown(ref.id)
+        return controller
     }
 
     private(set) var forkingThreads: Set<ThreadRef.ID> = []
@@ -863,6 +870,68 @@ final class HostModel: Identifiable {
         forkingThreads.insert(thread.id)
         defer { forkingThreads.remove(thread.id) }
         try await adopt(DeskSession(thread: thread), as: .fork)
+    }
+
+    func canForkMessage(in controller: ThreadController) -> Bool {
+        guard let thread = controller.thread else { return false }
+        return controller.offersMessageFork && controller.canForkMessage && connection == .connected
+            && activity(of: thread.id) == .idle && !forkingThreads.contains(thread.id)
+    }
+
+    /// Keeps the source and its draft, opening a separate thread at the selected turn.
+    func forkMessage(in controller: ThreadController, checkpoint: MessageCheckpoint, before: Bool, draft: ComposerDraft?) async throws {
+        guard let thread = controller.thread, let provider = backend as? any MessageForking,
+              controller.offersMessageFork else { throw MessageForkError.unavailable }
+        guard canForkMessage(in: controller) else { throw MessageForkError.busy }
+        if draft != nil { try controller.beginMessageEditSend(at: checkpoint) }
+        var sent = false
+        defer { if draft != nil { controller.finishMessageEditSend(sent: sent) } }
+        forkingThreads.insert(thread.id)
+        defer { forkingThreads.remove(thread.id) }
+        let ref = try await provider.fork(thread, at: checkpoint, before: before)
+        guard !isRetired, !controller.isClosed, controllers[thread.id] === controller,
+              let opened = showAdopted(ref) else { throw CancellationError() }
+        if let draft {
+            let mentions = FileMentionDraft.mentions(picked: draft.mentions, in: draft.text, hostTakesThem: true)
+            opened.send(draft.text, images: draft.images, files: draft.files, mentions: mentions)
+            sent = true
+        }
+    }
+
+    private var undoingFiles: Set<ThreadRef.ID> = []
+
+    func canUndoFiles(in controller: ThreadController) -> Bool {
+        guard let source = controller.thread, controller.fileUndoTurn != nil,
+              controller.canForkMessage, !controller.hasFileWork, connection == .connected,
+              activity(of: source.id) == .idle, !forkingThreads.contains(source.id), !undoingFiles.contains(source.id),
+              let folder = controller.fileUndoFolder, !folder.isEmpty else { return false }
+        let normalized = (folder as NSString).standardizingPath
+        let sameFolder: (String?) -> Bool = { path in
+            path.map { ($0 as NSString).standardizingPath == normalized } ?? false
+        }
+        if threads.contains(where: { $0.id != source.id && sameFolder($0.ref.workingDirectory)
+            && (activity(of: $0.id) != .idle || undoingFiles.contains($0.id) || forkingThreads.contains($0.id)) }) { return false }
+        let known = Array(controllers.values) + Array(draftControllers.values) + [threadOnScreen].compactMap { $0 }
+        return !known.contains { $0 !== controller && sameFolder($0.fileUndoFolder) && $0.hasFileWork }
+    }
+
+    func previewFileUndo(in controller: ThreadController, checkpoint: MessageCheckpoint) async throws -> TurnFileUndoPreview {
+        guard canUndoFiles(in: controller), controller.fileUndoTurn?.fileUndoCheckpoint == checkpoint,
+              let thread = controller.thread, let provider = backend as? any TurnFileUndoing else { throw TurnFileUndoError.busy }
+        let preview = try await provider.previewFileUndo(thread, checkpoint: checkpoint)
+        guard canUndoFiles(in: controller), controller.fileUndoTurn?.fileUndoCheckpoint == checkpoint else { throw TurnFileUndoError.stalePreview }
+        return preview
+    }
+
+    func undoFiles(in controller: ThreadController, checkpoint: MessageCheckpoint, preview: TurnFileUndoPreview) async throws -> TurnFileUndoResult {
+        guard canUndoFiles(in: controller), controller.fileUndoTurn?.fileUndoCheckpoint == checkpoint,
+              let thread = controller.thread, let provider = backend as? any TurnFileUndoing else { throw TurnFileUndoError.busy }
+        undoingFiles.insert(thread.id)
+        defer { undoingFiles.remove(thread.id) }
+        let result = try await provider.undoFiles(thread, preview: preview)
+        guard !isRetired else { throw TurnFileUndoError.stalePreview }
+        controller.fileUndoFinished(result)
+        return result
     }
 
     func forkViewOnly(_ controller: ThreadController) async throws {
@@ -1483,7 +1552,7 @@ final class HostModel: Identifiable {
     /// with the host, as after a launch.
     private func letGoOfThreadsAtRest() {
         let onScreen = fleet?.chat?.thread?.id
-        let atRest = Set(controllers.filter { $0.value.isAtRest }.keys)
+        let atRest = Set(controllers.filter { $0.value.isAtRest && $0.value.editingMessage == nil }.keys)
         let tabs = Set(fleet?.tabs.keys.filter { $0.host == host.id }.map(\.id) ?? [])
         // As many at rest as the chats kept built where the tabs are, should those be more
         // (`Fleet.chatsKeptBehind`): a chat kept built is one held open.
@@ -1496,7 +1565,7 @@ final class HostModel: Identifiable {
             // (a message that failed on its way); and while images, files or files picked
             // from the `@` menu wait in its composer, which only it holds.
             guard let controller = controllers[id], controller !== fleet?.chat,
-                  controller.composer.images.isEmpty, controller.composer.files.isEmpty, controller.composer.mentions.isEmpty,
+                  !controller.keepsDraftInMemory,
                   persist(controller) else { continue }
             controller.close()
             controllers[id] = nil

@@ -674,6 +674,13 @@ public struct ThreadState: Hashable, Sendable {
                 turnOrigin += was - (transcript.turns.count - 1)
             }
 
+        case let .messageCheckpoint(checkpoint):
+            guard let turn = openTurnIndex,
+                  let item = transcript.turns[turn].items.firstIndex(where: \.isUserMessage),
+                  case var .user(message) = transcript.turns[turn].items[item].content else { return }
+            message.checkpoint = checkpoint
+            transcript.turns[turn].items[item].content = .user(message)
+
         case let .messageSteered(text, from, cardAnswer, messageID):
             // Handed to the running turn from elsewhere: it shows there.
             append(TurnItem(id: messageID ?? UUID(), .user(Self.message(text, delivery: .steered, at: now, from: from, cardAnswer: cardAnswer))), to: openOrStartTurn(now), at: now)
@@ -697,6 +704,14 @@ public struct ThreadState: Hashable, Sendable {
             var message = waiting.message
             message.delivery = .steered
             append(TurnItem(id: waiting.id, .user(message)), to: open, at: now)
+
+        case let .messageWithdrawn(text, messageID):
+            // Taken back by a Stop before the agent read it: it leaves the turn it shows in.
+            let words = SentText.parse(text).text
+            withdraw(messageID) { $0.text == words }
+
+        case let .ownMessageWithdrawn(id, _):
+            withdraw(id) { _ in false }
 
         case let .queuedTurnStarted(queueID):
             // A turn opened here, kept as the run (no message of this device's waits under
@@ -1164,6 +1179,7 @@ public struct ThreadState: Hashable, Sendable {
         guard case let .user(shown) = transcript.turns[turnIndex].items[itemIndex].content else { return false }
         var message = waiting.message
         message.delivery = shown.delivery
+        message.checkpoint = shown.checkpoint
         transcript.turns[turnIndex].items[itemIndex] = TurnItem(id: waiting.id, .user(message))
         return true
     }
@@ -1428,6 +1444,28 @@ public struct ThreadState: Hashable, Sendable {
         }
         if let last = parts.last, words(last) == words(text) { return true }
         return parts.count > 1 && parts.joined().filter { !$0.isWhitespace } == text.filter { !$0.isWhitespace }
+    }
+
+    /// Takes a message steered into a turn out of it, the latest first: the one with `id`
+    /// where there is one, else the last steered in that `matches`. A thread opened since
+    /// shows such a message as opening a turn of its own (`HermesHistoryMapper`), which goes
+    /// with it when nothing else is left in it.
+    private mutating func withdraw(_ id: UUID?, matching matches: (UserMessage) -> Bool) {
+        let byID = id.map { id in transcript.turns.contains { $0.items.contains { $0.id == id } } } ?? false
+        for turn in transcript.turns.indices.reversed() {
+            let items = transcript.turns[turn].items
+            guard let index = items.indices.last(where: { at in
+                guard case let .user(message) = items[at].content else { return false }
+                return byID ? items[at].id == id : message.delivery == .steered && matches(message)
+            }) else { continue }
+            transcript.turns[turn].items.remove(at: index)
+            if transcript.turns[turn].items.isEmpty, turn != transcript.turns.indices.last {
+                transcript.turns.remove(at: turn)
+                // As for a failed turn taken back: the live end keeps its block.
+                turnOrigin += 1
+            }
+            return
+        }
     }
 
     /// Adds an item to a turn. Whatever comes after a stretch of reasoning ends it.

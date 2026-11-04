@@ -37,7 +37,7 @@ import {
   type ThreadMode,
 } from "../types.ts";
 import { cursorID, levelAt, levelSetting, levelsOf, modelAt, type CursorModel } from "./models.ts";
-import { cursorMode, cursorName, cursorQuirks, goAheadText, levelLeftToCursorText, noSuchModeText, notSignedInText, portalsNote, runsEverything, signInReply, turnFailure } from "./options.ts";
+import { cursorMode, cursorName, cursorQuirks, goAheadText, levelLeftToCursorText, noSuchModeText, notSignedInText, portalsNote, runsEverything, saysSignedOut, signInReply, turnFailure } from "./options.ts";
 import { askQuestion, createPlan, mergedTodos, permissionCard, permissionOutcome, planCard, planOutcome, questionCard, questionOutcome, todoRow, unplacedAnswer, updateTodos, type Todo } from "./requests.ts";
 import { CursorSubagents } from "./subagents.ts";
 import { cursorTools } from "./tools.ts";
@@ -179,6 +179,20 @@ export function errorText(error: unknown): string {
   return detail && detail !== error.message ? `${error.message} (${detail})` : error.message;
 }
 
+/** Why a turn Cursor stopped short of its end did not finish, as a sentence, from its reason for stopping. */
+function stoppedShort(reason: string): string {
+  switch (reason) {
+    case "refusal":
+      return `${cursorName}'s model declined to go on.`;
+    case "max_tokens":
+      return `${cursorName}'s model stopped at the most it may write in one reply.`;
+    case "max_turn_requests":
+      return `${cursorName} stopped at the most model requests one turn may make.`;
+    default:
+      return `${cursorName} stopped the turn for a reason Portals does not know ("${reason}").`;
+  }
+}
+
 /** Asks Cursor for a new session in `cwd`, and returns it with its id checked. */
 export async function newSession(process: CursorProcess, cwd: string): Promise<SessionState & { sessionId: string }> {
   let state: SessionState | null;
@@ -259,7 +273,12 @@ export class CursorSession implements ProviderSession {
     this.sink = sink;
     this.host = host;
     this.own = cursorTools(this.answers);
-    this.stream = new AcpStream({ cwd: options.cwd, quirks: { ...cursorQuirks, own: this.own }, progress: (event) => this.sink.emit(event) });
+    this.stream = new AcpStream({
+      cwd: options.cwd,
+      quirks: { ...cursorQuirks, own: this.own },
+      progress: (event) => this.sink.emit(event),
+      unknown: (kind) => log.info(`${cursorName} sent an update the bridge does not know`, { session: this.id, kind }),
+    });
     this.subagents = new CursorSubagents(this.own);
     this.transcript = new Transcript(start.stored);
     this.sessionID = start.session;
@@ -530,7 +549,9 @@ export class CursorSession implements ProviderSession {
   /**
    * How the turn ended, from why Cursor says it stopped. It only ever says `end_turn`
    * or `cancelled`: a turn it could not finish ends complete, with what went wrong as
-   * text. The one such text acted on is that it is not signed in.
+   * text. The one such text acted on is that it is not signed in. Any other reason (ACP
+   * has `refusal`, `max_tokens` and `max_turn_requests`, which Cursor has not been seen to
+   * send) is a turn stopped short, not a finished one.
    */
   private ending(stopReason: string | undefined, process: CursorProcess): TurnEnd {
     const usage = this.stream.usage ? { usage: this.stream.usage } : {};
@@ -546,13 +567,13 @@ export class CursorSession implements ProviderSession {
       this.held = null;
       return { type: "turn.end", status: "error", error: failure, retryable: true, ...usage };
     }
+    if (stopReason !== undefined && stopReason !== "end_turn") return { type: "turn.end", status: "error", error: stoppedShort(stopReason), retryable: true, ...usage };
     return { type: "turn.end", status: "complete", ...usage };
   }
 
   /** The open turn's reply ended with Cursor saying its sign-in has gone: the model never ran. */
   private signInGone(): boolean {
-    const held = this.heldText();
-    return (held ?? this.lastPiece).trim() === signInReply;
+    return saysSignedOut(this.heldText() ?? this.lastPiece);
   }
 
   /** Why the open turn failed, as Cursor said it as the turn's last piece of reply; null when it did not. */
