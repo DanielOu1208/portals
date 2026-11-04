@@ -10,6 +10,8 @@ final class ModePickerUITests: XCTestCase {
             largeText ? "UICTContentSizeCategoryAccessibilityXXXL" : "UICTContentSizeCategoryL",
         ]
         app.launch()
+        let decline = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.buttons["Don’t Allow"]
+        if decline.exists { decline.tap() }
         let chip = app.buttons["mode-chip"]
         XCTAssertTrue(chip.waitForExistence(timeout: 20))
         chip.tap()
