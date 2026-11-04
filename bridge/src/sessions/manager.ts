@@ -618,7 +618,8 @@ export class SessionManager {
 
   /** A session for `record`, numbering its events on past the last one of this thread in this run. */
   private session(record: ThreadRecord): Session {
-    return new Session(record, this.registry, { modeOptions: providerModeOptions(this.provider(record.agent)), logCapacity: this.logCapacity, listener: this.listener, lastSeq: this.lastSeq.get(record.id), waiting: this.waiting, spent: this.spent, diffs: this.diffs, lastQueueID: this.lastQueueID.get(record.id) });
+    const provider = this.provider(record.agent);
+    return new Session(record, this.registry, { modeOptions: providerModeOptions(provider), agentName: provider.profile.displayName, logCapacity: this.logCapacity, listener: this.listener, lastSeq: this.lastSeq.get(record.id), waiting: this.waiting, spent: this.spent, diffs: this.diffs, lastQueueID: this.lastQueueID.get(record.id) });
   }
 
   /** Lets go of a loaded session; it is loaded again from the registry when next asked for. */

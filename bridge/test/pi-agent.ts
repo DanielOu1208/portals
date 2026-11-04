@@ -40,6 +40,9 @@ import { join } from "node:path";
 //   settle-first           a prompt that comes during the run is taken only once the run
 //                          has settled, as when it arrives in that moment
 //   refuse-steer           a prompt that comes during the run is refused
+//   lose-late              a prompt that comes during the run is never answered, and nothing
+//                          comes of it, as one that reaches Pi as the run settles and fails
+//                          there (Pi's issue 10388)
 //   die                    the process exits with code 1 while a command runs
 //   anything else          a short reply that repeats the message
 //
@@ -669,6 +672,7 @@ async function prompt(command: Json): Promise<void> {
   }
   if (state.running) {
     if (has(state.script, "refuse-steer")) return refuse(command.id, "prompt", "The stand-in was told to refuse this message.");
+    if (has(state.script, "lose-late")) return;
     if (command.streamingBehavior !== "steer" && command.streamingBehavior !== "followUp") {
       return refuse(command.id, "prompt", "Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.");
     }

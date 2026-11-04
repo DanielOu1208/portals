@@ -849,6 +849,34 @@ test("a message Pi takes and then never begins to answer fails its turn, when th
   }
 });
 
+test("a message Pi never answers, and is not at work on, is said again in a turn of its own, and the messages after it are not held up", async () => {
+  const impatient = piProvider(pi, { folder: cwd, callTimeoutMs: 1000 });
+  const own = await startTestBridge({ providers: new Map([["pi", impatient]]), config: { generalFolder: cwd } });
+  const phone = await TestClient.open(own);
+  try {
+    const session = await createThread({}, phone);
+    const start = await send(session, "hold lost-1 lose-late", phone);
+    await event(session, start, "message.delta", phone);
+    // Handed to the run as it settles, Pi takes it and never answers (an extension compacting at `agent_settled`).
+    assert.equal(await submit(session, "the lost one", phone), "steered");
+    await until(() => pi.sentTo(session, "prompt").length === 2);
+    pi.release("lost-1");
+    const [first] = await ends(session, start, 1, phone);
+    assert.equal(first.text, "Working. You said: hold lost-1 lose-late");
+    // Before, the next message waited for that answer for good.
+    await submit(session, "the next one", phone);
+    const [, second, third] = await ends(session, start, 3, phone);
+    assert.deepEqual([second.status, second.text], ["complete", "Working. You said: the next one"]);
+    assert.deepEqual([third.status, third.text], ["complete", "Working. You said: the lost one"]);
+    // Pi was asked how it was, twice at rest, before the message was taken as not sent.
+    assert.ok(pi.sentTo(session, "get_state").length >= 3);
+    assert.deepEqual(pi.sentTo(session, "prompt").map((record) => record.message), ["hold lost-1 lose-late", "the lost one", "the next one", "the lost one"]);
+  } finally {
+    await phone.close();
+    await own.dispose();
+  }
+});
+
 // MARK: /compact
 
 test("/compact is carried out with Pi's compact: a status line, the mark, the ring, and a message sent meanwhile waits", async () => {

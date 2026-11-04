@@ -259,7 +259,11 @@ HermesReconnectTests.swift:142, 279.
   `interrupted` when there was one; no `message.complete` follows then. It answers
   `interrupted` too when the agent stops a message that was handed to a turn which has
   ended since (Pi, before it has begun the run it takes such a message for): that run
-  then shows as a turn that ends `interrupted` as it begins.
+  then shows as a turn that ends `interrupted` as it begins. An agent that has not taken
+  the stop in 20 seconds, or failed to (Hermes out of reach), has its turn ended by
+  portals-bridge, with `message.complete` `status:"interrupted"`, and the answer is
+  `interrupted`; what the agent still says of that turn is not passed on, and a message
+  sent before the agent ends that turn waits on the list (`queue.changed`) until it has.
 - **`config.get`** is asked with `key:"reasoning"` only. `value` is a thinking level:
   `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra`; anything else reads
   as unknown (AgentCore/ModelSetting.swift:5-9). A failure is ignored
@@ -354,7 +358,7 @@ the runtime `session_id` and a `seq` (rules below).
 | `message.delta` | `text` | `textDelta` | Empty text is dropped |
 | `message.interim` | `text`, `already_streamed` | `interimText` | Closes a piece of text written beside tool calls. `already_streamed:true` when it also came as deltas (HermesEventMapper.swift:15-18) |
 | `reasoning.delta` | `text` | `reasoningDelta` | The model's reasoning |
-| `thinking.delta` | `text` | `status` | A transient status line, not reasoning. `""` clears it. A spinner face followed by one verb ("(◔_◔) pondering...") is dropped as decoration (HermesEventMapper.swift:137-176). Send plain sentences. |
+| `thinking.delta` | `text` | `status` | A transient status line, not reasoning. `""` clears it. A spinner face followed by one verb ("(◔_◔) pondering...") is dropped as decoration (HermesEventMapper.swift:137-176). Send plain sentences. portals-bridge sends one of its own when a running turn has had no word from the agent for five minutes and no card is open ("No word from Codex for 5 minutes. It may still be working; Stop ends it."), and puts back the line before it with the agent's next word. |
 | `status.update` | `kind`, `text` | `warn` → warning notice; `error` → error notice; `loop`, `process` → `announced` row + status; other → status | Leading symbols such as "⚠ " are stripped (HermesEventMapper.swift:54-64, 228-236; HermesHostEvents.swift:90-118) |
 | `tool.start` | `tool_id`, `name`, `context`, `args` | `toolStarted` | `tool_id` and `name` required. `name:"clarify"` is skipped: the question is the row (HermesEventMapper.swift:27-30) |
 | `tool.complete` | `tool_id`, `name`, `context`, `args`, `result`, `inline_diff`, `duration_s`, `summary` | `toolFinished` | Repeat `name`, `args` and `context`: after a reconnect the app may never have seen the start (HermesReconnectTests.swift:684-693) |
