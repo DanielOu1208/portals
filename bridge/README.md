@@ -233,8 +233,9 @@ the network, and a link you tap opens in your browser.
 One setting in the app (the gear, under Messages) says what it does:
 
 - **Steer** (as it comes): the agent reads the message during the turn it is on. Claude
-  Code, Codex and Pi can; Droid takes it at the next model step. Cursor and Hermes
-  cannot, and queue it.
+  Code, Codex and Pi can; Droid takes it at the next model step, and Hermes with its next
+  tool result (one that comes after its last is a turn of its own). Cursor cannot, and
+  queues it.
 - **Queue**: the message waits and starts a turn of its own when the agent is done.
 
 Messages that wait are listed above the message field on every device connected to the
@@ -342,8 +343,21 @@ Each Hermes profile is an agent (`hermes` for the default one). Setup finds Herm
 offers its installer; `hermes setup model` gives it the AI provider and model it needs.
 The host joins the `hermes serve` your user runs, or starts one and leaves it running:
 while it does, run `hermes dashboard` with `--isolated`, or stop it first with
-`hermes serve --stop`. A message sent while Hermes works is queued. A profile called `pi`
-or `cursor` loses that name to that agent: leave the agent off there.
+`hermes serve --stop`. A profile called `pi` or `cursor` loses that name to that agent:
+leave the agent off there.
+
+- **Modes:** Default (`/mode default`) asks before risky commands as your Hermes approval
+  settings say; Full access (`/mode full`) is Hermes's YOLO for that thread alone, as
+  Shift+Tab in Hermes Desktop, so it runs commands without asking. Your settings are not
+  changed.
+- **Subagents** Hermes's `delegate_task` starts are on the thread's subagents line, and can
+  be stopped one by one. They run in the background: their answers come back as a turn of
+  their own.
+- `/compact`, `/usage` (the limits of the thread's model provider, as Hermes's model
+  picker shows them), your skills, `/plan`, `/init`, `/learn`, `/review` and the commands
+  that only show something (`/context`, `/agents`, `/diff`, `/insights`, …) are offered.
+  Commands that change Hermes's settings are not.
+- Hermes's notices (credits, low disk) are shown in the thread.
 
 ## Agents working with each other
 

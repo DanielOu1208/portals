@@ -1,0 +1,172 @@
+import "./environment.ts";
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { HermesError, type Frame } from "../src/providers/hermes/client.ts";
+import { HermesSession, noticeText, type HermesHost, type Loaded } from "../src/providers/hermes/session.ts";
+import type { ProviderEvent, ThreadMode } from "../src/providers/types.ts";
+import type { Registry, ThreadRecord } from "../src/sessions/registry.ts";
+import { Session } from "../src/sessions/session.ts";
+
+// A Hermes thread's turn against a stand-in for Hermes's answers: a message steered in
+// mid-turn, Hermes's notices, its own commands made a message of, and its session-only
+// yolo as the thread's mode.
+
+const settings = { model: "m", provider: "p", reasoningEffort: "" };
+const step = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+async function fixture(options: { info?: Frame; mode?: ThreadMode; turnCommands?: string[] } = {}) {
+  const record: ThreadRecord = { id: "stored", agent: "hermes", cwd: "/tmp", title: null, ...settings, createdAt: 0, updatedAt: 0, origin: "phone", ...(options.mode ? { mode: options.mode } : {}) };
+  const core = new Session(record, { has: () => false } as unknown as Registry);
+  const calls: { method: string; params: Frame }[] = [];
+  let answer: (method: string, params: Frame) => Promise<unknown> = async () => ({});
+  const host: HermesHost = {
+    call: async <T>(method: string, params: Frame) => {
+      calls.push({ method, params });
+      return (await answer(method, params)) as T;
+    },
+    bind() {}, forget() {}, respond() {}, respondError() {},
+    turnCommand: async (_profile, name) => (options.turnCommands ?? []).includes(name),
+  };
+  const loaded: Loaded = { session_id: "runtime", messages: [], info: options.info };
+  const adapter = new HermesSession({ id: "stored", cwd: "/tmp", settings, ...(options.mode ? { mode: options.mode } : {}) }, "default", core.sink, host, loaded);
+  await core.attach(adapter);
+  await step();
+  return { core, adapter, calls, answer: (call: typeof answer) => { answer = call; } };
+}
+
+/** Starts a turn of `text`, and Hermes's start of it. */
+async function begin(core: Session, adapter: HermesSession, text: string, seq: number): Promise<void> {
+  core.submit(text).begin?.();
+  await step();
+  adapter.event("message.start", seq, {});
+}
+
+test("a message sent while Hermes works is steered into its turn, and one Hermes says no to is a turn of its own after it", async () => {
+  const { core, adapter, calls, answer } = await fixture();
+  try {
+    answer(async (method, params) => (method === "session.steer" ? { status: params.text === "and say why" ? "queued" : "rejected", text: params.text } : {}));
+    await begin(core, adapter, "Check the build", 1);
+    core.submit("and say why");
+    await step();
+    assert.deepEqual(calls.filter((call) => call.method === "session.steer").map((call) => call.params), [{ session_id: "runtime", text: "and say why", profile: "default" }]);
+    assert.ok(core.messages.some((message) => message.role === "user" && message.text === "and say why"));
+
+    core.submit("then stop");
+    await step();
+    assert.equal(calls.filter((call) => call.method === "session.steer").length, 2);
+    adapter.event("message.complete", 2, { status: "complete", text: "Built, because…" });
+    await step();
+    // Hermes did not take it: it goes once the turn is over, as a message of its own.
+    assert.deepEqual(calls.filter((call) => call.method === "prompt.submit").map((call) => call.params.text), ["Check the build", "then stop"]);
+  } finally { await core.close(); }
+});
+
+test("a message sent before Hermes's agent has begun the turn, or while it compacts, waits for the turn's end, and a picture is never steered", async () => {
+  const { core, adapter, calls, answer } = await fixture();
+  let compacted = () => {};
+  try {
+    core.submit("Check the build").begin?.();
+    await step();
+    assert.equal(adapter.steerable(), false);
+    adapter.event("message.start", 1, {});
+    assert.equal(adapter.steerable(), true);
+    assert.equal(await adapter.steer({ text: "look", images: [{ filename: "a.png", data: Buffer.from("a") }] }), "refused");
+    adapter.event("message.complete", 2, { status: "complete", text: "Built." });
+
+    answer((method) => (method === "session.compress" ? new Promise((resolve) => { compacted = () => resolve({ status: "compressed" }); }) : Promise.resolve({})));
+    core.submit("/compact").begin?.();
+    await step();
+    assert.equal(adapter.steerable(), false);
+    core.submit("and then?");
+    await step();
+    assert.equal(calls.filter((call) => call.method === "session.steer").length, 0);
+    compacted();
+    await step();
+    await step();
+    assert.deepEqual(calls.filter((call) => call.method === "prompt.submit").map((call) => call.params.text), ["Check the build", "and then?"]);
+  } finally { compacted(); await core.close(); }
+});
+
+test("a steer whose answer is lost with the connection may have reached Hermes; one Hermes refused surely did not", async () => {
+  const { core, adapter, answer } = await fixture();
+  try {
+    await begin(core, adapter, "Check the build", 1);
+    answer(async () => { throw new Error("The connection to Hermes closed."); });
+    assert.equal(await adapter.steer({ text: "more", images: [] }), false);
+    answer(async () => { throw new HermesError(4010, "agent does not support steer"); });
+    assert.equal(await adapter.steer({ text: "more", images: [] }), "refused");
+  } finally { await core.close(); }
+});
+
+test("Hermes's notices are said once in the thread in the app's words, and its slow start is the status line until it clears", async () => {
+  const events: ProviderEvent[] = [];
+  const host: HermesHost = { call: async <T>() => ({}) as T, bind() {}, forget() {}, respond() {}, respondError() {} };
+  const adapter = new HermesSession({ id: "stored", cwd: "/tmp", settings }, "default", { emit: (event) => { events.push(event); }, ask: async () => ({ kind: "withdrawn", reason: "test" }) }, host, { session_id: "runtime" });
+  adapter.attached();
+  await step();
+  const low = { text: "⚠ Low disk (3.2 GB free) · /autoprune on|off|later", level: "warn", kind: "sticky", key: "prune" };
+  adapter.event("notification.show", 1, low);
+  adapter.event("notification.show", 2, low);
+  adapter.event("notification.show", 3, { text: "✕ Credit access paused · run /topup to top up", level: "error", kind: "sticky", key: "credits.depleted" });
+  adapter.startTurn({ text: "Hello", images: [] });
+  adapter.event("notification.show", 4, { text: "Still starting the agent (tool discovery / model setup) — your message will be sent as soon as it's ready.", level: "info", kind: "agent", key: "build" });
+  adapter.event("notification.clear", 5, { key: "build" });
+  assert.deepEqual(events.filter((event) => event.type === "notice" || event.type === "status"), [
+    { type: "notice", level: "warn", text: "Low disk (3.2 GB free)" },
+    { type: "notice", level: "error", text: "Credit access paused" },
+    { type: "status", text: "Still starting the agent (tool discovery / model setup) — your message will be sent as soon as it's ready." },
+    { type: "status", text: "" },
+  ]);
+  assert.equal(noticeText("✓ Credit access restored"), "Credit access restored");
+  assert.equal(noticeText("Stayed on m · switching to n needs confirmation"), "Stayed on m · switching to n needs confirmation");
+  await adapter.close();
+});
+
+test("a Hermes command that becomes a message goes as that message, and one Hermes does not run fails the turn", async () => {
+  const { core, adapter, calls, answer } = await fixture({ turnCommands: ["plan"] });
+  try {
+    answer(async (method, params) => (method === "command.dispatch" ? (params.arg === "" ? { type: "exec", output: "usage: /plan <task>" } : { type: "send", message: "Write a plan for: the move" }) : {}));
+    await begin(core, adapter, "/plan the move", 1);
+    assert.deepEqual(calls.filter((call) => call.method === "command.dispatch").at(-1)?.params, { session_id: "runtime", name: "plan", arg: "the move", profile: "default" });
+    assert.equal(calls.filter((call) => call.method === "prompt.submit").at(-1)?.params.text, "Write a plan for: the move");
+    adapter.event("message.complete", 2, { status: "complete", text: "Planned." });
+    await step();
+
+    core.submit("/plan").begin?.();
+    await step();
+    await step();
+    assert.equal(core.isRunning, false);
+    assert.ok(core.messages.some((message) => message.role === "assistant" && /Hermes did not run \/plan\./.test(message.text)));
+    assert.equal(calls.filter((call) => call.method === "prompt.submit").length, 1);
+  } finally { await core.close(); }
+});
+
+test("a Hermes thread's mode is Hermes's own for the session: kept as the thread's when another app changed it", async () => {
+  const { core, adapter, calls, answer } = await fixture({ info: { yolo: true }, mode: "default" });
+  try {
+    assert.equal(core.mode()?.mode, "full");
+    assert.equal(core.record.mode, "full");
+    answer(async (method, params) => (method === "config.set" ? { key: "yolo", value: params.value === "on" ? "1" : "0", scope: "session" } : {}));
+    await core.setMode("default");
+    assert.deepEqual(calls.at(-1)?.params, { session_id: "runtime", key: "yolo", value: "off", scope: "session", profile: "default" });
+    assert.equal(adapter.mode().mode, "default");
+    await assert.rejects(adapter.setMode("ask"));
+  } finally { await core.close(); }
+});
+
+test("on a profile that asks for no approvals, Hermes's yes for every session's yolo leaves the thread's mode as it was, and default comes to full", async () => {
+  const { core, adapter, answer } = await fixture({ info: { yolo: true, approval_mode: "off" }, mode: "default" });
+  try {
+    assert.deepEqual(adapter.mode(), { mode: "default", defaultsTo: "full" });
+    answer(async (method, params) => (method === "config.set" ? { key: "yolo", value: params.value === "on" ? "1" : "0", scope: "session" } : {}));
+    await core.setMode("full");
+    adapter.event("session.info", 1, { yolo: true, approval_mode: "off" });
+    await core.setMode("default");
+    adapter.event("session.info", 2, { yolo: true, approval_mode: "off" });
+    assert.equal(core.mode()?.mode, "default");
+    assert.equal(core.record.mode, "default");
+    // The profile asks again: Hermes's word is the session's own once more.
+    adapter.event("session.info", 3, { yolo: false, approval_mode: "manual" });
+    assert.deepEqual(adapter.mode(), { mode: "default" });
+  } finally { await core.close(); }
+});
