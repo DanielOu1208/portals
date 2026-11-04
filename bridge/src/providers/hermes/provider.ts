@@ -2,7 +2,8 @@ import { log } from "../../log.ts";
 import { machineWord } from "../../platform.ts";
 import { readJSON, writeJSON } from "../../store/jsonFile.ts";
 import { thinkingLevels, type AgentCommand, type AgentProfile, type ModelCatalog, type OngoingThread, type Provider, type ProviderSession, type SessionOptions, type SessionSettings, type SessionSink } from "../types.ts";
-import { HermesClient, serveConnector, type ClientListener, type Connector, type Frame } from "./client.ts";
+import { mcpCommand, mcpStatusText, type McpServer, type McpServerState } from "../mcpStatus.ts";
+import { HermesClient, HermesError, serveConnector, type ClientListener, type Connector, type Frame } from "./client.ts";
 import { ServeLocator } from "./serve.ts";
 import { HermesSession, type Loaded } from "./session.ts";
 import { hermesVersion } from "./setup.ts";
@@ -73,6 +74,18 @@ const description = `Hermes on this ${machineWord()}, with its own profile, memo
 export const botChatTitle = "Bot Chat";
 /** Hermes's command that compacts a conversation, which a thread takes from the app. */
 const compressCommand: AgentCommand = { name: "compress", description: "Summarise the conversation so far, to free up context", usage: "[focus]", skill: false };
+
+/** What `mcp.servers.status` says of a server, in `/mcp`'s words. `lazy`: connects when first used. */
+const hermesMcpStates: Record<string, McpServerState> = { connected: "connected", connecting: "starting", failed: "failed", disabled: "off", configured: "notStarted" };
+
+/** `/mcp` from Hermes's `mcp.servers.status`: its serve's last word on each server, which asking does not change. */
+export function hermesMcpText(agent: string, servers: { name: string; status: string; tools?: number }[]): string {
+  return mcpStatusText(agent, servers.map((server): McpServer => {
+    const state = hermesMcpStates[server.status] ?? "unknown";
+    const detail = server.status === "lazy" ? "starts when first used" : state === "unknown" ? server.status : undefined;
+    return { name: server.name, state, ...(typeof server.tools === "number" ? { tools: server.tools } : {}), ...(detail ? { detail } : {}) };
+  }));
+}
 
 /** The bridge's name for a Hermes profile: `hermes` for the default, else the profile's own unless another agent has it. */
 export function agentName(profile: string, taken: ReadonlySet<string>): string {
@@ -413,6 +426,8 @@ export class HermesProvider implements Provider {
   private catalog: Catalog | null = null;
   private loading: Promise<ModelCatalog> | null = null;
   readonly ongoingThread?: Provider["ongoingThread"];
+  /** Its command the bridge runs itself (`mcp.servers.status`). */
+  readonly executes = ["mcp"] as const;
 
   constructor(host: HermesHost, profile: HermesProfile) {
     this.host = host;
@@ -502,9 +517,20 @@ export class HermesProvider implements Provider {
     return catalog;
   }
 
-  /** Hermes's `/compress` (`/compact` too), which the session carries out (`session.compress`). */
+  /** Hermes's `/compress` (`/compact` too), which the session carries out (`session.compress`), and `/mcp`, which the bridge answers. */
   async commands(): Promise<AgentCommand[]> {
-    return [compressCommand];
+    return [compressCommand, mcpCommand(() => this.mcpStatus())];
+  }
+
+  private async mcpStatus(): Promise<string> {
+    let answer: { servers?: { name: string; status: string; tools?: number }[] } | undefined;
+    try {
+      answer = await this.host.client.call("mcp.servers.status", { profile: this.described.profile });
+    } catch (error) {
+      if (error instanceof HermesError && error.code === -32601) throw new Error("This Hermes cannot say how its MCP servers are: a newer one can.");
+      throw new Error(`Hermes did not say how its MCP servers are: ${(error as Error).message}`);
+    }
+    return hermesMcpText(this.described.displayName, Array.isArray(answer?.servers) ? answer.servers : []);
   }
 
   newThread(options: { cwd: string; settings: SessionSettings }): Promise<string> {

@@ -247,7 +247,7 @@ test("Cursor is listed without being started; once a thread has run its models, 
   assert.deepEqual(early.model_levels, { default: [] });
   // It has modes, and what `default` comes to is none of the app's four.
   assert.deepEqual(early.modes, {});
-  assert.deepEqual((await client.call("commands.catalog", { profile: "cursor" })).pairs.map((pair: string[]) => pair[0]), ["/status", "/mode", "/usage"]);
+  assert.deepEqual((await client.call("commands.catalog", { profile: "cursor" })).pairs.map((pair: string[]) => pair[0]), ["/status", "/mode", "/usage", "/mcp"]);
   // Nothing so far started it.
   assert.deepEqual(calls(agentDir), []);
 
@@ -277,13 +277,53 @@ test("Cursor is listed without being started; once a thread has run its models, 
   assert.deepEqual(options.modes, {});
 
   // Its slash commands came with the session, without the one that writes the clipboard, and go to it as messages.
-  await until(async () => (await client.call("commands.catalog", { profile: "cursor" })).pairs.length === 5, "the commands are known");
+  await until(async () => (await client.call("commands.catalog", { profile: "cursor" })).pairs.length === 6, "the commands are known");
   const catalog = await client.call("commands.catalog", { profile: "cursor" });
   assert.deepEqual(catalog.pairs.slice(3), [
+    ["/mcp", "Show your MCP servers and whether each is connected"],
     ["/review", "Review the changes"],
     ["/explain", "Explain a file (usage: /explain <file>)"],
   ]);
   assert.deepEqual(await client.call("command.dispatch", { name: "review", session_id: session }), { type: "send", message: "/review" });
+});
+
+test("/mcp runs `cursor-agent mcp list` in the thread's folder and says each server in the app's words; what it cannot list is an error", async (t) => {
+  const folder = realpathSync(mkdtempSync(join(tmpdir(), "portals-cursor-mcp-")));
+  t.after(() => rmSync(folder, { recursive: true, force: true }));
+  const program = join(folder, "cursor-agent");
+  const project = join(folder, "project");
+  mkdirSync(project);
+  // As Cursor 2026.10.22 prints it, coloured here although it is not on a terminal.
+  writeFileSync(join(folder, "printed.txt"), [
+    "docs: \u001b[32mready\u001b[39m", "github: requires_authentication", "db: \u001b[31mError: Connection failed\u001b[39m",
+    "shared: not loaded (needs approval)", "old: disabled", "slow: loading", "",
+  ].join("\n"));
+  writeFileSync(program, `#!/bin/sh\nprintf '%s\\n' "$PWD" "$*" "$NO_COLOR" > "${folder}/ran.txt"\nif [ -f "${folder}/refuse" ]; then echo "Failed to list MCP servers: not signed in" >&2; exit 1; fi\ncat "${folder}/printed.txt"\n`);
+  chmodSync(program, 0o755);
+  const provider = new CursorProvider({ command: program, directory: join(folder, "state"), idleMs: 60_000, checkVersion: false, cursorHome: null });
+  const mcp = async () => (await provider.commands({ id: "thread", cwd: project })).find((command) => command.name === "mcp")!.execute!("");
+  assert.equal(await mcp(), [
+    "Cursor MCP servers:",
+    "db: failed (Connection failed)",
+    "docs: connected",
+    "github: needs sign-in",
+    "old: off",
+    "shared: not approved",
+    "slow: starting",
+    "To sign in to one, run cursor-agent mcp login <name> on the host.",
+    "To approve one, run cursor-agent mcp enable <name> on the host, in the thread's folder.",
+  ].join("\n"));
+  assert.deepEqual(readFileSync(join(folder, "ran.txt"), "utf8").split("\n"), [project, "mcp list", "1", ""]);
+  writeFileSync(join(folder, "printed.txt"), "No MCP servers configured (expected in .cursor/mcp.json or ~/.cursor/mcp.json)\n");
+  assert.equal(await mcp(), "Cursor MCP servers:\nNone set up.");
+  writeFileSync(join(folder, "refuse"), "");
+  await assert.rejects(mcp(), /^Error: Cursor did not say how its MCP servers are: Failed to list MCP servers: not signed in$/);
+
+  // A thread whose folder is gone: said plainly, and cursor-agent is not run anywhere else.
+  rmSync(join(folder, "ran.txt"));
+  rmSync(project, { recursive: true });
+  await assert.rejects(mcp(), (error: Error) => error.message === `The thread's folder, ${project}, is no longer there, so Cursor cannot show its MCP servers.`);
+  assert.equal(existsSync(join(folder, "ran.txt")), false);
 });
 
 // Cursor has three modes; the app offered all five (its own list, with no mode_options), and
@@ -1552,7 +1592,7 @@ test("after the bridge restarts a thread shows its conversation without starting
   // The models and commands are known at once, from what was kept.
   assert.deepEqual((await state.phone.call("model.options", { profile: "cursor" })).providers[0].models, models);
   assert.deepEqual((await state.phone.call("model.options", { profile: "cursor" })).model_levels.deep, ["none", "low", "medium", "high", "xhigh"]);
-  assert.equal((await state.phone.call("commands.catalog", { profile: "cursor" })).pairs.length, 5);
+  assert.equal((await state.phone.call("commands.catalog", { profile: "cursor" })).pairs.length, 6);
   const resumed = await state.phone.call("session.resume", { session_id: session });
   assert.deepEqual(
     resumed.messages.map((message: Frame) => message.role),

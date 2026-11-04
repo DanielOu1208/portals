@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { machineWord } from "../src/platform.ts";
 import type { ClaudeProvider } from "../src/providers/claude/provider.ts";
-import { fakeClaude, FakeFiles, FakeQuery, inFolder, maxPlanUsage, planUsage, play, playEntries, processes, recordedHistory, tinyCheckJournal } from "./claude-fixtures.ts";
+import { fakeClaude, FakeFiles, FakeQuery, inFolder, maxPlanUsage, mcpStatus, planUsage, play, playEntries, processes, recordedHistory, tinyCheckJournal } from "./claude-fixtures.ts";
 import { pastSubagents } from "../src/providers/claude/tasks.ts";
 import { isEvent, RpcFailure, startTestBridge, streamedText, TestClient, unspent, type Frame, type TestBridge } from "./helpers.ts";
 
@@ -425,7 +425,7 @@ test("commands: what Claude Code says needs a terminal leaves the menu; without 
   });
   const offered = async () => ((await phone.call("commands.catalog", { profile: "claude" })).pairs as string[][]).map(([key]) => key);
   // Before any session has said: the list alone keeps /doctor and /send-to-project out.
-  assert.deepEqual(await offered(), ["/status", "/mode", "/usage", "/compact", "/context", "/grill-me"]);
+  assert.deepEqual(await offered(), ["/status", "/mode", "/usage", "/mcp", "/compact", "/context", "/grill-me"]);
 
   const session = (await phone.call("session.create", { profile: "claude", cwd })).session_id as string;
   const start = phone.frames.length;
@@ -435,7 +435,7 @@ test("commands: what Claude Code says needs a terminal leaves the menu; without 
   query.emit({ type: "system", subtype: "init", model: "claude-haiku-5-5", permissionMode: "bypassPermissions", terminal_slash_commands: ["doctor", "Context"], session_id: session });
   query.emit({ type: "result", subtype: "success", is_error: false, user_message_uuids: [query.received[0].uuid], usage: {}, session_id: session });
   await phone.from(start, (frame) => isEvent(frame, "message.complete", session));
-  assert.deepEqual(await offered(), ["/status", "/mode", "/usage", "/compact", "/grill-me"]);
+  assert.deepEqual(await offered(), ["/status", "/mode", "/usage", "/mcp", "/compact", "/grill-me"]);
 
   // A Claude Code that lists none (or predates the list) leaves only the bridge's own out.
   const again = phone.frames.length;
@@ -444,7 +444,7 @@ test("commands: what Claude Code says needs a terminal leaves the menu; without 
   query.emit({ type: "system", subtype: "init", model: "claude-haiku-5-5", permissionMode: "bypassPermissions", session_id: session });
   query.emit({ type: "result", subtype: "success", is_error: false, user_message_uuids: [query.received[1].uuid], usage: {}, session_id: session });
   await phone.from(again, (frame) => isEvent(frame, "message.complete", session));
-  assert.deepEqual(await offered(), ["/status", "/mode", "/usage", "/compact", "/context", "/grill-me"]);
+  assert.deepEqual(await offered(), ["/status", "/mode", "/usage", "/mcp", "/compact", "/context", "/grill-me"]);
 });
 
 test("commands: Claude's own and the user's skills are offered and sent as messages; some are withheld", async () => {
@@ -461,6 +461,7 @@ test("commands: Claude's own and the user's skills are offered and sent as messa
     {
       name: "Claude Code",
       pairs: [
+        ["/mcp", "Show your MCP servers and whether each is connected"],
         ["/compact", "Free up context by summarizing the conversation so far (usage: /compact <optional custom summarization instructions>)"],
         ["/context", "Show current context usage"],
       ],
@@ -613,6 +614,84 @@ test("/usage asks the thread's running Claude Code, else one started only to ask
     await playing;
   } finally {
     planUsage.answer = new Error("not set");
+  }
+});
+
+test("/mcp asks the thread's running Claude Code, else one started in the thread's folder that is given time to connect its servers", async (t) => {
+  // The thread's folder, not the one the startup check runs in.
+  const folder = realpathSync(mkdtempSync(join(tmpdir(), "portals-claude-mcp-")));
+  const { provider: own, queries } = fakeClaude();
+  const other = await startTestBridge({ providers: new Map([["claude", own]]), config: { generalFolder: folder } });
+  const client = await TestClient.open(other);
+  t.after(async () => {
+    await client.close();
+    await other.dispose();
+    rmSync(folder, { recursive: true, force: true });
+  });
+  const session = (await client.call("session.create", { profile: "claude", cwd: folder })).session_id as string;
+  const checks = () => queries.filter((query) => query.options.persistSession === false && query.calls.some((call) => call[0] === "mcpServerStatus"));
+  const mcp = async () => (await client.call("slash.exec", { session_id: session, command: "mcp", profile: "claude" })).output as string;
+  try {
+    // No thread runs: one started in the thread's folder, asked again while a server connects, and closed.
+    mcpStatus.answers = [
+      [{ name: "docs", status: "pending" }, { name: "github", status: "needs-auth" }],
+      [{ name: "docs", status: "connected", tools: [{ name: "search" }] }, { name: "github", status: "needs-auth" }, { name: "db", status: "failed", error: "spawn db-server ENOENT" }, { name: "old", status: "disabled" }],
+    ];
+    assert.equal(await mcp(), [
+      "Claude Code MCP servers:",
+      "db: failed (spawn db-server ENOENT)",
+      "docs: connected, 1 tool",
+      "github: needs sign-in",
+      "old: off",
+      "To sign in to one, run /mcp in Claude Code on the host.",
+    ].join("\n"));
+    assert.equal(checks().length, 1);
+    assert.equal(checks()[0].options.cwd, folder);
+    assert.deepEqual(checks()[0].calls.filter((call) => call[0] === "mcpServerStatus" || call[0] === "close"), [["mcpServerStatus"], ["mcpServerStatus"], ["close"]]);
+    assert.equal(checks()[0].received.length, 0);
+
+    // The thread's own running Claude Code is asked, once, and nothing more is started.
+    mcpStatus.answers = [[]];
+    const start = client.frames.length;
+    assert.equal((await client.call("prompt.submit", { session_id: session, text: "Count to 60.", profile: "claude" })).status, "streaming");
+    await until(() => queries.some((query) => query.options.persistSession !== false && query.received.length > 0));
+    const query = queries.find((query) => query.options.persistSession !== false)!;
+    const playing = play(query, "interrupt");
+    await client.from(start, (frame) => isEvent(frame, "message.delta", session));
+    assert.equal(await mcp(), "Claude Code MCP servers:\nNone set up.");
+    assert.equal(checks().length, 1);
+    assert.deepEqual(query.calls.filter((call) => call[0] === "mcpServerStatus"), [["mcpServerStatus"]]);
+    await client.call("session.interrupt", { session_id: session });
+    await client.from(start, (frame) => isEvent(frame, "message.complete", session));
+    await playing;
+  } finally {
+    mcpStatus.answers = [[]];
+  }
+});
+
+test("/mcp in a thread whose folder is gone says so, and starts no Claude Code elsewhere to answer", async (t) => {
+  const folder = realpathSync(mkdtempSync(join(tmpdir(), "portals-claude-mcp-gone-")));
+  const { provider: own, queries } = fakeClaude();
+  const other = await startTestBridge({ providers: new Map([["claude", own]]), config: { generalFolder: folder } });
+  const client = await TestClient.open(other);
+  t.after(async () => {
+    await client.close();
+    await other.dispose();
+    rmSync(folder, { recursive: true, force: true });
+  });
+  const session = (await client.call("session.create", { profile: "claude", cwd: folder })).session_id as string;
+  rmSync(folder, { recursive: true, force: true });
+  // A server only the startup check's folder has: never shown for this thread.
+  mcpStatus.answers = [[{ name: "elsewhere", status: "connected", tools: [] }]];
+  try {
+    const started = queries.length;
+    await assert.rejects(
+      client.call("slash.exec", { session_id: session, command: "mcp", profile: "claude" }),
+      (error: RpcFailure) => error.message === `The thread's folder, ${folder}, is no longer there, so Claude Code cannot show its MCP servers.`,
+    );
+    assert.equal(queries.slice(started).filter((query) => query.calls.some((call) => call[0] === "mcpServerStatus")).length, 0);
+  } finally {
+    mcpStatus.answers = [[]];
   }
 });
 

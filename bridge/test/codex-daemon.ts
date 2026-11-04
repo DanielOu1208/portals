@@ -119,6 +119,11 @@ export class FakeDaemon {
     accountId: null,
     rateLimitUpsell: null,
   };
+  /**
+   * The MCP servers `mcpServerStatus/list` gives, as Codex runs them for a loaded thread
+   * (`runtimeStatus`): asked of no thread, or of none loaded, it says none runs.
+   */
+  mcpServers: Json[] = [];
   /** Runs when a `turn/steer` arrives, before it is answered. */
   onSteer: (params: Json) => void = () => {};
   /** Runs when a `thread/read` arrives, before it is answered (once it settles, when it gives a promise). */
@@ -561,6 +566,13 @@ export class FakeDaemon {
       case "turn/interrupt":
         if (this.interruptHeld) await this.interruptHeld;
         return {};
+      case "mcpServerStatus/list": {
+        if (params.threadId && !this.thread(params.threadId).loaded) throw new Error(`thread not found: ${params.threadId}`);
+        // Two to a page, so a client has to follow the cursor.
+        const start = params.cursor ? Number(params.cursor) : 0;
+        const page = this.mcpServers.slice(start, start + 2).map((server) => ({ ...server, runtimeStatus: params.threadId ? server.runtimeStatus : null }));
+        return { data: page, nextCursor: start + 2 < this.mcpServers.length ? String(start + 2) : null };
+      }
       case "account/rateLimits/read":
         return this.accountLimits;
       case "thread/unsubscribe":

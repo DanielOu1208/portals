@@ -57,6 +57,8 @@ export interface QueryLike extends AsyncIterable<SDKMessage> {
   supportedModels(): Promise<ModelInfo[]>;
   supportedCommands(): Promise<SlashCommand[]>;
   initializationResult(): Promise<{ models?: ModelInfo[]; commands?: SlashCommand[]; current_permission_mode?: string }>;
+  /** Each MCP server and how it is (`McpServerStatus`), for `/mcp`. A Claude Code from before it may refuse it. */
+  mcpServerStatus?(): Promise<{ name: string; status: string; error?: string; tools?: unknown[] }[]>;
   /**
    * The settings in force, `applied.model` being the model the session runs on now
    * (`claude-opus-5-5`). The SDK's query has it but does not declare it, so it may be

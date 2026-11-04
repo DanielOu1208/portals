@@ -43,6 +43,7 @@ import { usageReport } from "./stream.ts";
 import type { Model, RequestId, Thread, ThreadForkResponse, ThreadListResponse, ThreadStartResponse } from "./types/index.ts";
 import { CodexRollouts } from "../../search/locate.ts";
 import type { SearchFile } from "../../search/readers.ts";
+import { mcpCommand, mcpFolderGone, mcpStatusText, type McpServer, type McpServerState } from "../mcpStatus.ts";
 
 // Codex as an agent of the bridge (`codex` in profiles.list). The bridge keeps one
 // connection to Codex's app server for all its threads: in the shared mode (the
@@ -160,8 +161,38 @@ function deskState(thread: Thread): DeskState {
   }
 }
 
+/** The parts of Codex's `McpServerStatus` that `/mcp` reads. */
+interface CodexMcpServer {
+  name: string;
+  /** How it runs for the thread asked about; null with no thread, or none loaded. */
+  runtimeStatus?: string | null;
+  authStatus?: string;
+  tools?: Record<string, unknown>;
+  toolsError?: string | null;
+}
+
+/** `/mcp` from Codex's `mcpServerStatus/list`: as they run for the thread when `running`, else as set up. */
+export function codexMcpText(servers: CodexMcpServer[], running: boolean): string {
+  const states: Record<string, McpServerState> = {
+    connected: "connected", starting: "starting", notStarted: "notStarted", authenticationRequired: "signIn", failed: "failed", cancelled: "failed", disabled: "off",
+  };
+  return mcpStatusText("Codex", servers.map((server): McpServer => {
+    const tools = server.tools ? Object.keys(server.tools).length : undefined;
+    let state: McpServerState = running && server.runtimeStatus ? states[server.runtimeStatus] ?? "unknown" : "notStarted";
+    if (state !== "off" && server.authStatus === "notLoggedIn") state = "signIn";
+    else if (state !== "off" && state !== "connected" && server.toolsError) state = "failed";
+    const detail = state === "failed" ? server.toolsError ?? (server.runtimeStatus === "cancelled" ? "its start was cancelled" : undefined) : state === "unknown" ? server.runtimeStatus ?? undefined : undefined;
+    return { name: server.name, state, ...(tools !== undefined ? { tools } : {}), ...(detail ? { detail } : {}) };
+  }), {
+    note: running ? undefined : "Not started for this thread yet. Each is as set up, with the tools Codex last found.",
+    signIn: "To sign in to one, run codex mcp login <name> on the host.",
+  });
+}
+
 export class CodexProvider implements Provider, CodexHost {
   readonly supportsModes = true;
+  /** Its command the bridge runs itself (`mcpServerStatus/list`). */
+  readonly executes = ["mcp"] as const;
 
   defaultMode(): Exclude<ThreadMode, "default"> | null {
     const defaults = this.defaults();
@@ -547,14 +578,16 @@ export class CodexProvider implements Provider, CodexHost {
   }
 
   /**
-   * The Codex commands a thread takes from the app, which the session carries out:
-   * `/compact` (`thread/compact/start`) and `/review` (`review/start`); then Codex's skills
-   * for the thread's folder (./skills.ts). Without the skills when Codex cannot list them.
+   * The Codex commands a thread takes from the app: `/compact` (`thread/compact/start`) and
+   * `/review` (`review/start`), which the session carries out, and `/mcp`, which the bridge
+   * answers; then Codex's skills for the thread's folder (./skills.ts). Without the skills
+   * when Codex cannot list them.
    */
   async commands(thread?: { id: string; cwd: string }): Promise<AgentCommand[]> {
     const own: AgentCommand[] = [
       { name: compactCommand, description: "Summarise the conversation so far, to free up context", usage: "", skill: false },
       { name: reviewCommand, description: "Review your uncommitted changes", usage: "[what to review]", skill: false },
+      mcpCommand(() => this.mcpStatus(thread)),
     ];
     try {
       return [...own, ...skillCommands(await listSkills(this.client, thread?.cwd), own.map((command) => command.name))];
@@ -566,6 +599,46 @@ export class CodexProvider implements Provider, CodexHost {
 
   async skill(cwd: string, text: string): Promise<{ name: string; path: string } | null> {
     return skillIn(text, await listSkills(this.client, cwd));
+  }
+
+  /**
+   * How the thread's MCP servers are (`/mcp`), as Codex runs them for it. A thread Codex
+   * has not loaded has none running: then the servers as set up, with the tools Codex
+   * last found, unless its folder is gone (`mcpFolderGone`).
+   */
+  private async mcpStatus(thread: { id: string; cwd: string } | undefined): Promise<string> {
+    const list = async (threadId: string | undefined) => {
+      const servers: CodexMcpServer[] = [];
+      let cursor: string | null = null;
+      // Pages, as Codex gives them; a list longer than these is not a person's.
+      for (let page = 0; page < 20; page += 1) {
+        const answer: { data?: CodexMcpServer[]; nextCursor?: string | null } | undefined = await this.client.call("mcpServerStatus/list", {
+          detail: "toolsAndAuthOnly", limit: 100, ...(threadId ? { threadId } : {}), ...(cursor ? { cursor } : {}),
+        });
+        servers.push(...(answer?.data ?? []));
+        cursor = answer?.nextCursor ?? null;
+        if (!cursor) break;
+      }
+      return servers;
+    };
+    try {
+      if (thread) {
+        try {
+          return codexMcpText(await list(thread.id), true);
+        } catch (error) {
+          // Not loaded: Codex knows no thread of that id until a message loads it.
+          if (!/thread not found/i.test((error as Error).message)) throw error;
+        }
+      }
+    } catch (error) {
+      throw new Error(`Codex did not say how its MCP servers are: ${(error as Error).message}`);
+    }
+    if (thread && !existsSync(thread.cwd)) throw mcpFolderGone("Codex", thread.cwd);
+    try {
+      return codexMcpText(await list(undefined), false);
+    } catch (error) {
+      throw new Error(`Codex did not say how its MCP servers are: ${(error as Error).message}`);
+    }
   }
 
   defaults(): DesktopDefaults | null {

@@ -50,6 +50,7 @@ import { ClaudeSignIn } from "./signIn.ts";
 import { ContextWindows } from "./stream.ts";
 import { hasLimits, HeardLimits, KnownModelWindows, planDisplayName, planUsageReport, stillStanding } from "./usage.ts";
 import { claudeMentionLimit, type MentionLimit } from "../../sessions/mentions.ts";
+import { mcpCommand, mcpFolderGone, mcpStatusText, type McpServer, type McpServerState } from "../mcpStatus.ts";
 
 // Claude Code as an agent of the bridge (`claude` in profiles.list). It runs the
 // installed `claude` through the Agent SDK, one process per thread in use, with
@@ -205,6 +206,37 @@ function within<T>(promise: Promise<T> | undefined, ms: number): Promise<T | und
   return Promise.race([promise, new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), ms).unref())]);
 }
 
+/** How long a Claude Code started for `/mcp` gives its servers to connect, and how often it is asked meanwhile. */
+const mcpConnectMs = 15_000;
+const mcpPollMs = 500;
+
+type ClaudeMcpServer = Awaited<ReturnType<NonNullable<QueryLike["mcpServerStatus"]>>>[number];
+
+/** Claude Code's MCP servers, asked again while one is still connecting, for up to `waitMs`. */
+async function mcpServers(query: QueryLike, waitMs: number): Promise<ClaudeMcpServer[]> {
+  const until = Date.now() + waitMs;
+  for (;;) {
+    const servers = await within(query.mcpServerStatus?.(), 10_000);
+    if (!servers) throw new Error("Claude Code did not say how its MCP servers are.");
+    if (!servers.some((server) => server.status === "pending") || Date.now() >= until) return servers;
+    await new Promise((resolve) => setTimeout(resolve, mcpPollMs));
+  }
+}
+
+/** `/mcp` from what Claude Code says of each server (`McpServerStatus`). */
+export function claudeMcpText(servers: ClaudeMcpServer[]): string {
+  const states: Record<string, McpServerState> = { connected: "connected", pending: "starting", failed: "failed", "needs-auth": "signIn", disabled: "off" };
+  return mcpStatusText("Claude Code", servers.map((server): McpServer => {
+    const state = states[server.status] ?? "unknown";
+    return {
+      name: server.name,
+      state,
+      ...(state === "connected" && Array.isArray(server.tools) ? { tools: server.tools.length } : {}),
+      ...(state === "failed" ? { detail: server.error } : state === "unknown" ? { detail: server.status } : {}),
+    };
+  }), { signIn: "To sign in to one, run /mcp in Claude Code on the host." });
+}
+
 /** How long Claude Code is given to say how much is used. */
 const usageWaitMs = 15_000;
 
@@ -245,6 +277,8 @@ export class ClaudeProvider implements Provider, ClaudeHost {
     provider: "anthropic",
   };
   readonly supportsModes = true;
+  /** Its command the bridge runs itself: `/mcp`, in place of Claude Code's own, which needs a terminal. */
+  readonly executes = ["mcp"] as const;
   /**
    * The app's five, in its own words and order, and Claude Code's auto mode as `medium`:
    * a step between asking before everything and asking before nothing.
@@ -702,15 +736,39 @@ export class ClaudeProvider implements Provider, ClaudeHost {
     return this.modelList?.find((entry) => entry.value === model) ?? this.modelList?.find((entry) => entry.resolvedModel === model);
   }
 
-  async commands(): Promise<AgentCommand[]> {
+  async commands(thread?: { id: string; cwd: string }, name?: string): Promise<AgentCommand[]> {
+    const mcp = mcpCommand(() => this.mcpStatus(thread));
+    // The bridge's own: not waiting for the check to run it.
+    if (name === mcp.name) return [mcp];
     await this.catalogReady();
-    const seen = new Set<string>();
-    return (this.commandList ?? []).flatMap((command) => {
+    const seen = new Set<string>([mcp.name]);
+    return [mcp, ...(this.commandList ?? []).flatMap((command) => {
       const name = command.name.toLowerCase();
       if (withheld.has(name) || this.terminalOnly.has(name) || name.startsWith("_") || seen.has(name)) return [];
       seen.add(name);
       return [{ name, description: command.description, usage: command.argumentHint ?? "", skill: command.builtin !== true }];
-    });
+    })];
+  }
+
+  /**
+   * How the thread's MCP servers are (`/mcp`), as its running Claude Code says. With none
+   * running, a Claude Code started in the thread's folder only to say, given a while for
+   * its servers to connect: what the thread's next message would find. A thread whose
+   * folder is gone has none to show (`mcpFolderGone`); the startup check's folder is for
+   * a call with no thread.
+   */
+  private async mcpStatus(thread: { id: string; cwd: string } | undefined): Promise<string> {
+    const running = thread ? [...this.sessions].find((session) => session.id === thread.id)?.liveQuery : undefined;
+    if (running) return claudeMcpText(await mcpServers(running, 0));
+    if (thread && !isDirectory(thread.cwd)) throw mcpFolderGone("Claude Code", thread.cwd);
+    const { query, input, ready } = this.checkQuery(thread ? { cwd: thread.cwd } : {});
+    try {
+      await ready;
+      return claudeMcpText(await mcpServers(query, mcpConnectMs));
+    } finally {
+      input.end();
+      query.close();
+    }
   }
 
   terminalCommands(names: unknown): void {
