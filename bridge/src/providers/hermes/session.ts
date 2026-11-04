@@ -189,6 +189,8 @@ export class HermesSession implements ProviderSession {
   private readonly notices = new Map<string, string>();
   /** The key of the notice shown on the status line, which Hermes's `notification.clear` takes off. */
   private statusNotice: string | null = null;
+  /** The last turn Hermes has (it took the message or began it, or was running it when loaded). */
+  private handedOver = 0;
 
   /**
    * `mark` is where Hermes's stored copy of the ongoing conversation stood before `loaded`
@@ -224,6 +226,7 @@ export class HermesSession implements ProviderSession {
     this.noteApprovals(info);
     if (loaded.running && loaded.inflight) {
       this.openTurn();
+      this.handedOver = this.turns;
       this.runningUser = loaded.inflight.user ?? "";
       this.unwritten.push(this.runningUser);
       this.runningText = loaded.inflight.assistant ?? "";
@@ -537,6 +540,7 @@ export class HermesSession implements ProviderSession {
       this.unwritten.push(text);
       asked = true;
       await this.call("prompt.submit", { text });
+      if (mine()) this.handedOver = turn;
     } catch (error) {
       // Events can finish this turn and start the next before the submit RPC answers.
       if (!mine()) return;
@@ -648,6 +652,7 @@ export class HermesSession implements ProviderSession {
           this.report({ type: "turn.begin", user: "", host });
         }
         this.announced = null;
+        this.handedOver = this.turns;
         return;
       case "message.delta":
         this.streamed += text;
@@ -909,6 +914,7 @@ export class HermesSession implements ProviderSession {
     const generation = this.generation;
     const held = this.recovering ??= [];
     const cursor = this.lastSeq;
+    const turn = this.turns;
     const current = () => !this.closed && this.generation === generation && this.recovering === held;
     const resume = Promise.resolve().then(async () => {
       try {
@@ -965,6 +971,13 @@ export class HermesSession implements ProviderSession {
         for (const entry of held) {
           if (entry.kind === "event") this.event(entry.type, entry.seq, entry.payload);
           else if (!cancelled.has(entry.id)) this.request(entry.id, entry.method, entry.params);
+        }
+        // The turn Hermes was given ended among the events it lost: Hermes is at rest, and the
+        // turn ends here too, so its stored copy can fill the holes (`changedConversation`).
+        // Not one Hermes has not been given yet (a message waiting on this resume), nor a
+        // compression, which ends with its own answer.
+        if (sameRuntime && this.gap && !loaded.running && this.turnOpen && this.turns === turn && this.handedOver === turn && this.compression === null) {
+          this.endTurn({ type: "turn.end", status: "complete" });
         }
         this.retryDelay = 400;
       } catch (error) {
@@ -1048,7 +1061,9 @@ export class HermesSession implements ProviderSession {
  * `session.resume` returns (docs/gateway-protocol.md, section 8), richer keys
  * (`display_content`, `display_commentary`, …) included, so they pass as they are.
  * Only roles the app reads are kept, and tool calls go by the names the app knows
- * (`shownTool`), each to-do call with the whole list as it stood after it.
+ * (`shownTool`), each to-do call with the whole list as it stood after it. A batch of
+ * several calls Hermes keeps as one `tool_call` stays as it is, with its result, and each
+ * to-do call in it follows it as a `todo` row of its own.
  */
 export function storedMessages(messages: unknown[]): StoredMessage[] {
   let todos: unknown[] | null = null;
@@ -1057,14 +1072,23 @@ export function storedMessages(messages: unknown[]): StoredMessage[] {
       (message): message is StoredMessage =>
         typeof message === "object" && message !== null && ["user", "assistant", "tool", "compaction"].includes((message as Frame).role),
     )
-    .map((message) => {
-      if (message.role !== "tool" || typeof message.name !== "string") return message;
+    .flatMap((message): StoredMessage[] => {
+      if (message.role !== "tool" || typeof message.name !== "string") return [message];
       const tool = shownTool(message.name, objectOf(message.args));
       if (tool.name === "todo") {
         todos = todoList(tool.args, todos);
         if (todos) tool.args = { ...tool.args, todos };
       }
-      return tool.name === message.name && tool.args === message.args ? message : { ...message, ...tool };
+      if (tool.name === "tool_call") {
+        const plans = callsThrough(tool.args).flatMap((call, index): StoredMessage[] => {
+          if (!call || (formerToolNames[call.name] ?? call.name) !== "todo") return [];
+          todos = todoList(call.args, todos);
+          const args = todos ? { ...call.args, todos } : call.args;
+          return [{ role: "tool", name: "todo", args, tool_call_id: `${message.tool_call_id}:${index}`, timestamp: message.timestamp }];
+        });
+        return [message, ...plans];
+      }
+      return [tool.name === message.name && tool.args === message.args ? message : { ...message, ...tool }];
     });
 }
 
@@ -1086,20 +1110,25 @@ export function shownTool(name: string, args: Record<string, unknown>): { name: 
   return { name: formerToolNames[tool.name] ?? tool.name, args: tool.args };
 }
 
-/**
- * The one tool a `tool_call` called, read as Hermes reads it: `calls` (a list, or the
- * list as JSON text) with one entry, or the older `name` and `arguments`. Null for a
- * batch of several, or one it cannot read.
- */
+/** The one tool a `tool_call` called (`callsThrough`); null for a batch of several, or one it cannot read. */
 function calledThrough(args: Record<string, unknown>): { name: string; args: Record<string, unknown> } | null {
+  const calls = callsThrough(args);
+  return calls.length === 1 ? calls[0] : null;
+}
+
+/**
+ * The tools a `tool_call` called, read as Hermes reads it: `calls` (a list, or the list as
+ * JSON text), or the older `name` and `arguments`. Null for an entry it cannot read.
+ */
+function callsThrough(args: Record<string, unknown>): ({ name: string; args: Record<string, unknown> } | null)[] {
   let calls: unknown = args.calls ?? (typeof args.name === "string" ? [{ name: args.name, arguments: args.arguments }] : null);
   if (typeof calls === "string") calls = parsed(calls);
-  const list = Array.isArray(calls) ? calls : [calls];
-  if (list.length !== 1) return null;
-  const call = objectOf(list[0]);
-  const name = typeof call.name === "string" ? call.name.trim() : "";
-  if (name === "") return null;
-  return { name, args: objectOf(typeof call.arguments === "string" ? parsed(call.arguments) : call.arguments) };
+  return (Array.isArray(calls) ? calls : [calls]).map((entry) => {
+    const call = objectOf(entry);
+    const name = typeof call.name === "string" ? call.name.trim() : "";
+    if (name === "") return null;
+    return { name, args: objectOf(typeof call.arguments === "string" ? parsed(call.arguments) : call.arguments) };
+  });
 }
 
 /**

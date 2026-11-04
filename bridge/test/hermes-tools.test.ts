@@ -65,3 +65,24 @@ test("a to-do call Hermes keeps as its tool_call reads back as todo, each with t
   assert.ok(Array.isArray(tools[5].args.calls));
   assert.equal(tools[0].tool_call_id, "c1");
 });
+
+test("a to-do call in a batch Hermes keeps as one tool_call reads back as a todo of its own, the batch kept as it is, and a later merge builds on it", () => {
+  const initial = [
+    { id: "a", content: "one", status: "pending" },
+    { id: "b", content: "two", status: "pending" },
+  ];
+  const batch = { calls: [{ name: "todo_list", arguments: { todos: initial } }, { name: "terminal", arguments: { command: "pwd" } }] };
+  const rows = storedMessages([
+    { role: "tool", name: "tool_call", tool_call_id: "batch", timestamp: 1, args: batch, content: "{\"output\":\"/tmp\"}" },
+    { role: "tool", name: "todo_list", tool_call_id: "merge", timestamp: 2, args: { merge: true, todos: [{ id: "a", status: "completed" }] } },
+  ]);
+  const tools = rows.filter((row) => row.role === "tool");
+  assert.deepEqual(tools.map((row) => row.name), ["tool_call", "todo", "todo"]);
+  // The batch, with the other tool's call and result, as Hermes keeps it.
+  assert.deepEqual(tools[0].args, batch);
+  assert.equal(tools[0].content, "{\"output\":\"/tmp\"}");
+  assert.deepEqual(tools[1].args, { todos: initial });
+  assert.equal(new Set(tools.map((row) => row.tool_call_id)).size, 3);
+  assert.equal(tools[1].timestamp, 1);
+  assert.deepEqual(tools[2].args.todos, [{ id: "a", content: "one", status: "completed" }, initial[1]]);
+});
