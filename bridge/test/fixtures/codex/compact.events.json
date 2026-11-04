@@ -7,7 +7,7 @@
  {
   "type": "usage",
   "usage": {
-   "used": 24706,
+   "used": 25862,
    "max": 258400
   }
  },
@@ -15,14 +15,14 @@
   "type": "turn.end",
   "status": "complete",
   "usage": {
-   "used": 24706,
+   "used": 25862,
    "max": 258400
   },
   "spent": {
-   "tokens": 24706,
-   "seconds": 3.96
+   "tokens": 25862,
+   "seconds": 4.099
   },
-  "agentTurn": "01a13a20-5eb5-7c01-9166-1a209805cd9f"
+  "agentTurn": "01a1a5d9-1b6d-77f1-a29d-12e406fd59a1"
  },
  {
   "type": "status",
@@ -31,7 +31,7 @@
  {
   "type": "usage",
   "usage": {
-   "used": 15254,
+   "used": 30449,
    "max": 258400
   }
  },
@@ -42,17 +42,17 @@
  {
   "type": "compacted",
   "trigger": "manual",
-  "tokensBefore": 24706
+  "tokensBefore": 25862
  },
  {
   "type": "turn.end",
   "status": "complete",
   "usage": {
-   "used": 15254,
+   "used": 30449,
    "max": 258400
   },
   "spent": {
-   "seconds": 0.858
+   "seconds": 0.207
   }
  }
 ]

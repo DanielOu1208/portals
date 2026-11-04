@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { ConfigError, defaults, parseConfig, pathsFor } from "../src/config.ts";
 import { appManifest } from "../src/setup/install.ts";
-import { reportVersion } from "../src/providers/program.ts";
+import { VersionCheck } from "../src/providers/program.ts";
 import { log } from "../src/log.ts";
 
 test("Droid and gateway modules load from TypeScript under the runtime", async () => {
@@ -49,14 +49,16 @@ test("the installed bridge keeps the SDK's security override", () => {
     dependencies: { "@factory/droid-sdk": "0.10.0" }, overrides }).overrides, overrides);
 });
 
-test("every recorded Droid CLI release is accepted without a version warning", (t) => {
+test("every recorded Droid CLI release is accepted without a version warning", async (t) => {
+  // Loaded here, as the first test does, so that a module that fails to load fails only that one.
+  const { testedDroidVersions } = await import("../src/providers/droid/provider.ts");
   const warnings: string[] = [];
   t.mock.method(log, "warn", (message: string) => { warnings.push(message); });
   t.mock.method(log, "info", () => {});
-  const report = { name: "Droid", tested: ["0.236.0", "0.245.0", "0.247.0"], path: "/test/droid", setting: "droid.path" };
-  for (const version of report.tested) reportVersion({ ...report, version });
+  const check = new VersionCheck({ name: "Droid", tested: testedDroidVersions, path: "/test/droid", setting: "droid.path" });
+  for (const version of ["0.236.0", "0.245.0", "0.247.0", "1.0.0", "1.3.0"]) check.installedIs(version);
   assert.deepEqual(warnings, []);
-  reportVersion({ ...report, version: "0.999.0" });
+  check.installedIs("1.4.0");
   assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /0\.236\.0, 0\.245\.0, 0\.247\.0/);
+  assert.match(warnings[0], /newer than this bridge was tested with \(0\.236\.0, 0\.245\.0, 0\.247\.0, 1\.0\.0, 1\.3\.0\)/);
 });

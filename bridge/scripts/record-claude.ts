@@ -14,6 +14,7 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { InputQueue } from "../src/providers/claude/input.ts";
 import { childEnvironment, claudeVersion, queryOptions, thinkingBudget } from "../src/providers/claude/options.ts";
+import { cleaner, cleanStreamedPaths } from "./record-claude-clean.ts";
 
 // Records what Claude Code really sends, for the golden tests in test/claude-*.test.ts.
 // Each scenario runs Haiku in a scratch folder of its own under /tmp, with
@@ -71,7 +72,9 @@ const scenarios: Record<string, Scenario> = {
   tools: {
     mode: "acceptEdits",
     files: { "hello.txt": "hi\n" },
-    prompts: ["In hello.txt, use the Edit tool to change hi to hello. Then run `cat hello.txt` with the Bash tool. Finish with one short sentence."],
+    // The Read is asked for, for the tests' Read row: on Claude Code 2.1.318 Haiku edited
+    // the file without reading it first, and Edit let it (recorded 2026-11-04).
+    prompts: ["Read hello.txt with the Read tool. Then use the Edit tool to change hi to hello in it, and run `cat hello.txt` with the Bash tool. Finish with one short sentence."],
     answers: [allow],
   },
   approval: {
@@ -147,29 +150,7 @@ const scenarios: Record<string, Scenario> = {
   },
 };
 
-// MARK: Cleaning
-
 const home = homedir();
-
-function cleaner(cwd: string): (value: unknown, key?: string) => unknown {
-  const bare = cwd.replace(/^\/private/, "");
-  const paths = [cwd, bare].sort((a, b) => b.length - a.length);
-  const clean = (value: unknown, key?: string): unknown => {
-    // Lists that describe the user's setup, not the stream.
-    if (["tools", "mcp_servers", "slash_commands", "skills", "plugins", "agents", "plugin_errors", "terminal_slash_commands", "betas"].includes(key ?? "") && Array.isArray(value)) return [];
-    if (key === "signature" && typeof value === "string") return "signature";
-    if (key === "email" || key === "organization") return "redacted";
-    if (typeof value === "string") {
-      let text = value;
-      for (const path of paths) text = text.split(path).join("/tmp/aeriportal-cwd");
-      return text.split(home).join("/Users/dev");
-    }
-    if (Array.isArray(value)) return value.map((item) => clean(item));
-    if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, clean(v, k)]));
-    return value;
-  };
-  return clean;
-}
 
 // MARK: Running one
 
@@ -317,6 +298,7 @@ async function record(name: string, scenario: Scenario): Promise<void> {
   // Claude Code's project folder for the scratch folder (with an empty memory folder in it).
   rmSync(join(home, ".claude", "projects", cwd.replace(/[^A-Za-z0-9]/g, "-")), { recursive: true, force: true });
 
+  cleanStreamedPaths(lines, cwd);
   const clean = cleaner(cwd);
   mkdirSync(fixtures, { recursive: true });
   const path = join(fixtures, `${name}.jsonl`);

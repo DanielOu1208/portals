@@ -15,6 +15,7 @@ import type { AdoptMode, DeskAdoption, Provider, ProviderSession, SessionOptions
 import { RemoveRefused, SessionManager } from "../src/sessions/manager.ts";
 import { lastPreview, previewOf } from "../src/sessions/preview.ts";
 import { Registry, type ThreadChanges, type ThreadRecord } from "../src/sessions/registry.ts";
+import { Session } from "../src/sessions/session.ts";
 import { createThread, isEvent, runTurn, sessionCookie, startTestBridge, temporaryHome, TestClient, type Frame, type RpcFailure, type TestBridge } from "./helpers.ts";
 
 // The list every device shows (feature thread_sync, docs/sync-plan.md): the bridge's
@@ -541,6 +542,71 @@ test("a turn a crash cut off while the bridge was down, its agent's record showi
   // a stopped turn is not notified; the thread is still unseen.
   const told = await toldOfTurnEndedAway(t, [{ role: "assistant", text: "Running the tests now.", timestamp: 3 }], true);
   assert.deepEqual(told, []);
+});
+
+test("a turn a crash cut off while the bridge was down, its record ending on the person's message or a tool's row with no mark of it, is told as stopped, not notified as finished", async (t) => {
+  // Pi's file after a hard kill: the message only, mid-reply; the message and the row of a
+  // command it ran, mid-command. Its record says nothing more (no `lastTurnCutOff`). As for
+  // Stop, a stopped turn is not notified; the thread is still unseen.
+  assert.deepEqual(await toldOfTurnEndedAway(t, [{ role: "user", text: "Run the tests", timestamp: 3 }]), []);
+  assert.deepEqual(await toldOfTurnEndedAway(t, [
+    { role: "user", text: "Run the tests", timestamp: 3 },
+    { role: "assistant", text: "Running them now.", timestamp: 4 },
+    { role: "tool", name: "terminal", args: { command: "npm test" }, content: JSON.stringify({ output: "", exit_code: null, error: "stopped" }), tool_call_id: "call-1", timestamp: 5 },
+  ]), []);
+  // A steering message kept behind it changes nothing.
+  assert.deepEqual(await toldOfTurnEndedAway(t, [
+    { role: "user", text: "Run the tests", timestamp: 3 },
+    { role: "user", text: "and the linter", timestamp: 4, display_kind: "steer" } as StoredMessage,
+  ]), []);
+});
+
+test("how a turn that ended while the bridge was down ended, as what hears of turns' ends is told it: stopped where the agent's record ends mid-turn", async () => {
+  /** The status and text a session loaded at rest tells of the turn its record had running, from the agent's record `ended` after the person's message. */
+  const told = async (ended: StoredMessage[], cutOff?: boolean): Promise<[string, string][]> => {
+    const heard: [string, string][] = [];
+    const record: ThreadRecord = { id: "away", agent: "desk", cwd: "/w", title: null, model: "m", provider: "p", reasoningEffort: "", createdAt: 0, updatedAt: 0, origin: "phone", inTurn: true };
+    const thread = new Session(record, { has: () => false } as unknown as Registry, { listener: { turnEnded: (_id, status, text) => heard.push([status, text]) } });
+    const history: StoredMessage[] = [{ role: "user", text: "Run the tests", timestamp: 1 }, ...ended];
+    await thread.attach({
+      history: async () => history,
+      ...(cutOff === undefined ? {} : { lastTurnCutOff: () => cutOff }),
+      settings: () => ({ model: "m", provider: "p", reasoningEffort: "" }),
+      startTurn: () => {},
+      interrupt: async () => false,
+      close: async () => {},
+    } as unknown as ProviderSession);
+    // Told once, and so no longer running, and unseen.
+    assert.deepEqual([record.inTurn, record.unseen], [undefined, true]);
+    return heard;
+  };
+  const command: StoredMessage = { role: "tool", name: "terminal", args: { command: "npm test" }, content: JSON.stringify({ output: "" }), tool_call_id: "call-1", timestamp: 3 };
+  // Cut off mid-reply, and mid-command.
+  assert.deepEqual(await told([]), [["interrupted", ""]]);
+  assert.deepEqual(await told([{ role: "assistant", text: "Running them.", timestamp: 2 }, command]), [["interrupted", ""]]);
+  // Ended: with its reply, or with its failure.
+  assert.deepEqual(await told([command, { role: "assistant", text: "All pass.", timestamp: 4 }]), [["complete", "All pass."]]);
+  assert.deepEqual(await told([{ role: "assistant", text: "The model was overloaded.", timestamp: 2, display_kind: "failed_turn" }]), [["error", "The model was overloaded."]]);
+  // An agent whose own record says it was cut off is taken at its word, both ways.
+  assert.deepEqual(await told([{ role: "assistant", text: "Running them.", timestamp: 2 }], true), [["interrupted", ""]]);
+  assert.deepEqual(await told([{ role: "assistant", text: "All pass.", timestamp: 2 }], false), [["complete", "All pass."]]);
+});
+
+test("a turn that ended while the bridge was down on a plan, on questions or with a command nothing answered is still notified as finished", async (t) => {
+  // Each can be how a turn ends: Codex's plan mode ends on its plan, its questions asked
+  // without waiting on their row, and a `/compact` that failed on the message alone.
+  const plan = await toldOfTurnEndedAway(t, [
+    { role: "assistant", text: "Here is the plan.", timestamp: 3 },
+    { role: "tool", name: "plan", args: { content: "1. Read\n2. Write" }, content: JSON.stringify({ output: "Codex proposed this plan." }), tool_call_id: "plan-1", timestamp: 4 },
+  ]);
+  assert.deepEqual(plan.map((payload) => [payload.aeriportal.thread, payload.aeriportal.kind]), [["desk-away", "finished"]]);
+  assert.match(JSON.stringify(plan[0]), /Here is the plan\./);
+  const asked = await toldOfTurnEndedAway(t, [
+    { role: "tool", name: "clarify", args: { questions: [{ question: "Which folder?" }] }, content: JSON.stringify({ responses: [], unanswered: true }), tool_call_id: "ask-1", timestamp: 3 },
+  ]);
+  assert.deepEqual(asked.map((payload) => payload.aeriportal.kind), ["finished"]);
+  const command = await toldOfTurnEndedAway(t, [{ role: "user", text: "/compact", timestamp: 3 }]);
+  assert.deepEqual(command.map((payload) => payload.aeriportal.kind), ["finished"]);
 });
 
 test("two devices taking up the same desk session at once get one thread, and a mark made in between stays", async (t) => {
