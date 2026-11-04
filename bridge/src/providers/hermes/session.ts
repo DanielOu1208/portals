@@ -156,6 +156,12 @@ export class HermesSession implements ProviderSession {
    * Hermes did not take is let go of (`begin`).
    */
   private unwritten: string[] = [];
+  /**
+   * Hermes's replay after a reconnect had lost some of what it said (`truncated`): the
+   * thread has holes until Hermes's stored copy is taken in its place, which the next look
+   * at it does once at rest (`changedConversation`).
+   */
+  private gap = false;
 
   /**
    * `mark` is where Hermes's stored copy of the ongoing conversation stood before `loaded`
@@ -318,7 +324,7 @@ export class HermesSession implements ProviderSession {
    * bridge's own messages after it (`ownWrites`) is Hermes writing down a turn of the
    * bridge's own, and the mark moves on; any other is taken. A copy the bridge cannot
    * account for is taken rather than passed over, so a doubt costs a reload, never a
-   * message.
+   * message. After a replay with a `gap`, the copy is taken however it stands.
    */
   async changedConversation(): Promise<{ messages: StoredMessage[]; take(): void } | null> {
     if (!this.ongoing || this.closed || this.busyHere || !this.host.botChatMark) return null;
@@ -329,7 +335,7 @@ export class HermesSession implements ProviderSession {
     const ended = this.ownTurnEnded;
     const stale = () => this.closed || this.busyHere || this.turns !== turns || this.ownTurnEnded !== ended;
     const mark = await this.host.botChatMark(this.profile);
-    if (mark === null || stale() || mark === this.mark) return null;
+    if (mark === null || stale() || (mark === this.mark && !this.gap)) return null;
     // The live session again, as Hermes has it in its store: what was said elsewhere, and
     // what compressing it summarised away. A failed look is tried again with the next change.
     const loaded = await this.call<Loaded>("session.resume", { session_id: this.id, inline_images: false }, 120_000);
@@ -340,8 +346,9 @@ export class HermesSession implements ProviderSession {
       this.mark = mark;
       this.stored = messages;
       this.unwritten.splice(0, own.written);
+      this.gap = false;
     };
-    if (own.only) {
+    if (own.only && !this.gap) {
       read();
       return null;
     }
@@ -570,25 +577,30 @@ export class HermesSession implements ProviderSession {
         else this.report({ type: "status", text });
         return;
       }
-      case "tool.start":
+      case "tool.start": {
         if (typeof payload.tool_id !== "string" || typeof payload.name !== "string") return;
         this.streamed = "";
-        this.report({ type: "tool.start", id: payload.tool_id, name: payload.name, args: objectOf(payload.args), ...context(payload) });
+        const tool = shownTool(payload.name, objectOf(payload.args));
+        this.report({ type: "tool.start", id: payload.tool_id, ...tool, ...context(payload) });
         return;
-      case "tool.complete":
+      }
+      case "tool.complete": {
         if (typeof payload.tool_id !== "string" || typeof payload.name !== "string") return;
         this.streamed = "";
+        const tool = shownTool(payload.name, objectOf(payload.args));
+        // A to-do call's args may only change some items (`merge`): Hermes adds the whole list after it.
+        if (tool.name === "todo" && Array.isArray(payload.todos)) tool.args = { ...tool.args, todos: payload.todos };
         this.report({
           type: "tool.end",
           id: payload.tool_id,
-          name: payload.name,
-          args: objectOf(payload.args),
+          ...tool,
           ...context(payload),
           result: payload.result ?? null,
           ...(typeof payload.duration_s === "number" ? { durationSeconds: payload.duration_s } : {}),
           ...(typeof payload.inline_diff === "string" && payload.inline_diff !== "" ? { inlineDiff: payload.inline_diff } : {}),
         });
         return;
+      }
       case "request.cancel": {
         const id = typeof payload.id === "string" ? payload.id : null;
         const entry = id ? this.pending.get(id) : undefined;
@@ -737,6 +749,9 @@ export class HermesSession implements ProviderSession {
     } catch (error) {
       log.warn("could not follow a Hermes thread again", { session: this.id, error: (error as Error).message });
     }
+    // Events lost while away: Hermes's stored copy fills the holes, now if the turn has
+    // ended, else once Hermes writes it down (`sessions.changed`).
+    if (this.gap) this.mayHaveChangedElsewhere();
   }
 
   private resume(sameRun: boolean): Promise<void> {
@@ -771,7 +786,7 @@ export class HermesSession implements ProviderSession {
         let replay: Frame[] = [];
         let open = loaded.running ? (loaded.open_requests ?? []) : [];
         if (sameRuntime) {
-          const since = await this.host.call<{ events?: Frame[]; open_requests?: Loaded["open_requests"] }>("session.events.since", {
+          const since = await this.host.call<{ events?: Frame[]; truncated?: boolean; open_requests?: Loaded["open_requests"] }>("session.events.since", {
             session_id: this.runtimeID,
             last_seen: cursor,
             profile: this.profile,
@@ -779,6 +794,8 @@ export class HermesSession implements ProviderSession {
           if (!current()) return;
           replay = since.events ?? [];
           open = since.open_requests ?? [];
+          // Hermes keeps the latest 512 events or 4 MB of a session: older ones are gone.
+          if (since.truncated === true) this.gap = true;
         } else {
           // Another run of Hermes, or the session loaded anew: no replay crosses runs.
           if (this.turnOpen && !loaded.running) {
@@ -881,13 +898,87 @@ export class HermesSession implements ProviderSession {
  * Hermes's stored messages, as the app reads them: they are already in the shape
  * `session.resume` returns (docs/gateway-protocol.md, section 8), richer keys
  * (`display_content`, `display_commentary`, …) included, so they pass as they are.
- * Only roles the app reads are kept.
+ * Only roles the app reads are kept, and tool calls go by the names the app knows
+ * (`shownTool`), each to-do call with the whole list as it stood after it.
  */
 export function storedMessages(messages: unknown[]): StoredMessage[] {
-  return messages.filter(
-    (message): message is StoredMessage =>
-      typeof message === "object" && message !== null && ["user", "assistant", "tool", "compaction"].includes((message as Frame).role),
-  );
+  let todos: unknown[] | null = null;
+  return messages
+    .filter(
+      (message): message is StoredMessage =>
+        typeof message === "object" && message !== null && ["user", "assistant", "tool", "compaction"].includes((message as Frame).role),
+    )
+    .map((message) => {
+      if (message.role !== "tool" || typeof message.name !== "string") return message;
+      const tool = shownTool(message.name, objectOf(message.args));
+      if (tool.name === "todo") {
+        todos = todoList(tool.args, todos);
+        if (todos) tool.args = { ...tool.args, todos };
+      }
+      return tool.name === message.name && tool.args === message.args ? message : { ...message, ...tool };
+    });
+}
+
+/**
+ * Hermes's tools the app knows by the names they had before Hermes 0.22.0 renamed them:
+ * its to-do list, shown as a plan, and its background processes, as a terminal's.
+ */
+const formerToolNames: Record<string, string> = { todo_list: "todo", process_manage: "process" };
+
+/**
+ * A tool call as the app shows it (docs/gateway-protocol.md, section 9). One made through
+ * Hermes's `tool_call`, how a model calls a tool Hermes loads only when asked (`todo_list`
+ * and `process_manage` by default), is the tool it called: Hermes's live events name that
+ * one, but its stored copy keeps `tool_call`. A renamed tool goes by its former name.
+ */
+export function shownTool(name: string, args: Record<string, unknown>): { name: string; args: Record<string, unknown> } {
+  const called = name === "tool_call" ? calledThrough(args) : null;
+  const tool = called ?? { name, args };
+  return { name: formerToolNames[tool.name] ?? tool.name, args: tool.args };
+}
+
+/**
+ * The one tool a `tool_call` called, read as Hermes reads it: `calls` (a list, or the
+ * list as JSON text) with one entry, or the older `name` and `arguments`. Null for a
+ * batch of several, or one it cannot read.
+ */
+function calledThrough(args: Record<string, unknown>): { name: string; args: Record<string, unknown> } | null {
+  let calls: unknown = args.calls ?? (typeof args.name === "string" ? [{ name: args.name, arguments: args.arguments }] : null);
+  if (typeof calls === "string") calls = parsed(calls);
+  const list = Array.isArray(calls) ? calls : [calls];
+  if (list.length !== 1) return null;
+  const call = objectOf(list[0]);
+  const name = typeof call.name === "string" ? call.name.trim() : "";
+  if (name === "") return null;
+  return { name, args: objectOf(typeof call.arguments === "string" ? parsed(call.arguments) : call.arguments) };
+}
+
+/**
+ * The whole to-do list after a `todo` call, as Hermes keeps it: the list given; with
+ * `merge`, the list `before` with the items given changed or added by their `id`; the
+ * list `before` for a call that gives none, which only reads it. `before` is null when
+ * no call before said.
+ */
+function todoList(args: Record<string, unknown>, before: unknown[] | null): unknown[] | null {
+  if (!Array.isArray(args.todos)) return before;
+  if (args.merge !== true || !before) return args.todos;
+  const list = before.map((item) => ({ ...objectOf(item) }));
+  for (const item of args.todos.map(objectOf)) {
+    if (typeof item.id !== "string" || item.id === "") continue;
+    const known = list.find((entry) => entry.id === item.id);
+    if (!known) list.push(item);
+    // Only what the item gives changes, as in Hermes.
+    else for (const [key, value] of Object.entries(item)) if (value !== undefined && value !== "") known[key] = value;
+  }
+  return list;
+}
+
+function parsed(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
 }
 
 /**

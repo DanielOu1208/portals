@@ -440,3 +440,47 @@ test("a message sent while Hermes still runs a stopped turn is not sent, and fai
     assert.equal(calls.filter((call) => call === "prompt.submit").length, 1);
   } finally { await core.close(); }
 });
+
+for (const when of ["in the replay", "after it"] as const) {
+  test(`a replay that lost events while the connection was down (truncated) has the turn's reply taken from Hermes's stored copy once it ends ${when}`, async () => {
+    const record: ThreadRecord = { id: "stored", agent: "hermes", cwd: "/tmp", title: null, ...settings, createdAt: 0, updatedAt: 0, origin: "phone", ongoing: true };
+    const core = new Session(record, { has: () => false } as unknown as Registry);
+    const hello = { role: "user", text: "hello", timestamp: 0 } as const;
+    const loaded: Loaded = { session_id: "runtime", running: true, messages: [hello], inflight: { user: "hello", assistant: "" } };
+    const written: Loaded = { session_id: "runtime", running: false, messages: [hello, { role: "assistant", text: "ABCDE", timestamp: 1 }] };
+    let ended = false;
+    const host: HermesHost = {
+      call: async <T>(method: string) => {
+        if (method === "session.resume") return (ended ? written : loaded) as T;
+        if (method === "session.events.since") {
+          const end = when === "in the replay" ? [{ type: "message.complete", seq: 6, payload: { status: "complete", text: "ABCDE" } }] : [];
+          ended = end.length > 0;
+          return { events: [delta(5, "E"), ...end], latest_seq: 5 + end.length, truncated: true, open_requests: [] } as T;
+        }
+        return {} as T;
+      },
+      bind() {}, forget() {}, respond() {}, respondError() {},
+      // Where the stored copy stands does not move: it is the gap that has it read again.
+      botChatMark: async () => "mark",
+    };
+    const adapter = new HermesSession({ id: "stored", cwd: "/tmp", settings, ongoing: true }, "default", core.sink, host, loaded, "mark");
+    await core.attach(adapter);
+    await step();
+    const replies = () => core.messages.filter((message) => message.role === "assistant").map((message) => message.text);
+    try {
+      adapter.event("message.delta", 1, { text: "A" });
+      adapter.connectionLost();
+      await adapter.reconnected(true);
+      if (when === "after it") {
+        adapter.event("message.complete", 6, { status: "complete", text: "ABCDE" });
+        ended = true;
+        // Hermes writes the turn down and says its store changed.
+        await step();
+        adapter.mayHaveChangedElsewhere();
+      }
+      for (let tries = 0; tries < 100 && replies()[0] !== "ABCDE"; tries++) await new Promise((resolve) => setTimeout(resolve, 5));
+      assert.equal(core.isRunning, false);
+      assert.deepEqual(replies(), ["ABCDE"]);
+    } finally { await core.close(); }
+  });
+}
