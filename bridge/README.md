@@ -305,6 +305,12 @@ sign-in.
   `edits`, and no Auto-review of a thread's own: Cursor's ACP reads only its settings for
   that. Plan and Ask are not locks: the model can leave either by itself, and the thread
   shows "Switch Mode: agent" when it does.
+- **Full access leaves web searches unasked.** Once Cursor has run a thread in Full access,
+  it keeps Run Everything in that session's own store, and goes on searching the web and
+  fetching pages for it without asking: back in Agent, after a restart, and in forks of
+  the thread. The thread says so as it leaves Full access. Commands and edits should ask
+  again, since Cursor decides those by how its process was started (read from Cursor's
+  code, not tried). Start a new thread for one that asks before searching.
 - **Stop does not always end a command** Cursor started; its row then says it may still be
   running.
 - **Subagents** Cursor's Task tool starts are on the thread's subagents line, with what each

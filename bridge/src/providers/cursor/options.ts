@@ -130,6 +130,17 @@ export const cursorModeMeanings: Partial<Record<Exclude<ThreadMode, "default">, 
 };
 
 /**
+ * What a thread says as it leaves Full access, once Cursor has run its session with Run
+ * Everything. Cursor keeps that in the session's own store (`isRunEverything`, seen with
+ * 2026.10.22), and from then on searches the web and fetches pages for it without asking,
+ * on a Cursor not run with `--force` too, after a restart, and in a fork, which copies the
+ * store. Commands and edits it decides by how its process was started, so they follow the
+ * thread's mode. The store is Cursor's, and left alone (2026-11-03: "tell me is enough for cursor").
+ */
+export const leftFullAccessText =
+  "Cursor keeps part of Full access for this thread: it will go on searching the web and fetching pages without asking, also after a restart and in forks of this thread.";
+
+/**
  * Why a thinking level chosen for a thread on `default` is refused: nothing is set for
  * such a thread. (The app offers every level for a model that lists none.)
  */
