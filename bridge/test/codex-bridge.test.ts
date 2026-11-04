@@ -1909,6 +1909,31 @@ test("after a restart the bridge follows a thread Codex still runs at once; its 
   }
 });
 
+test("after a restart a thread with no message yet, which Codex still has loaded, opens empty, and its first message runs", async () => {
+  const first = await startTestBridge({ keepHome: true, providers: new Map([["codex", codexProvider()]]), config: { generalFolder: cwd } });
+  const phone = await TestClient.open(first);
+  const session = (await phone.call("session.create", { profile: "codex", cwd, title: "Not started" })).session_id;
+  await phone.close();
+  await first.close();
+
+  const second = await startTestBridge({ home: first.home, providers: new Map([["codex", codexProvider()]]) });
+  const again = await TestClient.open(second);
+  try {
+    // Codex lists no turns for it, neither to thread/read nor to thread/resume.
+    const resumed = await again.call("session.resume", { session_id: session, profile: "codex", inline_images: false });
+    assert.equal(resumed.running, false);
+    assert.deepEqual(resumed.messages, []);
+    assert.equal(resumed.info.title, "Not started");
+    const start = again.frames.length;
+    await send(session, "Hello.", again);
+    daemon.finishTurn(session, await daemon.activeTurn(session), "Hi.");
+    assert.equal((await completed(session, start, again)).payload.text, "Hi.");
+  } finally {
+    await again.close();
+    await second.dispose();
+  }
+});
+
 test("after a restart a thread Codex has not loaded comes back from thread/read, and is followed only when used", async () => {
   const turns = rewrite(recordedHistory("tools").turns, [
     [recordedThread("tools"), "x"],
@@ -4126,6 +4151,81 @@ test("requests the app has no card for are declined with a notice, or refused", 
       .map((event) => event.payload.text),
     ["Codex asked for more access (needs the network). Portals cannot grant that, so it goes on without it.", "The docs tool asked for input Portals cannot give, so it was declined."],
   );
+});
+
+test("an MCP tool Codex asks about is an approval card, and the answer goes back as Codex reads it; a form it asks for is still declined", async () => {
+  const session = await createThread();
+  const start = client.frames.length;
+  await send(session, "Shout hi.");
+  const turnId = await daemon.activeTurn(session);
+  const meta = { codex_approval_kind: "mcp_tool_call", persist: ["session", "always"], tool_params: { text: "hi" } };
+  const asked = daemon.request(session, "mcpServer/elicitation/request", {
+    threadId: session, turnId, serverName: "scratch", mode: "form", _meta: meta, message: 'Allow the scratch MCP server to run tool "shout"?', requestedSchema: { type: "object", properties: {} },
+  });
+  const card = await client.next((frame) => frame.method === "approval" && frame.params.session_id === session);
+  assert.equal(card.params.command, 'scratch {"text":"hi"}');
+  assert.equal(card.params.description, 'Allow the scratch MCP server to run tool "shout"?');
+  assert.deepEqual(card.params.choices, ["once", "session", "always", "deny"]);
+  client.answer(card.id, { choice: "session" });
+  assert.deepEqual((await asked).result, { action: "accept", content: null, _meta: { persist: "session" } });
+  const form = await daemon.request(session, "mcpServer/elicitation/request", { threadId: session, turnId, serverName: "docs", mode: "form", _meta: null, message: "Your name?", requestedSchema: { type: "object", properties: {} } });
+  assert.deepEqual(form.result, { action: "decline", content: null, _meta: null });
+  daemon.finishTurn(session, turnId);
+  await completed(session, start);
+  assert.deepEqual(
+    turnEvents(session, start).filter((event) => event.type === "status.update").map((event) => event.payload.text),
+    ["The docs tool asked for input Portals cannot give, so it was declined."],
+  );
+});
+
+/** An MCP tool approval as Codex asks it: one with no item or approval id to tell two calls apart. */
+function shoutApproval(threadId: string, turnId: string): Record<string, unknown> {
+  const meta = { codex_approval_kind: "mcp_tool_call", persist: ["session", "always"], tool_name: "shout", tool_params: { text: "hi" } };
+  return { threadId, turnId, serverName: "scratch", mode: "form", _meta: meta, message: 'Allow the scratch MCP server to run tool "shout"?', requestedSchema: { type: "object", properties: {} } };
+}
+
+test("two calls of one MCP tool with the same arguments are two cards, each answered on its own request", async () => {
+  const session = await createThread();
+  const start = client.frames.length;
+  await send(session, "Shout hi twice.");
+  const turnId = await daemon.activeTurn(session);
+  const first = daemon.request(session, "mcpServer/elicitation/request", shoutApproval(session, turnId));
+  const firstCard = await client.next((frame) => frame.method === "approval" && frame.params.session_id === session);
+  const second = daemon.request(session, "mcpServer/elicitation/request", shoutApproval(session, turnId));
+  const secondCard = await client.next((frame) => frame.method === "approval" && frame.params.session_id === session);
+  assert.notEqual(secondCard.id, firstCard.id);
+  client.answer(firstCard.id, { choice: "once" });
+  assert.deepEqual((await first).result, { action: "accept", content: null, _meta: null });
+  client.answer(secondCard.id, { choice: "deny" });
+  assert.deepEqual((await second).result, { action: "decline", content: null, _meta: null });
+  assert.equal(daemon.openRequests().filter((request) => request.threadId === session).length, 0);
+  daemon.finishTurn(session, turnId);
+  await completed(session, start);
+});
+
+test("the connection to Codex drops while two calls of one MCP tool with the same arguments wait: both cards stay, and each answer reaches the request Codex asks again", async () => {
+  const session = await createThread();
+  const start = client.frames.length;
+  await send(session, "Shout hi twice.");
+  const turnId = await daemon.activeTurn(session);
+  const first = daemon.request(session, "mcpServer/elicitation/request", shoutApproval(session, turnId));
+  const firstCard = await client.next((frame) => frame.method === "approval" && frame.params.session_id === session);
+  const second = daemon.request(session, "mcpServer/elicitation/request", shoutApproval(session, turnId));
+  const secondCard = await client.next((frame) => frame.method === "approval" && frame.params.session_id === session);
+  const from = daemon.calls.length;
+  daemon.dropAll();
+  // The bridge follows the thread again; Codex asks both again under new ids.
+  await daemon.waitForCall((call) => call.method === "thread/resume" && call.params.threadId === session, from);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  client.answer(secondCard.id, { choice: "deny" });
+  assert.deepEqual((await second).result, { action: "decline", content: null, _meta: null });
+  client.answer(firstCard.id, { choice: "once" });
+  assert.deepEqual((await first).result, { action: "accept", content: null, _meta: null });
+  // Two cards throughout: not asked again, not withdrawn.
+  assert.equal(client.frames.slice(start).filter((frame) => frame.method === "approval" && frame.params.session_id === session).length, 2);
+  assert.equal(turnEvents(session, start).some((event) => event.type === "request.cancel"), false);
+  daemon.finishTurn(session, turnId);
+  await completed(session, start);
 });
 
 test("a turn begun at the desk on a thread the bridge follows shows as a turn of its own", async () => {

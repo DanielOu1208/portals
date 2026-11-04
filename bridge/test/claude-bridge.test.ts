@@ -194,9 +194,9 @@ test("a chat with tools: the first message starts Claude with the thread id; row
   const edit = events.find((event) => event.type === "tool.complete" && event.payload.name === "patch").payload;
   assert.equal(edit.result.diff, "--- a/hello.txt\n+++ b/hello.txt\n@@ -1 +1 @@\n-hi\n+hello\n");
   // What it spent (feature turn_usage): the bridge's time for it, and Claude's result's tokens.
-  assert.equal(done.payload.turn_usage.tokens, 108_407);
+  assert.equal(done.payload.turn_usage.tokens, 82_277);
   const { turn_diff: changed, ...ended } = unspent(done.payload);
-  assert.deepEqual(ended, { status: "complete", text: 'I changed "hi" to "hello" in hello.txt, and `cat` confirms the file now reads "hello".', usage: { context_used: 27725, context_max: 1_000_000 } });
+  assert.deepEqual(ended, { status: "complete", text: 'I changed "hi" to "hello" in hello.txt, and `cat` confirms the file now reads "hello".', usage: { context_used: 28752, context_max: 1_000_000 } });
   // What the turn changed, from its edit's own diff (feature turn_diff).
   assert.deepEqual(changed, {
     files: [{ path: "hello.txt", status: "modified", added: 1, removed: 1, diff: "--- a/hello.txt\n+++ b/hello.txt\n@@ -1 +1 @@\n-hi\n+hello\n" }],
@@ -214,7 +214,7 @@ test("a chat with tools: the first message starts Claude with the thread id; row
   assert.equal(resumed.info.title, "hello.txt edit and verify");
   assert.deepEqual(
     resumed.messages.map((message: Frame) => message.role),
-    ["user", "assistant", "tool", "tool", "tool", "assistant"],
+    ["user", "tool", "assistant", "tool", "tool", "assistant"],
   );
 });
 
@@ -293,13 +293,13 @@ test("AskUserQuestion is a clarify card, and the answer goes back to Claude keye
       choices: ["Python", "Swift"],
       multi_select: false,
       header: "Language",
-      descriptions: { Python: "Prefer Python for this work", Swift: "Prefer Swift for this work" },
+      descriptions: { Python: "Python as your preferred language", Swift: "Swift as your preferred language" },
     },
   ]);
   client.answer(request.id, { answers: { q0: "Swift" } });
   const done = await completed(session, start);
   await playing;
-  assert.equal(done.payload.text, "You prefer Swift.");
+  assert.equal(done.payload.text, "Swift.");
   assert.deepEqual((answered[0] as { updatedInput: { answers: unknown } }).updatedInput.answers, { "Which language do you prefer?": "Swift" });
 });
 
@@ -659,9 +659,9 @@ test("/compact: with nothing to compact its turn fails with Claude Code's reason
     ["message.start", "thinking.delta", "thinking.delta", "session.compacted", "session.usage", "message.complete"],
   );
   const compacted = events.find((event) => event.type === "session.compacted");
-  assert.deepEqual(compacted.payload, { trigger: "manual", tokens_before: 25473 });
+  assert.deepEqual(compacted.payload, { trigger: "manual", tokens_before: 24966 });
   // Nothing was said: the summary and Claude Code's "Compacted" are not the reply.
-  assert.deepEqual(unspent(done.payload), { status: "complete", text: "", usage: { context_used: 2807, context_max: 1_000_000 } });
+  assert.deepEqual(unspent(done.payload), { status: "complete", text: "", usage: { context_used: 8584, context_max: 1_000_000 } });
 
   const resumed = await client.call("session.resume", { session_id: session });
   assert.deepEqual(
@@ -672,7 +672,7 @@ test("/compact: with nothing to compact its turn fails with Claude Code's reason
       ["user", "Reply with the single word hello. Do not use any tools.", undefined],
       ["assistant", "hello", undefined],
       ["user", "/compact", undefined],
-      ["compaction", "manual", 25473],
+      ["compaction", "manual", 24966],
     ],
   );
   const replayed = await client.call("session.events.since", { session_id: session, last_seen: compacted.seq - 1 });
@@ -875,12 +875,12 @@ test("background work keeps the process up past the idle time; the turn Claude b
   start = client.frames.length;
   await playEntries(query, entries.slice(ended), { from: 1, uuids });
   const done = await completed(session, start);
-  const line = 'Background command "Sleep for 3 seconds in background" completed (exit code 0)';
+  const line = 'Background command "Sleep 3 seconds in background" completed (exit code 0)';
   // The command's row on the subagents line ended with it (feature background_commands).
   const row = turnEvents(session, start).find((event) => event.type === "subagent.complete");
   assert.equal(row?.payload.kind, "command");
   assert.equal(row?.payload.status, "completed");
-  assert.equal(row?.payload.goal, "Sleep for 3 seconds in background");
+  assert.equal(row?.payload.goal, "Sleep 3 seconds in background");
   assert.deepEqual(
     turnEvents(session, start)
       .filter((event) => !event.type.startsWith("subagent."))
@@ -1166,7 +1166,7 @@ test("a thread whose process stopped while work ran in the background: the next 
   // Claude first says what did not finish, with an empty result of no turn.
   await playEntries(again, second);
   const done = await completed(session, start);
-  assert.match(done.payload.text, /^No, it isn't running anymore/);
+  assert.match(done.payload.text, /^Probably not: the notification says the task stopped/);
   assert.equal(turnEvents(session, start).filter((event) => event.type === "message.complete").length, 1);
 });
 
@@ -1226,7 +1226,7 @@ test("after a restart a cold thread comes back from Claude's stored history, wit
     assert.equal(resumed.info.title, "Edit hello");
     assert.deepEqual(
       resumed.messages.map((message: Frame) => (message.role === "tool" ? message.name : message.role)),
-      ["user", "assistant", "read_file", "patch", "terminal", "assistant"],
+      ["user", "read_file", "assistant", "patch", "terminal", "assistant"],
     );
     assert.equal(JSON.parse(resumed.messages[3].content).diff, "--- a/hello.txt\n+++ b/hello.txt\n-hi\n+hello\n");
     assert.equal(sessionQueries(secondRun.queries).length, 0);

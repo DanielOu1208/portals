@@ -1,3 +1,4 @@
+import { cutWhole } from "../../json.ts";
 import type { AgentRequest, ApprovalChoice, ClarifyQuestion, RequestAnswer, ThreadMode } from "../types.ts";
 import { changeApprovalText, displayCommand } from "./tools.ts";
 import type { FileUpdateChange, RequestId } from "./types/index.ts";
@@ -16,6 +17,11 @@ import type { FileUpdateChange, RequestId } from "./types/index.ts";
 //   answers them. They come as an `agentMessage` with `delivery: "async"` and
 //   `questions` (`asyncQuestions`), whose text is the questions with their options as
 //   a list: a `questions` event, which the bridge puts to the person as a card.
+// - `mcpServer/elicitation/request` asking whether an MCP tool may run (its `_meta` says
+//   `codex_approval_kind: "mcp_tool_call"`) is an approval card too. once is `accept`;
+//   session and always are `accept` with `_meta.persist` set to them, and only when that
+//   request's `_meta.persist` offers them; deny `decline`. Other elicitations (forms,
+//   sign-ins) have no card.
 // - Requests the app has no card for are declined with a notice, or refused.
 // - The plan a turn in Codex's plan mode ends with is a plan card of the bridge's own,
 //   which no request of Codex's stands behind (./session.ts).
@@ -25,6 +31,34 @@ type Params = Record<string, any>;
 export const commandApproval = "item/commandExecution/requestApproval";
 export const fileChangeApproval = "item/fileChange/requestApproval";
 export const userInput = "item/tool/requestUserInput";
+export const elicitation = "mcpServer/elicitation/request";
+
+/** An elicitation that asks whether an MCP tool may run, rather than for a form's answers. */
+export function isToolApproval(method: string, params: Params): boolean {
+  return method === elicitation && params._meta?.codex_approval_kind === "mcp_tool_call";
+}
+
+/** Whether a tool approval may be remembered for the thread (`session`) or for good (`always`). */
+function persists(params: Params, scope: "session" | "always"): boolean {
+  const offered = params._meta?.persist;
+  return Array.isArray(offered) ? offered.includes(scope) : offered === scope;
+}
+
+/** The card for an MCP tool Codex asks about: the tool with its arguments, and Codex's question. */
+function toolApprovalRequest(params: Params): AgentRequest {
+  const meta: Params = params._meta ?? {};
+  const server = typeof params.serverName === "string" ? params.serverName : "";
+  const tool = typeof meta.tool_title === "string" && meta.tool_title !== "" ? meta.tool_title : typeof meta.tool_name === "string" ? meta.tool_name : "";
+  const name = [server, tool].filter(Boolean).join("/") || "An MCP tool";
+  const args = meta.tool_params && typeof meta.tool_params === "object" ? JSON.stringify(meta.tool_params) : "";
+  const command = args && args !== "{}" ? `${name} ${args.length > 300 ? cutWhole(args, 300) + "…" : args}` : name;
+  const description = typeof params.message === "string" && params.message.trim() !== "" ? params.message.trim() : `Codex wants to use a tool of ${server || "an MCP server"}`;
+  const choices: ApprovalChoice[] = ["once"];
+  if (persists(params, "session")) choices.push("session");
+  if (persists(params, "always")) choices.push("always");
+  choices.push("deny");
+  return { kind: "approval", command, description, choices };
+}
 
 /** What `available` holds for an exec-policy amendment ("always"), if Codex offers one. */
 function amendment(params: Params): unknown {
@@ -42,6 +76,7 @@ function offers(params: Params, decision: string): boolean {
 
 /** The card for an approval request. `changes` are those of the file change it is about, when known. */
 export function approvalRequest(method: string, params: Params, cwd: string, changes: readonly FileUpdateChange[] | undefined): AgentRequest {
+  if (method === elicitation) return toolApprovalRequest(params);
   if (method === fileChangeApproval) {
     const list = changes ?? [];
     let description = typeof params.reason === "string" && params.reason.trim() !== "" ? params.reason : list.length > 1 ? "Codex wants to change files" : "Codex wants to change a file";
@@ -59,7 +94,11 @@ export function approvalRequest(method: string, params: Params, cwd: string, cha
 }
 
 /** The response to an approval request for the card's answer. */
-export function approvalResponse(method: string, params: Params, choice: ApprovalChoice): { decision: unknown } {
+export function approvalResponse(method: string, params: Params, choice: ApprovalChoice): unknown {
+  if (method === elicitation) {
+    if (choice === "deny") return { action: "decline", content: null, _meta: null };
+    return { action: "accept", content: null, _meta: choice === "session" || choice === "always" ? { persist: choice } : null };
+  }
   switch (choice) {
     case "once":
       return { decision: "accept" };
@@ -162,9 +201,10 @@ export function clarifyResponse(params: Params, answers: Record<string, string |
  * as that turn ended (by an app that cannot keep its card past the turn) is a no.
  */
 export function withdrawnResponse(method: string, reason: string, subAgent = false): unknown {
-  if (reason === "withdrawn" && subAgent) return method === userInput ? { answers: {} } : { decision: "decline" };
+  if (reason === "withdrawn" && subAgent) return method === userInput ? { answers: {} } : approvalResponse(method, {}, "deny");
   if (reason !== "interrupted") return null;
   if (method === userInput) return { answers: {} };
+  if (method === elicitation) return { action: "cancel", content: null, _meta: null };
   return { decision: "cancel" };
 }
 
@@ -177,9 +217,15 @@ export function responseFor(method: string, params: Params, answer: RequestAnswe
 
 /**
  * The same request as Codex sends it again after a reconnect (it may come with another
- * id): its method, item and approval id.
+ * id): its method, item and approval id; for a tool approval, which has neither, its
+ * thread, turn, server, tool, question and the tool's arguments. Two calls of one tool
+ * with the same arguments have the same key: telling them apart is the caller's.
  */
 export function requestKey(method: string, params: Params): string {
+  if (method === elicitation) {
+    const tool = params._meta?.tool_name ?? params._meta?.tool_title ?? "";
+    return `${method}|${params.threadId ?? ""}|${params.turnId ?? ""}|${params.serverName ?? ""}|${tool}|${params.message ?? ""}|${JSON.stringify(params._meta?.tool_params ?? null)}`;
+  }
   return `${method}|${params.itemId ?? ""}|${params.approvalId ?? ""}`;
 }
 

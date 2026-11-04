@@ -2,8 +2,8 @@
  "messages": [
   {
    "role": "user",
-   "text": "Run `echo first` with bash. Then run `echo second` with bash. Then say in one short sentence which of the two ran.",
-   "timestamp": 1791801893.749
+   "text": "Run `echo first` and `echo second` with bash, as two tool calls in the same message. Then say in one short sentence which of the two ran.",
+   "timestamp": 1793786813.83
   },
   {
    "role": "tool",
@@ -12,8 +12,8 @@
     "command": "echo first"
    },
    "content": "{\"output\":\"first\\n\",\"exit_code\":0}",
-   "tool_call_id": "call_CfcO5eVMed9EqwZAwkn1EYJS|fc_0a1317b6a91829f0016accba28fd1c87d0a4ba5ef428fe2fb8",
-   "timestamp": 1791801897.348
+   "tool_call_id": "call_mJmONWTKDx8rf4MPnIZB5DOW|fc_0b9bf91f84c780d1016aeb03c0368c87d0b618703a9dd45c21",
+   "timestamp": 1793786816.544
   },
   {
    "role": "tool",
@@ -22,15 +22,15 @@
     "command": "echo second"
    },
    "content": "{\"status\":\"blocked\",\"error\":\"Blocked by the user\"}",
-   "tool_call_id": "call_ArOPSbG58aH3lTJaPotAfpbY|fc_0a1317b6a91829f0016accba28fd3087d087bd0e56d3d6a69a",
-   "timestamp": 1791801897.349
+   "tool_call_id": "call_urzop2JPGV0ng4rn5u1JnRnB|fc_0b9bf91f84c780d1016aeb03c0369c87d09f90789b87847f53",
+   "timestamp": 1793786816.545
   },
   {
    "role": "assistant",
    "text": "`echo first` ran; `echo second` was blocked by the user.",
-   "timestamp": 1791801897.351,
+   "timestamp": 1793786816.548,
    "turn_usage": {
-    "tokens": 2818
+    "tokens": 2770
    }
   }
  ],

@@ -15,6 +15,14 @@ export interface ReadOptions {
 }
 
 /**
+ * Codex refused to list a thread's turns as it has none yet (0.166, on `thread/read` with
+ * its turns and on `thread/resume`, while it has the thread loaded).
+ */
+export function noTurnsYet(error: unknown): boolean {
+  return /list_turns is not supported/i.test((error as Error)?.message ?? "");
+}
+
+/**
  * Persisted turns, oldest first, without full-history hydration. Catch-up stops once
  * every turn it needs has been found; opening a thread still reads all of its history.
  * Older app-servers and legacy stores may not support paging.
@@ -57,7 +65,21 @@ export async function readThread(client: Pick<CodexCalls, "call">, threadId: str
     // Only an unsupported call or store: connection and read failures must stay visible.
     const unsupported = error instanceof CodexError && (error.code === -32601
       || (error.code === -32600 && /unknown variant [`'"]thread\/turns\/list[`'"]/.test(error.message)));
-    if (!unsupported) throw error;
-    return (await client.call("thread/read", { threadId, includeTurns: true })).thread;
+    if (!unsupported) {
+      // A thread with no turn yet that Codex still has loaded has none to list (0.166):
+      // read without them, it is empty.
+      if (noTurnsYet(error)) return empty(client, threadId);
+      throw error;
+    }
+    try {
+      return (await client.call<{ thread: Thread }>("thread/read", { threadId, includeTurns: true })).thread;
+    } catch (fallback) {
+      if (!noTurnsYet(fallback)) throw fallback;
+      return empty(client, threadId);
+    }
   }
+}
+
+async function empty(client: Pick<CodexCalls, "call">, threadId: string): Promise<Thread> {
+  return { ...(await client.call<{ thread: Thread }>("thread/read", { threadId, includeTurns: false })).thread, turns: [] };
 }

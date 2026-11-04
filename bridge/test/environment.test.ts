@@ -1,7 +1,7 @@
 import "./environment.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -48,6 +48,35 @@ test("inherited provider homes cannot escape the test's scratch home", (t) => {
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.equal(existsSync(result.stdout.trim()), false, "the subprocess removes its scratch home on exit");
   assert.deepEqual(readdirSync(outside), [], "even the poisoned provider roots are untouched");
+});
+
+test("the home a process came with stays known after HOME moves", (t) => {
+  const outside = mkdtempSync(join(tmpdir(), "portals-test-outside-"));
+  t.after(() => rmSync(outside, { recursive: true, force: true }));
+  const environment = new URL("./environment.ts", import.meta.url).href;
+  const result = spawnSync(process.execPath, ["--input-type=module", "-e", `
+    import { homedir } from "node:os";
+    const { realHome, testHome } = await import(${JSON.stringify(environment)});
+    console.log(JSON.stringify([realHome, testHome, homedir(), process.env.HOME]));
+  `], {
+    env: { ...process.env, HOME: outside, USERPROFILE: outside },
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const [realHome, testHome, home, variable] = JSON.parse(result.stdout);
+  assert.equal(realHome, outside);
+  assert.notEqual(testHome, outside);
+  assert.equal(home, testHome);
+  assert.equal(variable, testHome);
+});
+
+test("a script on the test helpers takes the real home from the environment, not from homedir()", () => {
+  const scripts = new URL("../scripts/", import.meta.url);
+  const onHelpers = readdirSync(scripts).filter((name) => name.endsWith(".ts") && readFileSync(new URL(name, scripts), "utf8").includes('"../test/helpers.ts"'));
+  assert.ok(onHelpers.includes("live-cursor.ts"), onHelpers.join());
+  for (const name of onHelpers) assert.doesNotMatch(readFileSync(new URL(name, scripts), "utf8"), /\bhomedir\(/, name);
 });
 
 test("the test-process preload does not replace a spawned child's explicit home", (t) => {
