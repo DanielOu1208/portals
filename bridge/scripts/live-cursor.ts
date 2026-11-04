@@ -1,9 +1,9 @@
 import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { crc32, deflateSync } from "node:zlib";
 import { CursorProvider } from "../src/providers/cursor/provider.ts";
 import { modelAt } from "../src/providers/cursor/models.ts";
+import { realHome } from "../test/environment.ts";
 import { isEvent, startTestBridge, TestClient } from "../test/helpers.ts";
 
 // A live check of the Cursor agent through a whole bridge: the test harness's bridge
@@ -33,7 +33,8 @@ function check(name: string, ok: boolean, note = ""): void {
   console.log(`${ok ? "PASS" : "FAIL"} ${name}${note ? ` — ${note}` : ""}`);
 }
 
-const provider = new CursorProvider({ command: join(homedir(), ".local/bin/cursor-agent"), directory: join(root, "state-cursor"), idleMs: 20_000 });
+// The helpers moved HOME to a scratch folder; Cursor alone is given the real one, for its sign-in and ~/.cursor.
+const provider = new CursorProvider({ command: join(realHome, ".local/bin/cursor-agent"), directory: join(root, "state-cursor"), idleMs: 20_000, env: { ...process.env, HOME: realHome }, cursorHome: join(realHome, ".cursor") });
 const bridge = await startTestBridge({ providers: new Map([["cursor", provider]]), temporaryFolders: [], config: { generalFolder: work } });
 const client = await TestClient.open(bridge);
 const long = 240_000;
