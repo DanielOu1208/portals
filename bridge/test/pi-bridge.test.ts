@@ -296,13 +296,13 @@ test("Stop is clear_queue then abort; the turn ends interrupted, and a message P
   const session = await createThread();
   const start = await send(session, "play stop");
   await event(session, start, "message.delta");
+  // The recording (Pi 1.5.0) goes on writing the reply after the recorder sent its message,
+  // and the stand-in does not wait for the bridge's: send it once the whole reply has come,
+  // so the end of the reply cannot land after the message's row on a busy machine.
+  await until(() => streamedText(turnEvents(session, start)) === "1\n2\n3\n");
   // A message while it works, which Pi queues behind the reply it is writing.
   assert.deepEqual(await client.call("prompt.submit", { session_id: session, text: "Then say the word banana." }), { status: "steered" });
   await until(() => pi.sentTo(session, "prompt").length === 2);
-  // The recording (Pi 1.5.0) goes on writing the reply after the message was sent: Stop
-  // once it has all come, as the recorder did, so the end of the reply cannot land after
-  // the message on a busy machine.
-  await until(() => streamedText(turnEvents(session, start)) === "1\n2\n3\n");
   assert.deepEqual(await client.call("session.interrupt", { session_id: session }), { status: "interrupted" });
   const done = await completed(session, start);
   assert.deepEqual(done.payload.status, "interrupted");
