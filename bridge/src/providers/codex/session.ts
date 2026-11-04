@@ -22,6 +22,7 @@ import type {
   TurnUsage,
 } from "../types.ts";
 import { CodexError } from "./client.ts";
+import { readThread, type ReadOptions } from "./read.ts";
 import { compactCommand, historyFromThread, subagentsCalledIn, userInputText } from "./history.ts";
 import { codexEffort, collaborationMode, policyFor, settledDefaults, threadModeFor, type DesktopDefaults, type WorkMode } from "./options.ts";
 import {
@@ -390,7 +391,7 @@ export class CodexSession implements ProviderSession {
       return;
     }
     if (thread.status?.type !== "notLoaded") {
-      await this.subscribe(thread.status?.type === "active");
+      await this.subscribe();
       thread = await this.read();
     }
     // What default comes to in this folder, for `/mode` and the mode chip.
@@ -467,9 +468,9 @@ export class CodexSession implements ProviderSession {
     await Promise.all(Array.from({ length: Math.min(settleReads, ids.length) }, reader));
   }
 
-  private async read(): Promise<Thread> {
+  private async read(options: ReadOptions = {}): Promise<Thread> {
     try {
-      return (await this.host.client.call("thread/read", { threadId: this.id, includeTurns: true })).thread;
+      return await readThread(this.host.client, this.id, options);
     } catch (error) {
       throw new Error(`Codex could not read this thread: ${(error as Error).message}`);
     }
@@ -477,19 +478,15 @@ export class CodexSession implements ProviderSession {
 
   /**
    * Follows the thread on the current connection (`thread/resume`); Codex then asks its
-   * open questions again. `running`: a turn may be under way, so the answer includes
-   * the turns, the only place that has the changes a waiting file-change approval is
-   * about (`thread/read` leaves out items in progress).
+   * open questions again. Persisted history is read separately; a pending file-change
+   * approval whose changes were missed reads its live item in `changesOf`.
    */
-  private subscribe(running = false): Promise<void> {
+  private subscribe(): Promise<void> {
     if (this.subscribed) return Promise.resolve();
     this.subscribing ??= (async () => {
       try {
-        const result = await this.host.client.call("thread/resume", running ? { threadId: this.id } : { threadId: this.id, excludeTurns: true });
+        const result = await this.host.client.call("thread/resume", { threadId: this.id, excludeTurns: true });
         this.learn({ model: result.model, effort: result.reasoningEffort, approvalPolicy: result.approvalPolicy, sandboxPolicy: result.sandbox, collaborationMode: result.collaborationMode?.mode });
-        for (const item of (result.thread?.turns?.at(-1)?.items ?? []) as Params[]) {
-          if (item.type === "fileChange" && Array.isArray(item.changes)) this.changes.set(item.id, item.changes);
-        }
         this.subscribed = true;
         this.following = true;
       } catch (error) {
@@ -1106,7 +1103,7 @@ export class CodexSession implements ProviderSession {
           this.runningUser = `/${compactCommand}`;
           this.sink.emit({ type: "turn.begin", user: this.runningUser, command: true });
           if (!this.subscribed) {
-            this.subscribe(true).catch((error: Error) => log.warn("could not follow a Codex thread a turn began in", { session: this.id, error: error.message }));
+            this.subscribe().catch((error: Error) => log.warn("could not follow a Codex thread a turn began in", { session: this.id, error: error.message }));
           }
         }
         if (item.type === "userMessage" && !this.turnOpen && this.external !== null && params.turnId === this.external) {
@@ -1119,7 +1116,7 @@ export class CodexSession implements ProviderSession {
           // Shown as running, it is followed, so its questions come here too: Codex tells of a
           // thread the bridge let go of (after a reconnect, say), but asks only who follows it.
           if (!this.subscribed) {
-            this.subscribe(true).catch((error: Error) => log.warn("could not follow a Codex thread a turn began in", { session: this.id, error: error.message }));
+            this.subscribe().catch((error: Error) => log.warn("could not follow a Codex thread a turn began in", { session: this.id, error: error.message }));
           }
         }
         // Taken for a `/compact` when it was loaded with nothing in it: a turn with a message
@@ -1260,7 +1257,7 @@ export class CodexSession implements ProviderSession {
     const reading = {};
     this.agentReads.set(thread, reading);
     try {
-      const read = (await this.host.client.call("thread/read", { threadId: thread, includeTurns: true })).thread;
+      const read = await readThread(this.host.client, thread);
       if (this.agentReads.get(thread) !== reading) return read;
       // Caught between two states (given more to do, or just finished): looked at again
       // a little later, a few times, before the read is taken for what it says.
@@ -1632,7 +1629,7 @@ export class CodexSession implements ProviderSession {
         this.gap = null;
         return;
       }
-      await this.subscribe(this.turnOpen);
+      await this.subscribe();
       if (this.turnOpen && this.turnID) await this.catchUp(this.turnID);
       else if (this.planCard) await this.planOvertaken(this.planCard);
       // Turns begun at the desk meanwhile, whose starts and messages were missed.
@@ -1696,7 +1693,7 @@ export class CodexSession implements ProviderSession {
 
   /** No turn has begun in the thread since the plan's. Throws when Codex cannot say. */
   private async planCurrent(card: PlanCard): Promise<boolean> {
-    const last = ((await this.read()).turns as Turn[] | undefined)?.at(-1);
+    const last = ((await this.read({ latest: true })).turns as Turn[] | undefined)?.at(-1);
     return !last || last.id === card.turn;
   }
 
@@ -1715,7 +1712,9 @@ export class CodexSession implements ProviderSession {
     // Turns known already, or told whole from the read: what Codex sent of them meanwhile is told.
     const told = new Set<string>();
     try {
-      const thread = await this.read();
+      const after = this.gap ? this.gap.after : this.lastKnownTurn;
+      const through = [after, this.external].filter((id): id is string => id !== null);
+      const thread = await this.read({ through: this.withBackgroundTurns(through) });
       this.terminalsEnded(thread);
       // A wait among what was missed names the sub-agents it waited for as live: their
       // nicknames, which only their own threads say, as their starts were missed too.
@@ -1817,7 +1816,7 @@ export class CodexSession implements ProviderSession {
         // cannot say, it is still to be told, at the next reconnect.
         let ended: Turn | undefined;
         try {
-          ended = ((await this.read()).turns as Turn[] | undefined)?.find((entry) => entry.id === turn.id);
+          ended = ((await this.read({ through: [turn.id] })).turns as Turn[] | undefined)?.find((entry) => entry.id === turn.id);
         } catch (error) {
           if (this.lastKnownTurn === turn.id) this.lastKnownTurn = before;
           this.gap?.shown.delete(turn.id);
@@ -1888,8 +1887,17 @@ export class CodexSession implements ProviderSession {
     this.report(this.stream.reconcile(turn));
   }
 
+  /** Turns needed to settle commands that outlived the turn they started in. */
+  private withBackgroundTurns(turns: string[]): string[] {
+    for (const command of this.terminalProcesses.values()) {
+      if (command.turn === null) return []; // Its turn is unknown: read the whole thread.
+      turns.push(command.turn);
+    }
+    return turns;
+  }
+
   private async catchUp(turnID: string): Promise<void> {
-    const thread = await this.read();
+    const thread = await this.read({ through: this.withBackgroundTurns([turnID]) });
     // Begun in an earlier turn, it may have ended while the connection was down too.
     this.terminalsEnded(thread);
     // Its waits among what was missed name the sub-agents as live (`joinMissed`).

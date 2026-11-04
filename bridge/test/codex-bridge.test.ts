@@ -5,7 +5,7 @@ import { basename, dirname, join } from "node:path";
 import { after, before, test } from "node:test";
 import { setLogLevel } from "../src/log.ts";
 import { machineWord } from "../src/platform.ts";
-import { CodexClient, socketConnector } from "../src/providers/codex/client.ts";
+import { CodexClient, CodexError, socketConnector } from "../src/providers/codex/client.ts";
 import { titleSchema } from "../src/providers/codex/naming.ts";
 import { CodexProvider } from "../src/providers/codex/provider.ts";
 import { CodexSession } from "../src/providers/codex/session.ts";
@@ -1267,7 +1267,8 @@ test("read back after a restart, a Codex wait names its sub-agents by the nickna
   const reads: { threadId: string; includeTurns?: boolean }[] = [];
   const host = {
     client: {
-      call: async (_method: string, params: { threadId: string; includeTurns?: boolean }) => {
+      call: async (method: string, params: { threadId: string; includeTurns?: boolean }) => {
+        if (method === "thread/turns/list") throw new CodexError(-32601, "Method not found");
         reads.push(params);
         if (!threads[params.threadId]) throw new Error("no such thread");
         return { thread: threads[params.threadId] };
@@ -2193,7 +2194,10 @@ test("a stored thread's sub-agent left at work keeps the turn that started it, h
     ],
   };
   const host = {
-    client: { call: async (_method: string, params: { threadId: string }) => ({ thread: params.threadId === "parent" ? parent : { status: { type: "idle" }, turns: [{ id: "ct", status: "completed", items: [] }] } }) },
+    client: { call: async (method: string, params: { threadId: string }) => {
+      if (method === "thread/turns/list") throw new CodexError(-32601, "Method not found");
+      return { thread: params.threadId === "parent" ? parent : { status: { type: "idle" }, turns: [{ id: "ct", status: "completed", items: [] }] } };
+    } },
     defaults: () => null,
     efforts: () => [],
     imagesDir: cwd,
@@ -2235,6 +2239,7 @@ test("after a restart a sub-agent's own sub-agent still at work comes back under
   const host = {
     client: {
       call: async (method: string, params: { threadId: string; turnId?: string }) => {
+        if (method === "thread/turns/list") throw new CodexError(-32601, "Method not found");
         if (method === "turn/interrupt") return interrupts.push([params.threadId, params.turnId]);
         return { thread: threads[params.threadId] };
       },
@@ -2273,7 +2278,8 @@ test("after a restart a sub-agent's many own sub-agents are read a few at a time
   let most = 0;
   const host = {
     client: {
-      call: async (_method: string, params: { threadId: string }) => {
+      call: async (method: string, params: { threadId: string }) => {
+        if (method === "thread/turns/list") throw new CodexError(-32601, "Method not found");
         reading += 1;
         most = Math.max(most, reading);
         await new Promise((resolve) => setTimeout(resolve, 5));
@@ -2305,7 +2311,10 @@ test("after a restart, a sub-agent that had left the line and ran again while th
     worker: { status: { type: "idle" }, turns: [{ id: "t2", status: "completed", startedAt: at - 5, completedAt: at, items: [{ type: "agentMessage", text: "Done." }] }] },
   };
   const host = {
-    client: { call: async (_method: string, params: { threadId: string }) => ({ thread: threads[params.threadId] }) },
+    client: { call: async (method: string, params: { threadId: string }) => {
+      if (method === "thread/turns/list") throw new CodexError(-32601, "Method not found");
+      return { thread: threads[params.threadId] };
+    } },
     defaults: () => null,
     efforts: () => [],
     imagesDir: cwd,
@@ -2337,6 +2346,7 @@ test("a read that would settle a sub-agent, answered after it was given more to 
   const host = {
     client: {
       call: async (method: string, params: { threadId: string }) => {
+        if (method === "thread/turns/list") throw new CodexError(-32601, "Method not found");
         if (method === "turn/interrupt") return interrupts.push(params);
         if (params.threadId === "parent") return { thread: parent };
         // The child's own thread, read to settle it: answered late.
@@ -2374,7 +2384,8 @@ test("overlapping child reads keep the newer completion, in either response orde
       let hold = false;
       const reads: ((thread: unknown) => void)[] = [];
       const host = {
-        client: { call: async (_method: string, params: { threadId: string }) => {
+        client: { call: async (method: string, params: { threadId: string }) => {
+          if (method === "thread/turns/list") throw new CodexError(-32601, "Method not found");
           if (params.threadId === "parent") return { thread: parent };
           if (!hold) return { thread: old };
           return new Promise((resolve) => reads.push((thread) => resolve({ thread })));
@@ -2391,7 +2402,7 @@ test("overlapping child reads keep the newer completion, in either response orde
       await provider.reconnected(Promise.resolve(new Set()));
       if (completionNotified) provider.agentNotification("child", "turn/completed", { turn: { id: "new", status: "completed" } });
       else await provider.reconnected(Promise.resolve(new Set()));
-      assert.equal(reads.length, 2);
+      await until(() => reads.length === 2);
       const active = { status: { type: "active", activeFlags: [] }, turns: [{ id: "new", status: "inProgress", items: [] }] };
       const done = { status: { type: "idle" }, turns: [{ id: "new", status: "completed", items: [{ type: "agentMessage", text: "New answer" }] }] };
       for (const index of olderFirst ? [0, 1] : [1, 0]) {
@@ -3542,6 +3553,7 @@ test("a message that fails while the bridge reads the thread again for a missed 
           if (message.id === undefined) return;
           const answer = (result: unknown) => queueMicrotask(() => handlers.message({ id: message.id, result }));
           if (message.method === "initialize") return answer({});
+          if (message.method === "thread/turns/list") return queueMicrotask(() => handlers.message({ id: message.id, error: { code: -32601, message: "Method not found" } }));
           if (message.method === "thread/resume") return answer({ thread: { turns: [] } });
           if (message.method === "thread/read") {
             if (phase === "initial") return answer({ thread: { status: { type: "idle" }, turns: [known] } });
