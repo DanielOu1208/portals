@@ -2,6 +2,7 @@ import { execFile, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
+import type { RecentFolder } from "../../folders.ts";
 import { log } from "../../log.ts";
 import { machineWord } from "../../platform.ts";
 import type { CommandAccess } from "../../portals/access.ts";
@@ -392,6 +393,11 @@ export class PiProvider implements Provider, PiHost {
       log.warn("could not ask the Mac whether Pi runs in a terminal", { error: (error as Error).message });
       throw new Error(`Portals could not check whether Pi is running in a terminal on the ${machineWord()} (${(error as Error).message}), so nothing was sent to this session. Send the message again.`);
     }
+  }
+
+  /** Where Pi's sessions ran, at the desk and here alike, from the headers of its session files. */
+  async recentFolders(): Promise<RecentFolder[]> {
+    return this.stored.folders();
   }
 
   /** Pi's sessions, newest first, each `open` while a Pi runs in a terminal in its folder. The bridge's own threads are among them: the bridge leaves those out. */

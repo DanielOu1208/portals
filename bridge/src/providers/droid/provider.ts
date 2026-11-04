@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { AutonomyLevel, DroidInteractionMode, ModelInfoSchema, type ModelInfo } from "@factory/droid-sdk/node";
+import type { RecentFolder } from "../../folders.ts";
 import { log } from "../../log.ts";
 import { machineWord } from "../../platform.ts";
 import { onPath, type CommandAccess } from "../../portals/access.ts";
@@ -312,6 +313,11 @@ export class DroidProvider implements Provider, DroidHost {
     } finally {
       if (this.deskReads.get(id) === read) this.deskReads.delete(id);
     }
+  }
+
+  /** Where Droid's sessions ran, at the desk and here alike, from the headers of its session files. */
+  async recentFolders(): Promise<RecentFolder[]> {
+    return this.files.folders();
   }
 
   async deskSessions(wanted: number): Promise<DeskSession[]> {

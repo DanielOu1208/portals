@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { readdir, readFile, readlink, realpath, stat } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
+import { firstLine, type RecentFolder } from "../../folders.ts";
 import { hostOS, machineWord, type HostOS } from "../../platform.ts";
 import { threadIDPattern } from "../../sessions/registry.ts";
 import { titleFrom } from "../titles.ts";
@@ -140,6 +141,8 @@ export class PiSessionFiles {
   private readonly read = new Map<string, { size: number; changed: number; session: StoredPiSession | null }>();
   /** Every session file there was at the last look, and when that was. */
   private sweep: { files: SessionFile[]; at: number } | null = null;
+  /** The folder each file's header names, by path, as last read; null for a file that is no session. */
+  private readonly heads = new Map<string, { size: number; changed: number; cwd: string | null }>();
 
   constructor(env: NodeJS.ProcessEnv, now: () => number = Date.now) {
     this.env = env;
@@ -187,6 +190,35 @@ export class PiSessionFiles {
       if (session?.id === id) return session;
     }
     return null;
+  }
+
+  /**
+   * Where Pi's sessions ran, each with when its file last changed (`recentFolders`): the
+   * desk's and the bridge's own. Only a file's header is read, and again only once the
+   * file has changed.
+   */
+  async folders(): Promise<RecentFolder[]> {
+    // Every file: a look that is no listing's, so it is not kept as the last one.
+    const files = await this.files(() => true);
+    const folders: RecentFolder[] = [];
+    for (const file of files) {
+      const known = this.heads.get(file.path);
+      let cwd = known && known.size === file.size && known.changed === file.changed ? known.cwd : undefined;
+      if (cwd === undefined) {
+        const line = await firstLine(file.path);
+        // Not read this time: nothing is remembered of it, and the next look reads it.
+        if (line === null) continue;
+        const header = parsed(line);
+        cwd = header?.type === "session" && typeof header.cwd === "string" && isAbsolute(header.cwd) ? header.cwd : null;
+        this.heads.set(file.path, { size: file.size, changed: file.changed, cwd });
+      }
+      if (cwd !== null) folders.push({ path: cwd, lastUsed: file.changed });
+    }
+    const there = new Set(files.map((file) => file.path));
+    for (const path of this.heads.keys()) {
+      if (!there.has(path)) this.heads.delete(path);
+    }
+    return folders;
   }
 
   /** Every session file there is, or those `wanted` picks by path, each with its size and when it last changed. A look at all of them is kept as the last one. */
