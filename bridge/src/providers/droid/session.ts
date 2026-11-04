@@ -104,6 +104,13 @@ function says(notification: Record<string, unknown>): boolean {
 const completionTurn = /^(execute|task|script)-completion(-batch)?:/;
 
 /**
+ * How long after Droid answered the thread's /compact its `session_compacted` is taken for
+ * that compaction: Droid says it compacted some milliseconds after its answer (CLI 1.0 and
+ * 1.3), and that word is not a compaction of its own.
+ */
+const compactionNoticeMs = 10_000;
+
+/**
  * What Droid's last call to the model took, as its context meter weighs it: what was sent
  * (`inputTokens`, which counts the cache written), what was read from the cache and what
  * came back (`lastCallTokenUsage`). Undefined when it says none.
@@ -149,6 +156,10 @@ export class DroidSession implements ProviderSession {
   private unlisten: (() => void) | null = null;
   private turn: Turn | null = null;
   private compacting = false;
+  /** Droid said it compacted while the thread's /compact ran (`compact`). */
+  private compactionHeard = false;
+  /** When the thread's /compact was taken with Droid's word of it still to come (`compactionNoticeMs`). */
+  private compactedAt: number | undefined;
   /** A compaction under way, also one a Stop left running (`compact`): the next turn waits for it. */
   private compaction: Promise<void> | null = null;
   private readonly compactionIds = new Set<string>();
@@ -553,7 +564,11 @@ export class DroidSession implements ProviderSession {
         const id = typeof notification.summaryId === "string" ? notification.summaryId : undefined;
         if (id && this.compactionIds.has(id)) return;
         if (id) this.compactionIds.add(id);
-        if (!this.compacting) {
+        // The word of a /compact the thread asked for, which came after Droid's answer to it: its marker is kept already.
+        const asked = this.compactedAt !== undefined && this.host.now() - this.compactedAt < compactionNoticeMs;
+        this.compactedAt = undefined;
+        if (this.compacting) this.compactionHeard = true;
+        else if (!asked) {
           // What Droid's last call took was before it: the meter reads what is left until the next (`refreshContext`).
           this.forgetCall();
           this.recordCompaction("auto", this.state?.contextUsage?.used);
@@ -622,18 +637,21 @@ export class DroidSession implements ProviderSession {
     const handle = this.handle;
     if (!handle || !this.state) return;
     try {
-      const stats = await handle.getContextStats();
+      const [stats, breakdown] = await Promise.all([handle.getContextStats(), this.breakdownOf(handle)]);
       if (this.closed || this.handle !== handle || !Number.isFinite(stats.used) || stats.used < 0
         || !Number.isFinite(stats.limit) || stats.limit <= 0) return;
       const exact = stats.accuracy !== ContextStatsAccuracy.Estimated;
       // No call since a compaction: Droid's count here keeps what it took out, so the meter
       // reads what is left, as Droid's /context counts it (`get_context_breakdown`, from the
       // conversation since its latest compaction summary).
-      const left = exact || this.contextUsed !== undefined || !this.compacted() ? undefined : await this.leftOf(handle);
-      if (this.closed || this.handle !== handle) return;
+      const left = exact || this.contextUsed !== undefined || !this.compacted() ? undefined : breakdown?.used;
+      // What Droid's own meter weighs against, its compaction's limit (`contextBudget`): Droid's
+      // limit here is larger, and a thread whose last call took 20,037 read 2% of 872,000 where
+      // Droid's /context read 10% of 200,000 (CLI 1.3.0, claude-haiku-5-5).
+      const max = breakdown?.budget ?? stats.limit;
       const usage = exact || this.contextUsed === undefined
-        ? { used: exact ? stats.used : left ?? stats.used, max: stats.limit, ...(exact ? {} : { estimated: true }) }
-        : { used: this.contextUsed, max: stats.limit };
+        ? { used: exact ? stats.used : left ?? stats.used, max, ...(exact ? {} : { estimated: true }) }
+        : { used: this.contextUsed, max };
       this.state.contextUsage = usage;
       this.sink.emit({ type: "usage", usage });
       if (this.turn) this.saveSoon(); else this.save();
@@ -656,11 +674,16 @@ export class DroidSession implements ProviderSession {
   /** The thread's conversation was compacted, here or by Droid (its marker is kept). */
   private compacted(): boolean { return this.state?.messages.some((message) => message.role === "compaction") === true; }
 
-  /** What is left of the conversation since its latest compaction, as Droid's /context estimates it; undefined when it cannot say. */
-  private async leftOf(handle: DroidHandle): Promise<number | undefined> {
+  /**
+   * What Droid's /context says: what is left of the conversation since its latest compaction,
+   * as it estimates it, and the budget its meter weighs that against; each undefined when it
+   * cannot say.
+   */
+  private async breakdownOf(handle: DroidHandle): Promise<{ used?: number; budget?: number } | undefined> {
     try {
-      const { usedTokens } = await handle.getContextBreakdown();
-      return Number.isFinite(usedTokens) && usedTokens >= 0 ? usedTokens : undefined;
+      const { usedTokens, contextBudget } = await handle.getContextBreakdown();
+      return { ...(Number.isFinite(usedTokens) && usedTokens >= 0 ? { used: usedTokens } : {}),
+        ...(Number.isFinite(contextBudget) && contextBudget > 0 ? { budget: contextBudget } : {}) };
     } catch {
       return undefined;
     }
@@ -686,6 +709,7 @@ export class DroidSession implements ProviderSession {
   private async compact(turn: Turn, handle: DroidHandle, instructions: string): Promise<void> {
     const before = this.state?.contextUsage?.used;
     this.compacting = true;
+    this.compactionHeard = false;
     turn.stream.accept({ type: "working_state_changed", state: DroidWorkingState.CompactingConversation });
     try {
       let result: Awaited<ReturnType<DroidHandle["compact"]>>;
@@ -735,6 +759,7 @@ export class DroidSession implements ProviderSession {
       // Also after a Stop that came too late to stop it: the SDK's session is now the
       // compacted one, which the process runs.
       this.use(next);
+      if (!this.compactionHeard) this.compactedAt = this.host.now();
       this.sink.emit({ type: "compacted", trigger: "manual", ...(before === undefined ? {} : { tokensBefore: before }) });
       // The meter too: the turn that asked for it reads it as it ends (`run`), unless a Stop ended it first.
       if (turn.ended) void this.refreshContext();
