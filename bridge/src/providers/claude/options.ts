@@ -12,7 +12,7 @@ import type { ThreadMode } from "../types.ts";
 // default, gives the child an API key instead.
 
 /** The Claude Code release the bridge was built and tested against (docs/bridge-spikes.md). */
-export const testedClaudeVersion = "2.1.299";
+export const testedClaudeVersion = "2.1.318";
 
 /** Claude's own thinking levels. */
 export const claudeEfforts: readonly EffortLevel[] = ["low", "medium", "high", "xhigh", "max"];
