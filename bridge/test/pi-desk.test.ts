@@ -7,6 +7,7 @@ import { readOnlyText } from "../src/gateway/methods.ts";
 import { machineWord } from "../src/platform.ts";
 import { foldersOf, lsofName, PiSessionFiles, procIsTerminalPi, procReadsAtOnce, procTerminalPis, sessionSummary, sessionTitle, terminalMayHaveIt, terminalPis, workingFolders } from "../src/providers/pi/desk.ts";
 import { findSessionFile, sessionFileId, sessionFolderName, sessionFolders } from "../src/providers/pi/history.ts";
+import { threadArguments } from "../src/providers/pi/options.ts";
 import type { PiProvider } from "../src/providers/pi/provider.ts";
 import { isEvent, RpcFailure, startTestBridge, streamedText, TestClient, type Frame, type TestBridge } from "./helpers.ts";
 import { fixtureCwd, sessionText } from "./pi-fixtures.ts";
@@ -535,7 +536,7 @@ test("Pi: a session is not continued while a Pi runs in a terminal in its folder
   assert.equal(streamedText(first), "Working. You said: Hello.");
   assert.deepEqual(notices(first), []);
   const [started] = pi.starts(id);
-  assert.deepEqual(started.args, ["--mode", "rpc", "--session-id", id]);
+  assert.deepEqual(started.args, threadArguments(id, null, pi.agentDir));
   assert.equal(started.cwd, at("projects/app"));
   // Pi came back on the session's own model, level and name: nothing was set.
   assert.deepEqual(pi.sentTo(id).map((sent) => sent.type).slice(0, 3), ["get_state", "get_session_stats", "prompt"]);
@@ -1254,7 +1255,7 @@ test("Pi: a session is forked by Pi itself into a new thread with its history, a
   // The copy is the bridge's own session: its turn runs though a Pi is in a terminal in the folder.
   assert.equal(streamedText(await turn(client, fork, "Hello.")), "Working. You said: Hello.");
   const [, runner] = pi.starts(fork);
-  assert.deepEqual(runner.args, ["--mode", "rpc", "--session-id", fork]);
+  assert.deepEqual(runner.args, threadArguments(fork, null, pi.agentDir));
   // Pi is given the thread's title as the copy's name, so the desk tells the two apart.
   assert.deepEqual(pi.sentTo(fork, "set_session_name").map((sent) => sent.name), ["Edit hello (fork)"]);
   assert.equal(readFileSync(file, "utf8"), original);

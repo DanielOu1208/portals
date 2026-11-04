@@ -1,5 +1,6 @@
 import { statSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { onPath, type CommandAccess } from "../../portals/access.ts";
 import { codexEffort } from "../codex/options.ts";
 import { programVersion } from "../program.ts";
@@ -24,6 +25,9 @@ export const testedPiVersions = ["1.1.0", "1.5.0"] as const;
  * 1.1.0), so a turn on it could run for ever.
  */
 export const minimumPiVersion = "1.1.0";
+
+/** The extension beside this module, both in the source tree and the built package. */
+const permissionExtension = fileURLToPath(new URL(import.meta.url.endsWith(".ts") ? "./permission-extension.ts" : "./permission-extension.js", import.meta.url));
 
 /** `pi --version`, as "1.1.0"; null when it cannot be run. */
 export function piVersion(piPath: string, env: NodeJS.ProcessEnv): Promise<string | null> {
@@ -85,7 +89,7 @@ export function piLevel(level: string, supported: readonly string[]): string | n
  * project's file is not named: whether Pi trusts the project is Pi's to say.
  */
 export function threadArguments(thread: string, append: string | null, agentDir: string): string[] {
-  const args = ["--mode", "rpc", "--session-id", thread];
+  const args = ["--mode", "rpc", "--session-id", thread, "-e", permissionExtension];
   if (!append) return args;
   const own = join(agentDir, "APPEND_SYSTEM.md");
   if (isFile(own)) args.push("--append-system-prompt", own);

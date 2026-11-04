@@ -19,6 +19,7 @@ import {
   type DeskAdoption,
   type DeskSession,
   type ModelCatalog,
+  type ModeOption,
   type Provider,
   type ProviderSession,
   type SessionOptions,
@@ -37,8 +38,7 @@ import { PiSession, type PiHost } from "./session.ts";
 
 // Pi as an agent of the bridge (`pi` in profiles.list). It runs the installed `pi` in its
 // RPC mode, one process per thread in use, with the user's own settings, extensions,
-// skills and sign-ins. Pi does not ask before it runs a command or edits a file, and
-// through the bridge it does the same.
+// skills and sign-ins. Its permission modes use a small extension loaded per thread.
 //
 // Which models Pi can run and which commands it has is only known from a running Pi, so
 // the bridge asks a short-lived one that has no session (`pi --mode rpc --no-session`)
@@ -173,6 +173,26 @@ export function piCommands(listed: PiCommandInfo[]): AgentCommand[] {
 }
 
 export class PiProvider implements Provider, PiHost {
+  readonly supportsModes = true;
+  readonly modesWaitForTurn = true;
+  readonly modeOptions = [
+    { id: "default", label: "Default", description: "Runs without asking, as Pi does in a terminal. Your own extensions still apply." },
+    { id: "ask", label: "Ask", description: "Asks before bash, write and edit in this Pi. Subagents are outside the gate; this is not a security boundary." },
+    { id: "edits", label: "Accept edits", description: "Allows write and edit; asks before bash in this Pi. Subagents are outside the gate; this is not a security boundary." },
+    { id: "plan", label: "Plan", description: "Allows only read, grep, find and ls in this Pi. Other extensions and subagents are outside the gate; this is not a security boundary." },
+    { id: "full", label: "Full access", description: "Runs without asking. Your own extensions still apply." },
+  ] satisfies ModeOption[];
+  readonly modeMeanings = {
+    ask: "asks before bash, write and edit in this Pi. Subagents are outside the gate; this is not a security boundary",
+    edits: "allows edits and asks before bash in this Pi. Subagents are outside the gate; this is not a security boundary",
+    plan: "allows only read, grep, find and ls in this Pi. Other extensions and subagents are outside the gate; this is not a security boundary",
+    full: "runs without asking; your own extensions still apply",
+  };
+
+  defaultMode(): "full" {
+    return "full";
+  }
+
   readonly piPath: string;
   readonly instructions: string | null;
   readonly pool: WarmPool;
@@ -223,7 +243,7 @@ export class PiProvider implements Provider, PiHost {
       name: "pi",
       kind: "pi",
       displayName: "Pi",
-      description: `Pi on this ${machineWord()}, with your own settings, extensions and sign-ins. It does not ask before it acts.`,
+      description: `Pi on this ${machineWord()}, with your own settings, extensions and sign-ins. Pick a mode to ask before commands and edits. Subagents are outside the gate.`,
       model: this.catalog?.models.model ?? "",
       provider: this.catalog?.models.provider ?? "",
     };
