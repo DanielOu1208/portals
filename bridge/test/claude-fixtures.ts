@@ -111,6 +111,8 @@ export const testCommands: SlashCommand[] = [
 
 /** What every FakeQuery answers for `/usage` (its own `/usage`), until a test says otherwise; an error is thrown. */
 export const planUsage: { answer: PlanUsage | Error } = { answer: new Error("not set") };
+/** What `mcpServerStatus` answers, in turn: each ask takes the first, the last staying. */
+export const mcpStatus: { answers: { name: string; status: string; error?: string; tools?: unknown[] }[][] } = { answers: [[]] };
 
 export const maxPlanUsage: PlanUsage = {
   subscription_type: "max",
@@ -244,6 +246,10 @@ export class FakeQuery implements QueryLike {
     this.calls.push(["usage", options]);
     if (planUsage.answer instanceof Error) throw planUsage.answer;
     return structuredClone(planUsage.answer);
+  }
+  async mcpServerStatus(): Promise<{ name: string; status: string; error?: string; tools?: unknown[] }[]> {
+    this.calls.push(["mcpServerStatus"]);
+    return structuredClone(mcpStatus.answers.length > 1 ? mcpStatus.answers.shift()! : mcpStatus.answers[0]);
   }
   close(): void {
     this.calls.push(["close"]);

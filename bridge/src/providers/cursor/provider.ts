@@ -1,4 +1,5 @@
 import { cursorUsage, type PlanLimitsOptions } from "../planLimits.ts";
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { cpSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -12,6 +13,7 @@ import { version } from "../../version.ts";
 import { AcpClient, AgentStopped, refuse } from "../acp/client.ts";
 import type { AvailableCommand, ConfigOption, InitializeResult, RpcId } from "../acp/protocol.ts";
 import { reportVersion } from "../program.ts";
+import { mcpCommand, mcpStatusText, type McpServer, type McpServerState } from "../mcpStatus.ts";
 import { DeskRefused, type AdoptMode, type AgentCommand, type AgentProfile, type DeskAdoption, type ModelCatalog, type ModeOption, type Provider, type ProviderSession, type SessionOptions, type SessionSettings, type SessionSink, type StoredMessage, type UsageReport } from "../types.ts";
 import type { RecentFolder } from "../../folders.ts";
 import type { SearchFile } from "../../search/readers.ts";
@@ -166,8 +168,32 @@ function processKey(cwd: string, forced: boolean): string {
   return forced ? `${cwd}\0force` : cwd;
 }
 
+/** What `cursor-agent mcp list` says of a server, in `/mcp`'s words; an error is `Error: …`. */
+const cursorMcpStates: Record<string, McpServerState> = {
+  ready: "connected", loading: "starting", requires_authentication: "signIn", disabled: "off", "not loaded (needs approval)": "approval",
+};
+
+/** `/mcp` from what `cursor-agent mcp list` printed: a line a server, `name: state`. */
+export function cursorMcpText(printed: string): string {
+  const servers = printed.replace(/\u001b\[[0-9;]*[A-Za-z]/g, "").split("\n").flatMap((line): McpServer[] => {
+    const at = line.indexOf(": ");
+    if (at <= 0 || line.startsWith("No MCP servers configured")) return [];
+    const name = line.slice(0, at).trim(), said = line.slice(at + 2).trim();
+    const error = /^Error: (.*)$/s.exec(said)?.[1];
+    if (error !== undefined) return [{ name, state: "failed", detail: error }];
+    const state = cursorMcpStates[said];
+    return [state ? { name, state } : { name, state: "unknown", detail: said }];
+  });
+  return mcpStatusText(cursorName, servers, {
+    signIn: "To sign in to one, run cursor-agent mcp login <name> on the host.",
+    approve: "To approve one, run cursor-agent mcp enable <name> on the host, in the thread's folder.",
+  });
+}
+
 export class CursorProvider implements Provider, CursorHost {
   readonly supportsModes = true;
+  /** Its command the bridge runs itself, through `cursor-agent mcp list`: Cursor's ACP has none for it. */
+  readonly executes = ["mcp"] as const;
   /**
    * Cursor's three modes alone (`cursorMode`), in the app's own words where they fit: with
    * none given, the app offered its five, and full access and accept edits were refused.
@@ -324,8 +350,23 @@ export class CursorProvider implements Provider, CursorHost {
     return cursorCatalog({ id: this.profile.name, name: cursorName }, this.kept.models);
   }
 
-  async commands(): Promise<AgentCommand[]> {
-    return this.kept.commands;
+  async commands(thread?: { id: string; cwd: string }): Promise<AgentCommand[]> {
+    const mcp = mcpCommand(() => this.mcpStatus(thread?.cwd));
+    return [mcp, ...this.kept.commands.filter((command) => command.name !== mcp.name)];
+  }
+
+  /**
+   * How the MCP servers of a thread in `cwd` are (`/mcp`), as `cursor-agent mcp list` run
+   * there says: it reads the folder's `.cursor/mcp.json` and the user's, and connects to
+   * each for the moment it asks.
+   */
+  private mcpStatus(cwd: string | undefined): Promise<string> {
+    return new Promise((resolve, reject) => {
+      execFile(this.command, ["mcp", "list"], { cwd: cwd ?? (this.env.HOME || homedir()), env: { ...this.env, NO_COLOR: "1" }, timeout: 60_000, killSignal: "SIGKILL" }, (error, stdout, stderr) => {
+        if (error) reject(new Error(`${cursorName} did not say how its MCP servers are: ${(stderr.trim() || error.message).split("\n")[0]}`));
+        else resolve(cursorMcpText(stdout));
+      });
+    });
   }
 
   // MARK: Threads

@@ -280,6 +280,29 @@ test("a turn Hermes cannot run fails with its reason", async () => {
   assert.match(done.payload.text, /not connected to any AI provider/);
 });
 
+test("/mcp says how the profile's MCP servers are, as Hermes last found them; a Hermes from before that says it cannot", async () => {
+  const created = await client.call("session.create", { profile: "aeri", source: "tui", cwd });
+  const thread = created.session_id as string;
+  const mcp = async () => (await client.call("slash.exec", { session_id: thread, command: "mcp", profile: "aeri" })).output as string;
+  const catalog = await client.call("commands.catalog", { session_id: thread, profile: "aeri" });
+  assert.ok(catalog.pairs.some(([name]: [string]) => name === "/mcp"));
+  hermes.mcpServers = [
+    { name: "docs", transport: "stdio", tools: 3, connected: true, disabled: false, status: "connected", source: "config", plugin: null },
+    { name: "web", transport: "http", tools: 0, connected: false, disabled: false, status: "failed", source: "config", plugin: null },
+    { name: "notes", transport: "stdio", tools: 0, connected: false, disabled: false, status: "lazy", source: "plugin", plugin: "notes" },
+    { name: "old", transport: "stdio", tools: 0, connected: false, disabled: true, status: "disabled", source: "config", plugin: null },
+    { name: "new", transport: "stdio", tools: 0, connected: false, disabled: false, status: "configured", source: "config", plugin: null },
+  ];
+  try {
+    assert.equal(await mcp(), ["Aeri MCP servers:", "docs: connected, 3 tools", "new: not started", "notes: starts when first used", "old: off", "web: failed"].join("\n"));
+    assert.deepEqual(hermes.callsOf("mcp.servers.status").at(-1)!.params, { profile: "aeri" });
+    hermes.mcpServers = null;
+    await assert.rejects(mcp(), /This Hermes cannot say how its MCP servers are: a newer one can\./);
+  } finally {
+    hermes.mcpServers = [];
+  }
+});
+
 test("model and thinking level change for the thread only, through Hermes's own /model", async () => {
   const thread = await createThread();
   assert.deepEqual(await client.call("config.set", { key: "model", value: "google/gemini-3.8-flash --provider gmi --session", session_id: thread, profile: "hermes" }), {});

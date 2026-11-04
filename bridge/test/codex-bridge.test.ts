@@ -640,9 +640,60 @@ test("a message Codex says no to while its turn runs waits on disk as one Codex 
   await until(() => turnEvents(session, start).filter((event) => event.type === "message.complete").length === 2);
 });
 
+test("/mcp says how Codex runs the thread's MCP servers, every page; a thread Codex has not loaded gets them as set up", async () => {
+  const session = await createThread();
+  const mcp = async () => (await client.call("slash.exec", { session_id: session, command: "mcp", profile: "codex" })).output as string;
+  daemon.mcpServers = [
+    { name: "docs", runtimeStatus: "connected", authStatus: "unsupported", tools: { search: {}, fetch: {} }, toolsError: null },
+    { name: "github", runtimeStatus: "authenticationRequired", authStatus: "notLoggedIn", tools: {}, toolsError: null },
+    { name: "db", runtimeStatus: "failed", authStatus: "unsupported", tools: {}, toolsError: "MCP startup failed: spawn db-server ENOENT" },
+    { name: "old", runtimeStatus: "disabled", authStatus: "unsupported", tools: {}, toolsError: null },
+    { name: "slow", runtimeStatus: "starting", authStatus: "unsupported", tools: { look: {} }, toolsError: null },
+  ];
+  try {
+    let from = daemon.calls.length;
+    assert.equal(await mcp(), [
+      "Codex MCP servers:",
+      "db: failed (MCP startup failed: spawn db-server ENOENT)",
+      "docs: connected, 2 tools",
+      "github: needs sign-in",
+      "old: off",
+      "slow: starting",
+      "To sign in to one, run codex mcp login <name> on the host.",
+    ].join("\n"));
+    const asked = daemon.calls.slice(from).filter((call) => call.method === "mcpServerStatus/list");
+    assert.deepEqual(asked.map((call) => call.params), [
+      { detail: "toolsAndAuthOnly", limit: 100, threadId: session },
+      { detail: "toolsAndAuthOnly", limit: 100, threadId: session, cursor: "2" },
+      { detail: "toolsAndAuthOnly", limit: 100, threadId: session, cursor: "4" },
+    ]);
+
+    // Codex has let the thread go: none of its servers runs, and Codex is asked of none.
+    daemon.thread(session).loaded = false;
+    from = daemon.calls.length;
+    assert.equal(await mcp(), [
+      "Codex MCP servers:",
+      "Not started for this thread yet. Each is as set up, with the tools Codex last found.",
+      "db: failed (MCP startup failed: spawn db-server ENOENT)",
+      "docs: not started, 2 tools",
+      "github: needs sign-in",
+      "old: not started",
+      "slow: not started, 1 tool",
+      "To sign in to one, run codex mcp login <name> on the host.",
+    ].join("\n"));
+    assert.equal(daemon.calls.slice(from).filter((call) => call.method === "mcpServerStatus/list" && call.params.threadId === undefined).length, 3);
+
+    daemon.mcpServers = [];
+    assert.equal(await mcp(), "Codex MCP servers:\nNone set up.");
+  } finally {
+    daemon.mcpServers = [];
+    daemon.thread(session).loaded = true;
+  }
+});
+
 test("/compact is offered and runs thread/compact/start: a turn of its own, marked where it compacted, which resume and replay keep", async () => {
   const catalog = await client.call("commands.catalog", { profile: "codex" });
-  assert.deepEqual(catalog.categories[1], { name: "Codex", pairs: [["/compact", "Summarise the conversation so far, to free up context"]] });
+  assert.deepEqual(catalog.categories[1], { name: "Codex", pairs: [["/compact", "Summarise the conversation so far, to free up context"], ["/mcp", "Show your MCP servers and whether each is connected"]] });
   const session = await createThread();
   assert.deepEqual(await client.call("command.dispatch", { session_id: session, name: "compact" }), { type: "send", message: "/compact" });
 
