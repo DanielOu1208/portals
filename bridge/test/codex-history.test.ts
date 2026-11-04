@@ -107,6 +107,7 @@ test("a running Codex attachment keeps completed reasoning once through redelive
   const host = {
     client: {
       async call(method: string) {
+        if (method === "thread/turns/list") return { data: [...thread.turns].reverse(), nextCursor: null };
         assert.ok(method === "thread/read" || method === "thread/resume", method);
         return { thread };
       },
