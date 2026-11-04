@@ -58,13 +58,13 @@ test("a plain reply streams its text and ends complete with the context use; thi
   const events = replayStream("plain");
   assert.match(text(events), /^Hello/);
   // What the turn spent: the result's usage, in, out and cached (it read and wrote the cache), each once.
-  assert.deepEqual(events.at(-1), { type: "turn.end", status: "complete", usage: { used: 25215, max: 1_000_000 }, spent: { tokens: 25215 } });
+  assert.deepEqual(events.at(-1), { type: "turn.end", status: "complete", usage: { used: 24847, max: 1_000_000 }, spent: { tokens: 24847 } });
   // The whole messages that repeat the streamed text add nothing.
   assert.equal(ofType(events, "turn.end").length, 1);
-  // Haiku 5.5 thinks when it chooses to (adaptive thinking): not for that hello, but before its tools.
+  // Haiku 5.5 thinks when it chooses to (adaptive thinking): not for that hello, nor for its Read, but before its edit.
   const tools = replayStream("tools");
   assert.ok(ofType(tools, "reasoning").length > 5, "thinking streams word by word");
-  assert.ok(tools.findIndex((event) => event.type === "reasoning") < tools.findIndex((event) => event.type === "tool.start"));
+  assert.ok(tools.findIndex((event) => event.type === "reasoning") < tools.findIndex((event) => event.type === "tool.start" && event.name === "patch"));
 });
 
 // 2026-10-27, an hour into a Claude Code thread's first turn: "in this session i
@@ -166,9 +166,9 @@ test("plan mode: the plan is a row of its own, then the work it planned", () => 
 
 test("an interrupted turn ends interrupted, with what streamed before it", () => {
   const events = replayStream("interrupt");
-  assert.equal(text(events), "1");
+  assert.equal(text(events), "1\n2\n3\n4");
   // Claude Code's result for a stopped turn says no usage: what its request streamed, as its stored session keeps it.
-  assert.deepEqual(events.at(-1), { type: "turn.end", status: "interrupted", usage: { used: 25351, max: 1_000_000 }, spent: { tokens: 25351 } });
+  assert.deepEqual(events.at(-1), { type: "turn.end", status: "interrupted", usage: { used: 24851, max: 1_000_000 }, spent: { tokens: 24851 } });
 });
 
 test("a message sent mid-turn that gets a turn of its own stays in the app's one turn", () => {
@@ -292,10 +292,10 @@ test("/compact that runs: a passing status, the mark of its place with the token
   assert.deepEqual(last, [
     { type: "status", text: "Compacting the conversation…" },
     { type: "status", text: "" },
-    { type: "compacted", trigger: "manual", tokensBefore: 25473 },
-    { type: "usage", usage: { used: 2807, max: 1_000_000 } },
+    { type: "compacted", trigger: "manual", tokensBefore: 24966 },
+    { type: "usage", usage: { used: 8584, max: 1_000_000 } },
     // Neither the summary nor Claude Code's "Compacted" is said.
-    { type: "turn.end", status: "complete", usage: { used: 2807, max: 1_000_000 } },
+    { type: "turn.end", status: "complete", usage: { used: 8584, max: 1_000_000 } },
   ]);
 });
 
@@ -346,8 +346,8 @@ test("background work: the stream says it runs until it ends, and the turn Claud
   assert.deepEqual(begun, [
     {
       type: "turn.begin",
-      user: 'Background command "Sleep for 3 seconds in background" completed (exit code 0)',
-      host: { kind: "process_complete", text: 'Background command "Sleep for 3 seconds in background" completed (exit code 0)' },
+      user: 'Background command "Sleep 3 seconds in background" completed (exit code 0)',
+      host: { kind: "process_complete", text: 'Background command "Sleep 3 seconds in background" completed (exit code 0)' },
     },
   ]);
   // Two turns, each ended once: the app's, then Claude's own.
@@ -366,7 +366,7 @@ test("a resumed session's empty result answers nothing: the turn ends with the r
   assert.deepEqual(ofType(events, "turn.begin"), []);
   assert.equal(ofType(events, "turn.end").length, 1);
   assert.equal(events.at(-1)?.type, "turn.end");
-  assert.match(text(events), /^No, it isn't running anymore/);
+  assert.match(text(events), /^Probably not: the notification says the task stopped/);
 });
 
 test("work that ends while a message waits: Claude's own turn first keeps the app's turn open", () => {
