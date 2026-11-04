@@ -1,6 +1,6 @@
 import "./environment.ts";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -285,5 +285,75 @@ test("what was typed for a command is let go of once Hermes no longer has its ro
       assert.deepEqual(core.messages.filter((message) => message.role === "user").map((message) => message.text), ["/plan still there"]);
       assert.deepEqual([...new TypedCommands(join(state, "hermes-commands.json")).of("stored")], [[5, "/plan still there"], [9, "/plan stored after the read"]]);
     } finally { await core.close(); }
+  } finally { rmSync(state, { recursive: true, force: true }); }
+});
+
+test("a command's row read back is kept past the bound, through the next command and a restart of the bridge", async () => {
+  const state = mkdtempSync(join(tmpdir(), "portals-hermes-typed-"));
+  const path = join(state, "hermes-commands.json");
+  const bound = 5_000;
+  const messages: unknown[] = Array.from({ length: bound }, (_, at) => ({ role: "user", text: `Write a plan for: step ${at + 1}`, timestamp: at + 1, row_id: at + 1 }));
+  // Kept once, as a thread of that many commands leaves it, not one write each.
+  writeFileSync(path, JSON.stringify({ threads: { stored: Array.from({ length: bound }, (_, at) => [at + 1, `/plan step ${at + 1}`]) } }));
+  const provider = () => new HermesProviderHost({
+    settings: { path: "/nonexistent/hermes", start: false, folder: state, logPath: join(state, "hermes-serve.log") },
+    cachePath: join(state, "hermes.json"),
+    connect: async () => { throw new Error("no Hermes here"); },
+  });
+  const kept = provider();
+  const record: ThreadRecord = { id: "stored", agent: "hermes", cwd: "/tmp", title: null, ...settings, createdAt: 0, updatedAt: 0, origin: "phone" };
+  const core = new Session(record, { has: () => false } as unknown as Registry);
+  const host: HermesHost = {
+    call: async <T>(method: string) => {
+      if (method === "command.dispatch") return { type: "send", message: `Write a plan for: step ${bound + 1}` } as T;
+      if (method === "prompt.submit") return { status: "streaming", user_row_id: bound + 1 } as T;
+      return {} as T;
+    },
+    bind() {}, forget() {}, respond() {}, respondError() {},
+    turnCommand: async (_profile, name) => name === "plan",
+    typedCommands: (id) => kept.typedCommands(id),
+    keepTyped: (id, row, text) => kept.keepTyped(id, row, text),
+    forgetTyped: (id, rows) => kept.forgetTyped(id, rows),
+    confirmTyped: (id, rows) => kept.confirmTyped(id, rows),
+  };
+  const adapter = new HermesSession({ id: "stored", cwd: "/tmp", settings }, "default", core.sink, host, { session_id: "runtime", running: false, messages: messages as Loaded["messages"] });
+  try {
+    await core.attach(adapter);
+    await step();
+    await begin(core, adapter, `/plan step ${bound + 1}`, 1);
+    adapter.event("message.complete", 2, { status: "complete", text: "Planned." });
+    await step();
+    messages.push({ role: "user", text: `Write a plan for: step ${bound + 1}`, timestamp: bound + 1, row_id: bound + 1 });
+    const users = storedMessages(messages, provider().typedCommands("stored")).map((message) => (message as { text: string }).text);
+    assert.equal(users.length, bound + 1);
+    assert.equal(users[0], "/plan step 1");
+    assert.equal(users.at(-1), `/plan step ${bound + 1}`);
+    assert.deepEqual(users.filter((text) => !text.startsWith("/plan")), []);
+  } finally {
+    await core.close();
+    rmSync(state, { recursive: true, force: true });
+  }
+});
+
+test("the bound is on what was typed for rows never read back: past it the oldest of those goes, never one read back or the row just kept", () => {
+  const state = mkdtempSync(join(tmpdir(), "portals-hermes-typed-"));
+  try {
+    const path = join(state, "hermes-commands.json");
+    const bound = 5_000;
+    // Rows 1 to 10 read back and still there; the next `bound` never read back.
+    const rows = Array.from({ length: 10 + bound }, (_, at) => [at + 1, `/plan step ${at + 1}`, ...(at < 10 ? [true] : [])]);
+    writeFileSync(path, JSON.stringify({ threads: { stored: rows } }));
+    const typed = new TypedCommands(path);
+    typed.keep("stored", bound + 11, `/plan step ${bound + 11}`);
+    const left = [...new TypedCommands(path).of("stored").keys()];
+    assert.equal(left.length, 10 + bound);
+    assert.deepEqual(left.slice(0, 11), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12]);
+    assert.equal(left.at(-1), bound + 11);
+    // Read back, a row is kept past the bound from then on.
+    typed.confirm("stored", [12, 13]);
+    for (let row = bound + 12; row <= bound + 14; row++) typed.keep("stored", row, `/plan step ${row}`);
+    const later = [...new TypedCommands(path).of("stored").keys()];
+    assert.equal(later.length, 12 + bound);
+    assert.deepEqual(later.slice(9, 13), [10, 12, 13, 15]);
   } finally { rmSync(state, { recursive: true, force: true }); }
 });

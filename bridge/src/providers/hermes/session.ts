@@ -62,6 +62,8 @@ export interface HermesHost {
   keepTyped?(thread: string, row: number, text: string): void;
   /** Lets go of what was typed for the thread's stored rows `rows`, which Hermes no longer has. */
   forgetTyped?(thread: string, rows: readonly number[]): void;
+  /** Marks the thread's stored rows `rows` as read back: Hermes still has them, so they are kept past the bound for rows never read. */
+  confirmTyped?(thread: string, rows: readonly number[]): void;
 }
 
 /** Hermes's answer to `session.resume` and `session.create`, as far as it is read here. */
@@ -230,7 +232,8 @@ export class HermesSession implements ProviderSession {
 
   /**
    * Hermes's stored copy of the conversation, read back (`storedMessages`). What was typed
-   * for a row it no longer has (one compressing summarised away) is let go of.
+   * for a row it no longer has (one compressing summarised away) is let go of, and one it
+   * still has is marked read back.
    */
   private readStored(messages: unknown[]): StoredMessage[] {
     const gone = rowsGone(this.typed.keys(), messages);
@@ -238,6 +241,10 @@ export class HermesSession implements ProviderSession {
       for (const row of gone) this.typed.delete(row);
       this.host.forgetTyped?.(this.id, gone);
     }
+    const present = messages
+      .map((message) => (message as { row_id?: unknown } | null)?.row_id)
+      .filter((row): row is number => typeof row === "number" && this.typed.has(row));
+    if (present.length > 0) this.host.confirmTyped?.(this.id, present);
     return storedMessages(messages, this.typed);
   }
 
