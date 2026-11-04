@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { HermesSession, type HermesHost, type Loaded } from "../src/providers/hermes/session.ts";
 import type { Frame } from "../src/providers/hermes/client.ts";
 import type { Registry, ThreadRecord } from "../src/sessions/registry.ts";
-import { Session } from "../src/sessions/session.ts";
+import { Session, stopWaitMs } from "../src/sessions/session.ts";
 
 const settings = { model: "m", provider: "p", reasoningEffort: "" };
 const step = () => new Promise<void>((resolve) => setImmediate(resolve));
@@ -438,5 +438,38 @@ test("a message sent while Hermes still runs a stopped turn is not sent, and fai
     listing.resolve({ sessions: [] });
     for (let index = 0; index < 5; index++) await step();
     assert.equal(calls.filter((call) => call === "prompt.submit").length, 1);
+  } finally { await core.close(); }
+});
+
+test("a Stop Hermes never answers (it cannot be reached) ends the turn after stopWaitMs, and what Hermes says of that turn later is let go of", async (t) => {
+  const { core, adapter, setCall } = await fixture();
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const sent: string[] = [];
+  setCall(async (method, params) => {
+    if (method === "session.interrupt") return new Promise(() => {});
+    if (method === "prompt.submit") sent.push(params.text);
+    return {};
+  });
+  try {
+    assert.equal(core.isRunning, true);
+    const stopping = core.interrupt();
+    await step();
+    t.mock.timers.tick(stopWaitMs);
+    assert.equal(await stopping, true);
+    assert.equal(core.isRunning, false);
+    // Hermes comes back and finishes the stopped turn: nothing of it shows, and the thread stays at rest.
+    adapter.event("message.delta", 2, { text: "B" });
+    adapter.event("message.complete", 3, { status: "complete", text: "AB" });
+    assert.equal(core.isRunning, false);
+    assert.deepEqual(core.messages.filter((message) => message.role === "assistant").map((message) => message.text), ["A"]);
+    // The next message is a turn of its own, which Hermes ends.
+    core.submit("next").begin?.();
+    await step();
+    assert.deepEqual(sent, ["next"]);
+    adapter.event("message.start", 4, {});
+    adapter.event("message.delta", 5, { text: "Next reply" });
+    adapter.event("message.complete", 6, { status: "complete", text: "Next reply" });
+    assert.equal(core.isRunning, false);
+    assert.deepEqual(core.messages.filter((message) => message.role === "assistant").map((message) => message.text), ["A", "Next reply"]);
   } finally { await core.close(); }
 });
