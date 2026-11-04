@@ -1786,17 +1786,21 @@ async function versionLines(t: TestContext): Promise<string[]> {
   return lines();
 }
 
-test("at start the bridge logs which Pi is installed: an error for none or one too old, a warning for another release, a line for the tested one", async (t) => {
+test("at start the bridge logs which Pi is installed: an error for none or one too old, a warning for another release, a line for a tested one", async (t) => {
   assert.deepEqual(await versionLines(t), ["info  Pi 1.1.0"]);
+  pi.version("1.5.0");
+  assert.deepEqual(await versionLines(t), ["info  Pi 1.5.0"]);
   pi.version("1.2.0");
-  assert.deepEqual(await versionLines(t), ["warn  Pi is 1.2.0; this bridge was tested with 1.1.0. Check a thread before relying on it."]);
+  assert.deepEqual(await versionLines(t), ["warn  Pi is 1.2.0; this bridge was tested with 1.1.0, 1.5.0. Check a thread before relying on it."]);
+  pi.version("1.6.0");
+  assert.deepEqual(await versionLines(t), ["warn  Pi is 1.6.0, newer than this bridge was tested with (1.1.0, 1.5.0). Check a thread before relying on it."]);
   pi.version("0.99.2");
   assert.deepEqual(await versionLines(t), ["error Pi is 0.99.2, which is too old for this bridge: it needs 1.1.0 or newer. No Pi thread runs until it is updated (pi update)."]);
   pi.install(false);
   assert.deepEqual(await versionLines(t), [`error Pi was not found or did not run at ${pi.path}. Set pi.path in config.json.`]);
 });
 
-test("a turn on a Pi older than the tested release fails at once with a sentence naming the release it needs, and runs once Pi is updated", async () => {
+test("a turn on a Pi older than the minimum fails at once with a sentence naming the release it needs, and runs once Pi is updated", async () => {
   pi.version("0.99.2");
   const own = await startTestBridge({ providers: new Map([["pi", piProvider(pi, { folder: cwd, checkVersion: true })]]), config: { generalFolder: cwd } });
   const phone = await TestClient.open(own);

@@ -66,11 +66,11 @@ test("AskUserQuestion is a clarify card; answers go back keyed by question text,
         choices: ["Python", "Swift"],
         multiSelect: false,
         header: "Language",
-        descriptions: { Python: "Prefer Python for this work", Swift: "Prefer Swift for this work" },
+        descriptions: { Python: "Python as your preferred language", Swift: "Swift as your preferred language" },
       },
     ],
   });
-  // Exactly what Claude was given in the recording, after which it answered "You prefer Swift."
+  // Exactly what Claude was given in the recording, after which it answered "Swift."
   assert.deepEqual(permissionResult(prompt.tool!, prompt.input!, undefined, { kind: "clarify", answers: { q0: "Swift" } }), prompt.answer);
   // Free text is passed on as typed; a multi-select answer arrives joined already.
   const many = { questions: [{ question: "Which?", header: "x", options: [{ label: "A" }, { label: "B" }], multiSelect: true }, { question: "Why?", options: [] }] };

@@ -10,7 +10,7 @@ import { readJSON, writeJSON } from "../../store/jsonFile.ts";
 import { nameFromText, titleInstructions, titlePrompt } from "../codex/naming.ts";
 import { WarmPool } from "../pool.ts";
 import { titleSource } from "../titles.ts";
-import { programVersion, reportVersion } from "../program.ts";
+import { programVersion, VersionCheck } from "../program.ts";
 import {
   DeskRefused, type AdoptMode, type AgentCommand, type AgentProfile, type DeskAdoption, type DeskSession,
   type ModeOption, type ModelCatalog, type Provider, type SessionOptions, type SessionSink, type ThreadMode, type UsageReport,
@@ -54,6 +54,9 @@ interface CatalogCache {
   /** Droid's own settings, as the last session it started had them: its model, level, autonomy and mode. */
   defaults?: { model: string; reasoning: string; autonomy?: string; interaction?: string };
 }
+
+/** The Droid CLI releases the bridge was tested with, through `@factory/droid-sdk` 0.10.0. */
+export const testedDroidVersions = ["0.236.0", "0.245.0", "0.247.0", "1.0.0", "1.3.0"] as const;
 
 export class DroidProvider implements Provider, DroidHost {
   readonly profile: AgentProfile = {
@@ -101,9 +104,12 @@ export class DroidProvider implements Provider, DroidHost {
   private closed = false;
   /** Stops the one-shot Droids making names now, when the provider closes. */
   private readonly naming = new AbortController();
+  /** Which Droid CLI runs, as `droid --version` said at the bridge's start. */
+  readonly version: VersionCheck;
 
   constructor(options: DroidProviderOptions) {
     this.options = options;
+    this.version = new VersionCheck({ name: "Droid", tested: testedDroidVersions, path: options.command, setting: "droid.path" });
     this.env = droidEnvironment(options.portals ? onPath(options.env ?? process.env, options.portals.bin) : options.env ?? process.env);
     this.sdk = options.sdk ?? localSdk(options.command, this.env);
     this.store = new DroidStore(options.directory);
@@ -139,8 +145,7 @@ export class DroidProvider implements Provider, DroidHost {
     // What a naming stopped as the bridge stopped left behind.
     try { forgetStale(this.env.HOME, realpathSync(join(this.options.directory, "names")), Date.now() - staleMs); } catch { /* No names made yet. */ }
     if (this.options.checkVersion !== false) {
-      void programVersion(this.options.command, this.env).then((version) =>
-        reportVersion({ name: "Droid", version, tested: ["0.236.0", "0.245.0", "0.247.0", "1.0.0"], path: this.options.command, setting: "droid.path" }));
+      void programVersion(this.options.command, this.env).then((version) => this.version.installedIs(version));
     }
     void this.refresh();
   }

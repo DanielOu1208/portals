@@ -191,7 +191,10 @@ node scripts/record-claude.ts            # or name scenarios: plain tools approv
 
 It runs Haiku with harmless prompts in scratch folders under
 `/private/tmp/portals-claude-record/`, on your login and quota, then deletes the
-sessions and folders it made and replaces paths in what it writes.
+sessions and folders it made and replaces paths in what it writes, also where Claude
+Code streamed a path in pieces (`scripts/record-claude-clean.ts`, which can clean a
+recording again: `node scripts/record-claude-clean.ts <file> <scratch folder>`). A plan
+the `plan` scenario writes stays in `~/.claude/plans/`; delete it by hand.
 
 The Codex tests replay real Codex streams recorded in `test/fixtures/codex/` the same
 way (golden `*.events.json` files, `UPDATE_GOLDEN=1 node --test test/codex-stream.test.ts`),
@@ -229,7 +232,7 @@ one would hide a bug in the bridge (its header lists how), and it will not run w
 off. The tests of Pi's sessions from the desk (`test/pi-desk.test.ts`) write their own
 session files into the stand-in's folder and say themselves in which folders a Pi "runs
 in a terminal"; the provider a test builds with `piProvider` never asks the Mac for its
-processes. To record again (Pi changes its records often; the bridge was tested with
+processes. To record again (Pi changes its records often; these were recorded on
 1.1.0):
 
 ```sh
@@ -724,6 +727,19 @@ How the app draws them is in `docs/visuals.md`.
 What the bridge does with each agent, what the app sees of it, and the commands it offers.
 The README keeps a short part of each for the person using it.
 
+**Versions.** Each agent names the releases the bridge was tested with, and a minimum
+only where an older release is known not to work (`src/providers/program.ts`). The
+bridge learns the release from `--version` at startup, and from the running process
+where it says so itself: Claude Code's `system/init` (`claude_code_version`) and the
+Codex app server's `initialize` (`userAgent`), which is the release a thread really runs
+on when the program was updated after the bridge started, or the shared Codex daemon was
+not restarted. Each release is logged once: an error when the program does not run or is
+older than the minimum, a warning when it is newer than the tested ones or another, a
+line for a tested one. Only a release below the minimum runs no turn; today that is Pi
+older than 1.1.0. `/status` shows the release last known, and what is off about it, on
+a `Version:` line after the agent (`Version: Codex 0.168.0, newer than the 0.166.0
+Portals was tested with`).
+
 ### Claude Code
 
 Each thread is one Claude Code session, and the thread id is its session id. The bridge
@@ -742,8 +758,8 @@ the app gets it as a turn opened by a line saying what ended (`status.update` ki
 How it runs `claude`:
 
 - **The installed `claude`**, at `claude.path`, not a copy of its own. The bridge was
-  tested with Claude Code 2.1.292 and `@anthropic-ai/claude-agent-sdk` 0.3.292; at
-  startup it logs a warning when the installed `claude` is another version.
+  tested with Claude Code 2.1.318 and `@anthropic-ai/claude-agent-sdk` 0.3.318; it logs
+  a warning for another release, at startup and when a process says it runs one.
 - **Its sign-in.** With `claude.apiKey` set, `claude` gets the key as
   `ANTHROPIC_API_KEY`. Without, it signs in with its own Keychain login
   (`apiKeySource: none`); the bridge never reads, stores or passes on Claude credentials.
@@ -828,8 +844,8 @@ compact") ends its turn with that reason.
 ### Codex
 
 Each thread is one Codex thread, and the thread id is Codex's own (`thread/start`). The
-bridge was tested with codex-cli 0.160.1; at startup it logs a warning for another
-version.
+bridge was tested with codex-cli 0.166.0; it logs a warning for another release, at
+startup and when the app server it connects to names one.
 
 **Shared or own.** With `codex.mode` `shared` (the default) the bridge joins the
 app-server daemon every Codex on this Mac uses (`codex app-server daemon version` shows
@@ -935,9 +951,9 @@ one process per thread. The process stays up for the next message and stops afte
 `pi.idleMinutes` idle, never while a turn runs or a question is open; the message after
 that starts a new one, and Pi goes on from its own session file. A thread opened after a
 restart of the bridge is read from that file without starting anything. The bridge was
-tested with Pi 1.1.0; at startup it logs a warning for a newer version. An older Pi runs
-no turn (it lacks what the bridge ends a turn by): the thread says so, and works once Pi
-is updated (`pi update`).
+tested with Pi 1.1.0 and 1.5.0, whose RPC mode is the same; at startup it logs a warning
+for another release. A Pi older than 1.1.0 runs no turn (it lacks what the bridge ends a
+turn by): the thread says so, and works once Pi is updated (`pi update`).
 
 **Pi does not ask before it acts.** Pi has no approvals and no permission modes: it runs
 every command and makes every edit its model decides on, at once, and through the bridge
@@ -1043,7 +1059,7 @@ once.
 Cursor here is Cursor's command-line agent, `cursor-agent`, run through its Agent Client
 Protocol mode (`cursor-agent acp`) with your own Cursor settings and sign-in. Each
 thread is one Cursor session, and the thread id is that session's id. The bridge was
-tested with cursor-agent 2026.10.01; it logs a warning for another version at startup,
+tested with cursor-agent 2026.10.22; it logs a warning for another version at startup,
 and again when a process starts on a release it has not seen yet (Cursor's command
 updates itself when you use it in a terminal).
 
@@ -1209,7 +1225,7 @@ Left out by choice:
 Droid uses the installed CLI through the official `@factory/droid-sdk` (pinned to
 0.10.0, protocol 1.269.0; 0.9.1 refused newer Droid's Script approvals and pick lists
 before the bridge saw them), with your existing Factory login and settings. The bridge
-was tested with CLI 1.0.0. Setup only discovers the executable and probes its version;
+was tested with CLI 1.0.0 and 1.3.0. Setup only discovers the executable and probes its version;
 it neither installs/upgrades Droid nor signs in or
 copies credentials. Bridge-launched processes disable automatic updates with
 `FACTORY_DROID_AUTO_UPDATE_ENABLED=false`. Startup does not change global Droid settings.
@@ -1349,6 +1365,9 @@ runs, the bridge starts `hermes serve` in a process group of its own (output in
 bridge restarts. Hermes stops a turn whose client has been gone for 20 seconds; the
 bridge is back well before. The profiles Hermes listed last are kept in
 `state/hermes.json`, so after a restart the agents are there before Hermes answers.
+The bridge was tested with Hermes 0.22.5; at startup it logs a warning for another
+release (`hermes --version`), and counts a build past a release (`v0.22.5+12.g1a2b3c4`)
+as newer.
 
 Setup finds Hermes and, when it is running, asks it whether it can run a turn (Hermes
 needs an AI provider and model: `hermes setup model` sets them). When Hermes is missing,

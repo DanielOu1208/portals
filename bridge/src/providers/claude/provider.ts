@@ -43,7 +43,7 @@ import { claudeModels } from "./models.ts";
 import { childEnvironment, claudeVersion, desktopAgents, queryOptions, testedClaudeVersion, threadModeFor } from "./options.ts";
 import { onPath, type CommandAccess } from "../../portals/access.ts";
 import { WarmPool } from "../pool.ts";
-import { reportVersion } from "../program.ts";
+import { VersionCheck } from "../program.ts";
 import { ClaudeSession, terminalHasIt, titleWatch, type ClaudeHost, type PlanUsage, type QueryFactory, type QueryLike, type SessionFiles, type StoredSession } from "./session.ts";
 import { ContextWindows } from "./stream.ts";
 import { hasLimits, HeardLimits, KnownModelWindows, planDisplayName, planUsageReport, stillStanding } from "./usage.ts";
@@ -289,6 +289,8 @@ export class ClaudeProvider implements Provider, ClaudeHost {
   private nextUsageStart = Number.NEGATIVE_INFINITY;
   /** How many of those in a row read no limits. */
   private usageMisses = 0;
+  /** Which Claude Code runs: `claude --version` at start, then what each process says in its `system/init`. */
+  readonly version: VersionCheck;
   /** The last answer to how much is used, which stands between those starts. */
   private lastUsage: AskedUsage | undefined;
   /** The last answer that had limits to read, for when one since has not: an old number with its age over none. Forgotten when the sign-in is one with no plan limits. */
@@ -312,6 +314,7 @@ export class ClaudeProvider implements Provider, ClaudeHost {
     this.pool = new WarmPool({ maxWarm: options.settings.maxWarm, idleMs: options.settings.idleMinutes * 60_000 });
     this.interruptGraceMs = options.interruptGraceMs ?? 15_000;
     this.titleWatchMs = options.titleWatchMs ?? titleWatch;
+    this.version = new VersionCheck({ name: "Claude Code", tested: testedClaudeVersion, path: this.claudePath, setting: "claude.path" });
   }
 
   /** Starts the idle sweep, checks the installed version and learns the models. */
@@ -322,8 +325,7 @@ export class ClaudeProvider implements Provider, ClaudeHost {
   }
 
   private async checkVersion(): Promise<void> {
-    const version = await claudeVersion(this.claudePath, this.env);
-    reportVersion({ name: "Claude Code", version, tested: testedClaudeVersion, path: this.claudePath, setting: "claude.path" });
+    this.version.installedIs(await claudeVersion(this.claudePath, this.env));
   }
 
   // MARK: Models and commands

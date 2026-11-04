@@ -2390,10 +2390,11 @@ function versionLines(t: TestContext): () => string[] {
   return () =>
     written.mock.calls
       .map((call) => String(call.arguments[0]).trimEnd().split(" ").slice(1).join(" "))
-      .filter((line) => /Cursor (was not found|is \d+\.\d+\.\d+;|\d+\.\d+\.\d+$)/.test(line));
+      .filter((line) => /Cursor (was not found|is \d+\.\d+\.\d+[;,]|\d+\.\d+\.\d+$)/.test(line));
 }
 
 const anotherRelease = (version: string) => `warn  Cursor is ${version}; this bridge was tested with ${testedCursorVersion}. Check a thread before relying on it.`;
+const newerRelease = (version: string) => `warn  Cursor is ${version}, newer than this bridge was tested with (${testedCursorVersion}). Check a thread before relying on it.`;
 
 test("at start the bridge logs Cursor's version: an error when the program does not run, a warning for another release, a line for the tested one", async (t) => {
   const dir = agentFolder();
@@ -2457,7 +2458,9 @@ test("a release of Cursor not seen since the bridge started is told of once, whe
   await next(null, "and again");
   await next("2026.11.02-9f8e7d6", "once more");
   await until(() => lines().length === 3, "the third release was told of");
-  assert.deepEqual(lines(), [`info  Cursor ${testedCursorVersion}`, anotherRelease("2026.10.09"), anotherRelease("2026.11.02")]);
+  assert.deepEqual(lines(), [`info  Cursor ${testedCursorVersion}`, anotherRelease("2026.10.09"), newerRelease("2026.11.02")]);
+  // `/status` names the release found last.
+  assert.equal(own.version.statusLine(), `Version: Cursor 2026.11.02, newer than the ${testedCursorVersion} Portals was tested with`);
   assert.equal(new Set(calls(dir).map((call) => call.pid)).size, 4);
 });
 
