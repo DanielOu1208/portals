@@ -236,12 +236,14 @@ final class ThreadController: Identifiable {
             state.model = ModelSetting(model: model.model, provider: model.provider, level: options.thinkingLevel)
         }
         composer.text = ComposerDrafts.shared.text(for: draftKey)
+        GivenBackMessages.shared.opened(self)
+        takeWaitingGivenBack()
         closesCommandAnswers(with: commandAnswers)
         noteRunChanges()
     }
 
     /// Where its composer's words are kept (`ComposerDrafts.key`).
-    private var draftKey: String {
+    var draftKey: String {
         ComposerDrafts.key(thread: thread, agent: agent.id, folder: folder)
     }
 
@@ -260,6 +262,7 @@ final class ThreadController: Identifiable {
             if ComposerDrafts.shared.text(for: old) == composer.text { ComposerDrafts.shared.set("", for: old) }
             ComposerDrafts.shared.set(composer.text, for: new)
         }
+        takeWaitingGivenBack()
     }
 
     /// A session from the host's desk taken up only to read: it takes no messages.
@@ -1094,14 +1097,21 @@ final class ThreadController: Identifiable {
         guard !unread.images.isEmpty || !unread.files.isEmpty else { return given(held.images, held.files) }
         // The rest from disk, off the main thread. The message goes back only then, words
         // and attachments at once: never its words alone, to be sent without them, nor its
-        // attachments later into whatever the composer holds by then.
+        // attachments later into whatever the composer holds by then. To wherever the
+        // thread's draft is by then: this controller may have been closed meanwhile, and
+        // another opened on the thread in its place (`GivenBackMessages`).
+        let key = draftKey
         Task {
             let read = await submissionStore.attachmentsInBackground(images: unread.images, files: unread.files, in: localID, copies: imageStore)
-            guard !isClosed else { return }
             var images = held.images, files = held.files
             for image in read.images { images[image.id] = image }
             for file in read.files { files[file.id] = file }
-            given(images, files)
+            let found = (images: asked.images.compactMap { images[$0.id] }, files: asked.files.compactMap { files[$0.id] })
+            GivenBackMessages.shared.give(
+                GivenBack(words: words, mentions: mentions, images: found.images, files: found.files,
+                          whole: found.images.count == asked.images.count && found.files.count == asked.files.count),
+                to: key
+            )
         }
     }
 
@@ -1109,13 +1119,21 @@ final class ThreadController: Identifiable {
     /// is there. `whole`: all that was attached to it is with it.
     private func putBack(_ words: String, mentions: [String], images: [ImageAttachment], files: [FileAttachment], whole: Bool) {
         var draft = composer
-        draft.text = [words, draft.text].filter { !$0.isEmpty }.joined(separator: "\n\n")
+        draft.text = GivenBack.text(words, before: draft.text)
         draft.mentions = mentions + draft.mentions.filter { !mentions.contains($0) }
         draft.images = images + draft.images.filter { image in !images.contains { $0.id == image.id } }
         draft.files = files + draft.files.filter { file in !files.contains { $0.id == file.id } }
         composer = draft
         say("Stopped before the agent read your message. It is back in the composer.")
         if !whole { say("This device no longer has all that was attached to it. Attach it again, then send.", .warning) }
+    }
+
+    /// Messages given back to this thread's draft while no composer was open on it: their
+    /// words are in the draft kept on this device already, their attachments join them now.
+    private func takeWaitingGivenBack() {
+        for message in GivenBackMessages.shared.waiting(for: draftKey) {
+            putBack("", mentions: message.mentions, images: message.images, files: message.files, whole: message.whole)
+        }
     }
 
     /// The message with `id` as the transcript shows it, the latest turns first.
@@ -1219,6 +1237,7 @@ final class ThreadController: Identifiable {
     /// flight for it is saved once it has been closed.
     func close() {
         isClosed = true
+        GivenBackMessages.shared.closed(self)
         mcpAuth.clear()
         threadCommands.cancel()
         eventsTask?.cancel()
@@ -1657,5 +1676,13 @@ final class ThreadController: Identifiable {
 private extension ThreadEvent {
     var endsTurn: Bool {
         if case .turnFinished = self { true } else { false }
+    }
+}
+
+extension ThreadController: GivenBackTaking {
+    /// A message given back (`giveBack`) whose attachments were read after the controller
+    /// that asked for them was closed, or by this one.
+    func take(_ message: GivenBack) {
+        putBack(message.words, mentions: message.mentions, images: message.images, files: message.files, whole: message.whole)
     }
 }
