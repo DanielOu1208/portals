@@ -7,6 +7,7 @@ import { readOnlyText } from "../src/gateway/methods.ts";
 import { machineWord } from "../src/platform.ts";
 import { foldersOf, lsofName, PiSessionFiles, procIsTerminalPi, procReadsAtOnce, procTerminalPis, sessionSummary, sessionTitle, terminalMayHaveIt, terminalPis, workingFolders } from "../src/providers/pi/desk.ts";
 import { findSessionFile, sessionFileId, sessionFolderName, sessionFolders } from "../src/providers/pi/history.ts";
+import { threadArguments } from "../src/providers/pi/options.ts";
 import type { PiProvider } from "../src/providers/pi/provider.ts";
 import { isEvent, RpcFailure, startTestBridge, streamedText, TestClient, type Frame, type TestBridge } from "./helpers.ts";
 import { fixtureCwd, sessionText } from "./pi-fixtures.ts";
@@ -371,6 +372,56 @@ test("the session files are read where Pi keeps them: a folder per working folde
   assert.deepEqual(await sessionFolders({ ...pi.env, PI_CODING_AGENT_DIR: join(pi.agentDir, "none") }), []);
 });
 
+test("the folders Pi's sessions ran in, from each file's header alone, read again only once the file changes", async (t) => {
+  const pi = standin();
+  t.after(() => pi.dispose());
+  const one = "0199f3a0-0000-7000-8000-0000000000b1";
+  const garden = deskSession(pi, { id: one, cwd: "/Users/dana/garden", age: 2, lines: conversation(["In the garden"]) });
+  // No message yet: the folder was used all the same.
+  deskSession(pi, { id: "0199f3a0-0000-7000-8000-0000000000b2", cwd: "/Users/dana/recipes", age: 1, lines: [] });
+  const folder = join(pi.agentDir, "sessions", sessionFolderName("/Users/dana/garden"));
+  writeFileSync(join(folder, "2026-10-12T00-00-00-000Z_notes.jsonl"), "not a session\n");
+  writeFileSync(join(folder, "2026-10-12T00-00-00-000Z_other.jsonl"), JSON.stringify({ type: "session", id: "other", cwd: "relative/folder" }) + "\n");
+  const files = new PiSessionFiles(pi.env);
+  const sorted = async (sessions = files) => (await sessions.folders()).sort((a, b) => a.path.localeCompare(b.path));
+  assert.deepEqual(await sorted(), [
+    { path: "/Users/dana/garden", lastUsed: Math.floor((now - 2 * minute) / 1000) * 1000 },
+    { path: "/Users/dana/recipes", lastUsed: Math.floor((now - minute) / 1000) * 1000 },
+  ]);
+
+  // A header as it was is not read again; one that changed is, and a file gone is forgotten.
+  const changed = Math.floor((now - 2 * minute) / 1000);
+  writeFileSync(garden, readFileSync(garden, "utf8").replace("/Users/dana/garden", "/Users/dana/meadow"));
+  utimesSync(garden, changed, changed);
+  assert.equal((await sorted())[0].path, "/Users/dana/garden");
+  utimesSync(garden, changed + 60, changed + 60);
+  assert.deepEqual((await sorted()).map((entry) => entry.path), ["/Users/dana/meadow", "/Users/dana/recipes"]);
+  rmSync(garden);
+  assert.deepEqual((await sorted()).map((entry) => entry.path), ["/Users/dana/recipes"]);
+
+  // Moved to one folder for every working folder: read there alone.
+  const moved = join(pi.agentDir, "all-sessions");
+  mkdirSync(moved);
+  writeFileSync(join(moved, `2026-10-12T00-00-00-000Z_${one}.jsonl`), JSON.stringify({ type: "session", version: 3, id: one, timestamp: "2026-10-12T00:00:00.000Z", cwd: "/Users/dana/notes" }) + "\n");
+  assert.deepEqual((await sorted(new PiSessionFiles({ ...pi.env, PI_CODING_AGENT_SESSION_DIR: moved }))).map((entry) => entry.path), ["/Users/dana/notes"]);
+});
+
+test("Pi: folders.list offers the folders Pi worked in at the desk, as it does any agent's: not those never offered", async (t) => {
+  for (const path of ["projects/dana-garden", "projects/dana-recipes"]) mkdirSync(at(path), { recursive: true });
+  const { pi, client } = await desk(t);
+  const id = (n: number) => `0199f3a0-0000-7000-8000-0000000000c${n}`;
+  deskSession(pi, { id: id(1), cwd: at("projects/dana-garden"), age: 1, lines: conversation(["Water the tomatoes"]) });
+  deskSession(pi, { id: id(2), cwd: at("projects/dana-recipes"), age: 30, lines: [] });
+  deskSession(pi, { id: id(3), cwd: at("scratch/run"), age: 2, lines: conversation(["In a scratch folder"]) });
+  deskSession(pi, { id: id(4), cwd: at("projects/secret"), age: 3, lines: conversation(["Hidden by config.json"]) });
+  deskSession(pi, { id: id(5), cwd: at("projects/gone"), age: 4, lines: conversation(["Its folder is gone"]) });
+  const listed = await client.call("folders.list", { profile: "pi" });
+  assert.deepEqual(listed.folders, [
+    { path: at("projects/dana-garden"), name: "dana-garden", last_used: Math.floor((now - minute) / 1000) },
+    { path: at("projects/dana-recipes"), name: "dana-recipes", last_used: Math.floor((now - 30 * minute) / 1000) },
+  ]);
+});
+
 // MARK: desk.list
 
 test("Pi: the desk's sessions, newest first, each open while a Pi runs in a terminal in its folder; the bridge's own threads, folders never offered and files that are no session left out", async (t) => {
@@ -485,7 +536,7 @@ test("Pi: a session is not continued while a Pi runs in a terminal in its folder
   assert.equal(streamedText(first), "Working. You said: Hello.");
   assert.deepEqual(notices(first), []);
   const [started] = pi.starts(id);
-  assert.deepEqual(started.args, ["--mode", "rpc", "--session-id", id]);
+  assert.deepEqual(started.args, threadArguments(id, null, pi.agentDir));
   assert.equal(started.cwd, at("projects/app"));
   // Pi came back on the session's own model, level and name: nothing was set.
   assert.deepEqual(pi.sentTo(id).map((sent) => sent.type).slice(0, 3), ["get_state", "get_session_stats", "prompt"]);
@@ -1204,7 +1255,7 @@ test("Pi: a session is forked by Pi itself into a new thread with its history, a
   // The copy is the bridge's own session: its turn runs though a Pi is in a terminal in the folder.
   assert.equal(streamedText(await turn(client, fork, "Hello.")), "Working. You said: Hello.");
   const [, runner] = pi.starts(fork);
-  assert.deepEqual(runner.args, ["--mode", "rpc", "--session-id", fork]);
+  assert.deepEqual(runner.args, threadArguments(fork, null, pi.agentDir));
   // Pi is given the thread's title as the copy's name, so the desk tells the two apart.
   assert.deepEqual(pi.sentTo(fork, "set_session_name").map((sent) => sent.name), ["Edit hello (fork)"]);
   assert.equal(readFileSync(file, "utf8"), original);

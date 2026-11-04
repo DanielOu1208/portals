@@ -4,7 +4,7 @@ import { wellFormedJSON } from "../../json.ts";
 import { log } from "../../log.ts";
 import { JsonChild } from "../child.ts";
 import { RpcClient, type Connected } from "../rpc.ts";
-import type { RequestId } from "./types/index.ts";
+import type { InitializeResponse, RequestId } from "./types/index.ts";
 
 // A JSON-RPC connection to `codex app-server` (docs/bridge-spikes.md, S1). Messages
 // carry no "jsonrpc" key: `{id, method, params}` for requests, `{id, result|error}` for
@@ -181,6 +181,7 @@ export interface ClientOptions {
 export class CodexClient {
   private readonly rpc: RpcClient<RpcMessage, ClientListener, number>;
   private readonly clientInfo: ClientOptions["clientInfo"];
+  private serverUserAgent: string | null = null;
 
   constructor(options: ClientOptions) {
     this.clientInfo = options.clientInfo;
@@ -204,8 +205,44 @@ export class CodexClient {
     return this.rpc.isConnected;
   }
 
+  /** The version reported by this live app server, rather than an installed CLI. */
+  get serverVersion(): string | null {
+    return this.isConnected ? /\/(\d+\.\d+\.\d+)(?:\s|$)/.exec(this.serverUserAgent ?? "")?.[1] ?? null : null;
+  }
+
+  get supportsMessageForks(): boolean {
+    return this.versionAtLeast("0.166.0");
+  }
+
+  /** Checks the current handshake and sends without yielding to a reconnect between them. */
+  async callVersioned<T>(method: string, params: unknown, minimum: string): Promise<T> {
+    await this.whenReady();
+    if (!this.versionAtLeast(minimum)) throw new CodexError(-32601, `This Codex app server must be version ${minimum} or newer to branch at a message.`, true);
+    return this.rpc.send<T>(method, params);
+  }
+
+  private versionAtLeast(minimum: string): boolean {
+    const version = this.serverVersion;
+    if (!version) return false;
+    const actual = version.split(".").map(Number);
+    const required = minimum.split(".").map(Number);
+    for (let index = 0; index < required.length; index += 1) {
+      if (actual[index] !== required[index]) return actual[index] > required[index];
+    }
+    return true;
+  }
+
   listen(listener: ClientListener): () => void {
     return this.rpc.listen(listener);
+  }
+
+  /**
+   * What the app server said of itself in `initialize`, which names its release
+   * ("portals-bridge/0.166.0 (Mac OS …)"): the shared daemon may run an older Codex than
+   * the installed one. Null while not connected.
+   */
+  get userAgent(): string | null {
+    return this.isConnected ? this.serverUserAgent : null;
   }
 
   /** Connects (once); on failure keeps trying in the background. Resolves after the first attempt either way. */
@@ -240,10 +277,12 @@ export class CodexClient {
   }
 
   private async handshake(): Promise<Connected<ClientListener>> {
-    await this.rpc.send("initialize", {
+    this.serverUserAgent = null;
+    const initialized = await this.rpc.send<InitializeResponse>("initialize", {
       clientInfo: this.clientInfo,
       capabilities: { experimentalApi: true, requestAttestation: false },
     });
+    this.serverUserAgent = initialized.userAgent;
     this.notify("initialized");
     return { tell: (listener, again) => listener.connected(again) };
   }

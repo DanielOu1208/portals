@@ -127,13 +127,16 @@ export class DroidWork {
   private readonly open = new Map<string, OpenCall & { cwd: string; at: number }>();
   /** Results for calls nobody tracks, told raw within the last minute: one for a call the turn is still closing under is its (`leftOpen`). The latest 64. */
   private readonly unmatched = new Map<string, { content: unknown; error: boolean; at: number }>();
+  /** Told how a background command of the thread's own under Droid's id ended, by its completion (`DroidBackground.finished`). */
+  private readonly commandEnded: ((id: string, status: Exclude<SubagentStatus, "running">) => void) | undefined;
 
   constructor(session: () => string | undefined, emit: (event: ProviderEvent) => void, saved: SubagentInfo[] = [],
-    options: { holdMs?: number; now?: () => number } = {}) {
+    options: { holdMs?: number; now?: () => number; commandEnded?: (id: string, status: Exclude<SubagentStatus, "running">) => void } = {}) {
     this.session = session;
     this.emit = emit;
     this.now = options.now ?? Date.now;
     this.holdMs = options.holdMs ?? 60 * 60_000;
+    this.commandEnded = options.commandEnded;
     for (const child of saved) this.children.set(child.id, child.status === "running"
       ? { ...child, status: "stopped", endedAt: Date.now(), result: "Live tracking ended when the bridge stopped. Droid did not report a terminal outcome." }
       : { ...child });
@@ -428,13 +431,18 @@ export class DroidWork {
       const aside = this.older.indexOf(call);
       if (aside !== -1) this.older.splice(aside, 1);
       const code = /^code (-?\d+)$/.exec(field(header, "exit_status") ?? "");
-      const said = body.slice(boundary + "\noutput: ".length).split("\n\nThis is a new asynchronous completion event,")[0].slice(0, 65_536);
+      // Droid's words to the model after the output: one of two, the second for a command
+      // stopped from its footer or from its row (`DroidBackground`).
+      const said = body.slice(boundary + "\noutput: ".length).split(/\n\n(?:This is a new asynchronous completion event,|This background process was intentionally stopped by the user,)/)[0].slice(0, 65_536);
       const output = ambiguous ? `${ambiguousNote(id!)}\n${said}` : said;
       if (ambiguous) this.emit({ type: "notice", level: "warn", text: ambiguousNote(id!) });
       const result = code ? { output, exit_code: Number(code[1]) }
         : { output, success: false, error: `Command ended: ${field(header, "exit_status") ?? "unknown exit status"}.` };
       this.finish(call, code?.[1] === "0" ? "completed" : "failed");
-      if (!parent) this.lastEnd = ended({ type: "local_bash", description: typeof call.input.command === "string" ? call.input.command.replace(/\s+/g, " ").trim().slice(0, 200) : "" }, code?.[1] === "0" ? "completed" : "failed", "");
+      // Stopped from Droid's footer or the command's row, it was not the command that failed.
+      const status = field(header, "stopped_by") === "user" ? "stopped" : code?.[1] === "0" ? "completed" : "failed";
+      if (!parent) this.commandEnded?.(id!, status);
+      if (!parent) this.lastEnd = ended({ type: "local_bash", description: typeof call.input.command === "string" ? call.input.command.replace(/\s+/g, " ").trim().slice(0, 200) : "" }, status, "");
       call.completion = { type: "tool.end", id: call.id, ...gatewayTool("Execute", call.input), result,
         durationSeconds: (Date.now() - call.started) / 1000 };
       // Before the turn's stream has given the call its row (and its id, `named`), it is

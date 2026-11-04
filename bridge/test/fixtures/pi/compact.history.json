@@ -3,46 +3,46 @@
   {
    "role": "user",
    "text": "Reply with a four-line poem about the sea. Do not use any tools.",
-   "timestamp": 1791801875.127
+   "timestamp": 1793786696.313
   },
   {
    "role": "assistant",
-   "text": "The sea keeps secrets in its blue,  \nAnd hums beneath the moonlit foam;  \nEach wave returns, then slips from view,  \nAs tides carry the wide world home.",
-   "timestamp": 1791801875.132,
+   "text": "The sea hums softly beneath the moonlit sky,  \nSilver waves chase stars as clouds drift by.  \nTides whisper secrets to the waiting shore,  \nAnd carry dreams beyond the harbor door.",
+   "timestamp": 1793786696.321,
    "turn_usage": {
-    "tokens": 1216
+    "tokens": 1201
    }
   },
   {
    "role": "user",
    "text": "Thank you. Now reply with the single word hello and nothing else at all, please.",
-   "timestamp": 1791801878.144
+   "timestamp": 1793786699.082
   },
   {
    "role": "assistant",
    "text": "hello",
-   "timestamp": 1791801878.146
+   "timestamp": 1793786699.085
   },
   {
    "role": "compaction",
    "trigger": "auto",
-   "timestamp": 1791801884.36,
-   "tokens_before": 1245,
+   "timestamp": 1793786704.531,
+   "tokens_before": 1230,
    "turn_usage": {
-    "tokens": 1245
+    "tokens": 1230
    }
   },
   {
    "role": "user",
    "text": "Reply with the single word bye.",
-   "timestamp": 1791801884.365
+   "timestamp": 1793786704.537
   },
   {
    "role": "assistant",
    "text": "bye",
-   "timestamp": 1791801884.369,
+   "timestamp": 1793786704.541,
    "turn_usage": {
-    "tokens": 1375
+    "tokens": 1335
    }
   }
  ],

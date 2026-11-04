@@ -1012,6 +1012,12 @@ test("crew: a command, a subagent with its own, a workflow and a finished subage
   assert.equal(inner.parent_id, explore.subagent_id);
   assert.deepEqual(review.phases.map((phase: Frame) => phase.title), ["Draft", "Review"]);
   assert.equal(review.agents.length, 3);
+  // Its agents can be read, what each was asked first; not the command or the workflow.
+  assert.deepEqual(started.map((subagent) => subagent.can_read === true), [false, true, true, false, true]);
+  const read = await client.call("subagent.read", { session_id: session, subagent_id: explore.subagent_id });
+  assert.deepEqual(read.messages.map((message: Frame) => message.role), ["user", "tool", "assistant"]);
+  assert.equal(read.messages[0].text, explore.goal);
+  assert.deepEqual(await client.call("subagent.read", { session_id: session, subagent_id: review.subagent_id }), { available: false });
   // At work while the crew works, after the turn.
   const atWork = async () => (await client.call("sessions.activity")).sessions.some((entry: Frame) => entry.session_id === session);
   assert.equal(await atWork(), true);

@@ -99,7 +99,7 @@ export async function dispatch(session: Session, provider: Provider, name: strin
 async function ownCommand(session: Session, provider: Provider, name: string, arg: string): Promise<Record<string, unknown> | null> {
   if (name === "status") {
     const [catalog, head] = await Promise.all([provider.models().catch(() => null), gitHead(session.record.cwd).catch(() => null)]);
-    return { type: "exec", output: statusText(session, catalog, head) };
+    return { type: "exec", output: statusText(session, catalog, head, provider.version?.statusLine() ?? null) };
   }
   if (name === "mode" && provider.supportsModes) return { type: "exec", output: await mode(session, provider, arg) };
   if (name === "usage" && provider.usage) return { type: "exec", output: usageText(provider.profile.displayName, await usage(provider, session.id)) };
@@ -167,14 +167,19 @@ function describeMode(state: ModeState | null, settings: string, meaning: Record
   return `Mode: ${state.mode}. This thread ${meaning[state.mode]}.\n${change}`;
 }
 
-/** `head`: the git HEAD of the thread's folder now; no branch line outside a repository. */
-function statusText(session: Session, catalog: ModelCatalog | null, head: GitHead | null): string {
+/**
+ * `head`: the git HEAD of the thread's folder now; no branch line outside a repository.
+ * `version`: the agent's release and where it stands (`VersionCheck.statusLine`); no
+ * line for an agent that has none, or before it is known.
+ */
+function statusText(session: Session, catalog: ModelCatalog | null, head: GitHead | null, version: string | null): string {
   const info = session.info();
   const level = info.reasoning_effort ? `, thinking ${String(info.reasoning_effort)}` : "";
   const mode = session.mode();
   const branch = head ? [`Branch: ${head.branch ?? `none, at commit ${head.commit}`}`] : [];
   return [
     `Agent: ${session.record.agent}`,
+    ...(version ? [version] : []),
     `Folder: ${session.record.cwd}`,
     ...branch,
     `Model: ${modelName(String(info.model), catalog)} from ${String(info.provider)}${level}`,

@@ -18,6 +18,8 @@ public enum ThreadEvent: Hashable, Sendable {
     /// `from`: who sent it through Portals, as the host says (`senders`). `cardAnswer`:
     /// the answers given on a card, which its row shows (`UserMessage.cardAnswer`).
     case turnOpened(by: String, queueID: String? = nil, from: MessageSender? = nil, cardAnswer: String? = nil)
+    /// The provider-native position of the current turn's opening user message.
+    case messageCheckpoint(MessageCheckpoint)
     /// A message from elsewhere (another device, or another agent through Portals), as
     /// stored, joined the running turn; `from` and `cardAnswer` as for `turnOpened`.
     case messageSteered(String, from: MessageSender? = nil, cardAnswer: String? = nil, messageID: UUID? = nil)
@@ -29,6 +31,13 @@ public enum ThreadEvent: Hashable, Sendable {
     /// whichever comes first here, this or the answer to the send. `shownAlready`: the
     /// thread was opened again since, and the host's copy shows it there.
     case ownMessageSteered(UUID, shownAlready: Bool = false)
+    /// A message from elsewhere, as stored, steered into a turn and taken back by a Stop
+    /// before the agent read it (a bridge's `steer_withdrawn`): it leaves the turn it shows in.
+    case messageWithdrawn(String, messageID: UUID? = nil)
+    /// A message this app sent (the thread's id for it, and its words as the host stores
+    /// them) steered into a turn and taken back by a Stop before the agent read it: it
+    /// leaves the turn, and goes back to the composer (`ThreadController`).
+    case ownMessageWithdrawn(UUID, text: String)
     /// The agent began a run for a message that waited on the host's list (`queue`): the
     /// one with this id, which opens the turn.
     case queuedTurnStarted(String)

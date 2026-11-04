@@ -1,10 +1,11 @@
 import "./environment.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { setLogLevel } from "../src/log.ts";
 import { HermesSession, type HermesHost, type Loaded } from "../src/providers/hermes/session.ts";
 import type { Frame } from "../src/providers/hermes/client.ts";
 import type { Registry, ThreadRecord } from "../src/sessions/registry.ts";
-import { Session } from "../src/sessions/session.ts";
+import { Session, stopWaitMs } from "../src/sessions/session.ts";
 
 const settings = { model: "m", provider: "p", reasoningEffort: "" };
 const step = () => new Promise<void>((resolve) => setImmediate(resolve));
@@ -536,6 +537,124 @@ test("a message sent while the connection is down is still sent when the replay 
     assert.equal(core.isRunning, false);
     assert.ok(core.messages.some((message) => message.role === "assistant" && message.text === "Next reply"));
   } finally { await core.close(); }
+});
+
+test("a turn Hermes ends with a status the bridge does not know keeps what was said, and is not told as finished; one that says none still is", async () => {
+  const { core, adapter } = await fixture();
+  try {
+    adapter.event("message.complete", 2, { status: "budget_exhausted", text: "A" });
+    assert.equal(core.isRunning, false);
+    assert.deepEqual(core.messages.slice(-2).map((message) => [message.role, (message as { text?: string }).text, (message as { display_kind?: string }).display_kind]), [
+      ["assistant", "A", undefined],
+      ["assistant", 'Hermes ended the turn in a way Portals does not know ("budget_exhausted").', "failed_turn"],
+    ]);
+    core.submit("again").begin?.();
+    adapter.event("message.start", 3, {});
+    adapter.event("message.complete", 4, { text: "Done again." });
+    assert.equal(core.isRunning, false);
+    assert.deepEqual(core.messages.slice(-1).map((message) => [message.role, (message as { text?: string }).text, (message as { display_kind?: string }).display_kind]), [["assistant", "Done again.", undefined]]);
+  } finally { await core.close(); }
+});
+
+test("an event Hermes sends that the bridge does not know is said once in the log for its kind; one it lets pass on purpose is not", async (t) => {
+  const lines: string[] = [];
+  const write = process.stderr.write;
+  process.stderr.write = ((chunk: unknown) => {
+    lines.push(String(chunk));
+    return true;
+  }) as typeof process.stderr.write;
+  setLogLevel("info");
+  t.after(() => {
+    process.stderr.write = write;
+    setLogLevel("silent");
+  });
+  const { core, adapter } = await fixture();
+  try {
+    adapter.event("something.new", 2, { detail: 1 });
+    adapter.event("something.new", 3, { detail: 2 });
+    adapter.event("tool.generating", 4, { name: "terminal" });
+    adapter.event("subagent.progress", 5, {});
+    const unknown = lines.filter((line) => line.includes("Hermes sent an event the bridge does not know"));
+    assert.equal(unknown.length, 1);
+    assert.match(unknown[0], /"type":"something\.new"/);
+    // Nothing of it reaches the thread: the turn runs on.
+    assert.equal(core.isRunning, true);
+  } finally { await core.close(); }
+});
+
+test("a Stop Hermes never answers (it cannot be reached) ends the turn after stopWaitMs, and what Hermes says of that turn later is let go of", async (t) => {
+  const { core, adapter, setCall } = await fixture();
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const sent: string[] = [];
+  setCall(async (method, params) => {
+    if (method === "session.interrupt") return new Promise(() => {});
+    if (method === "prompt.submit") sent.push(params.text);
+    return {};
+  });
+  try {
+    assert.equal(core.isRunning, true);
+    const stopping = core.interrupt();
+    await step();
+    t.mock.timers.tick(stopWaitMs);
+    assert.equal(await stopping, true);
+    assert.equal(core.isRunning, false);
+    // Hermes comes back and finishes the stopped turn: nothing of it shows, and the thread stays at rest.
+    adapter.event("message.delta", 2, { text: "B" });
+    adapter.event("message.complete", 3, { status: "complete", text: "AB" });
+    assert.equal(core.isRunning, false);
+    assert.deepEqual(core.messages.filter((message) => message.role === "assistant").map((message) => message.text), ["A"]);
+    // The next message is a turn of its own, which Hermes ends.
+    core.submit("next").begin?.();
+    await step();
+    assert.deepEqual(sent, ["next"]);
+    adapter.event("message.start", 4, {});
+    adapter.event("message.delta", 5, { text: "Next reply" });
+    adapter.event("message.complete", 6, { status: "complete", text: "Next reply" });
+    assert.equal(core.isRunning, false);
+    assert.deepEqual(core.messages.filter((message) => message.role === "assistant").map((message) => message.text), ["A", "Next reply"]);
+  } finally { await core.close(); }
+});
+
+test("a message sent after the Stop deadline but before Hermes ends the stopped turn waits for that end, and the stopped turn's output never reaches it", async (t) => {
+  const { core, adapter, setCall } = await fixture();
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const sent: string[] = [];
+  const stop = deferred<unknown>();
+  setCall(async (method, params) => {
+    if (method === "session.interrupt") return stop.promise;
+    if (method === "prompt.submit") sent.push(params.text);
+    return {};
+  });
+  try {
+    const stopping = core.interrupt();
+    await step();
+    t.mock.timers.tick(stopWaitMs);
+    assert.equal(await stopping, true);
+    assert.equal(core.isRunning, false);
+    // Hermes may still run the stopped turn: the thread is still at work.
+    assert.equal(await core.stopping(), true);
+    // The next message waits; nothing goes to Hermes yet.
+    assert.equal(core.submit("new request").status, "queued");
+    await step();
+    assert.deepEqual(sent, []);
+    // Hermes answers the Stop late, then goes on with the stopped turn and ends it.
+    stop.resolve({ status: "interrupted" });
+    await step();
+    adapter.event("message.delta", 2, { text: "OLD LATE OUTPUT" });
+    adapter.event("message.complete", 3, { status: "complete", text: "AOLD LATE OUTPUT" });
+    await step();
+    await step();
+    // Only now does the next message go, as a turn of its own.
+    assert.deepEqual(sent, ["new request"]);
+    assert.equal(core.isRunning, true);
+    assert.equal(await core.stopping(), false);
+    assert.ok(!core.messages.some((message) => message.role === "assistant" && message.text.includes("OLD LATE OUTPUT")));
+    adapter.event("message.start", 4, {});
+    adapter.event("message.delta", 5, { text: "New reply" });
+    adapter.event("message.complete", 6, { status: "complete", text: "New reply" });
+    assert.equal(core.isRunning, false);
+    assert.deepEqual(core.messages.filter((message) => message.role === "assistant").map((message) => message.text), ["A", "New reply"]);
+  } finally { stop.resolve({}); await core.close(); }
 });
 
 for (const when of ["live while the replay is asked for", "in the replay"] as const) {

@@ -1,7 +1,7 @@
 name: aeriportal-push
 version: 0.1.0
 description: "Sends a push notification to the Portals iPhone app when one of its threads needs an answer or finishes."
-author: "the user Ou"
+author: "Portals contributors"
 kind: standalone
 provides_hooks:
   - pre_approval_request

@@ -16,6 +16,7 @@ import type {
 } from "../types.ts";
 import { machineWord } from "../../platform.ts";
 import { HermesError, type Frame } from "./client.ts";
+import { Unknowns } from "../unknowns.ts";
 
 // One Hermes session as a thread of the bridge.
 //
@@ -75,6 +76,22 @@ const compressLine = /^\/(?:compress|compact)(?:\s+([\s\S]*))?$/;
 const compressTimeoutMs = 11 * 60_000;
 /** What a turn says as it runs: not shown of a stopped turn the bridge ended for the app. */
 const abandonedTurnEvents = new Set(["message.delta", "message.interim", "reasoning.delta", "thinking.delta", "status.update", "tool.start", "tool.complete"]);
+/**
+ * The events Hermes's contract has (tui_gateway/contracts/events.py, at v0.22.5) that are
+ * not shown through the bridge (yet), or that its client reads itself.
+ */
+const quietEvents = new Set([
+  "gateway.ready", "skin.changed", "onboarding.ended", "setup.ready", "free_tier.challenge", "notice", "reasoning.available", "reaction",
+  "review.summary", "agent.print", "tool.generating", "tool.output_risk", "tool.progress", "todo.updated", "notification.show",
+  "notification.clear", "tip.show", "session.resume_progress", "session.reclaimed", "approval.cancelled", "session.control.update",
+  "billing.step_up.verification", "background.complete", "btw.complete", "preview.restart.complete", "preview.restart.progress",
+  "moa.reference", "moa.aggregating", "moa.progress", "moa.phase", "preview.open", "preview.close", "pane.reveal", "message.reaction",
+  "agent.terminal.output", "terminal.close", "browser.progress", "browser.controller.command", "browser.controller.cancel",
+  "voice.interrupted", "voice.status", "voice.partial", "voice.transcript", "wake.detected", "pet.changed", "pet.generate.progress",
+  "pet.hatch.progress", "cron.changed", "sessions.changed", "platforms.changed", "projects.changed", "pairing.changed", "skills.changed",
+  "bot_relay.outbox.pending", "subagent.spawn_requested", "subagent.start", "subagent.progress", "subagent.thinking", "subagent.tool",
+  "subagent.complete",
+]);
 
 interface Pending {
   controller: AbortController;
@@ -137,6 +154,8 @@ export class HermesSession implements ProviderSession {
   private retryDelay = 400;
   /** The profile's one ongoing conversation (feature bot_chat): it keeps its name, whatever Hermes titles it. */
   private readonly ongoing: boolean;
+  /** Kinds of event the bridge does not know, each said once in the log. */
+  private readonly unknowns = new Unknowns((type) => log.info("Hermes sent an event the bridge does not know", { session: this.id, type }), quietEvents);
   /**
    * A `/compress` Hermes is carrying out, which nothing stops (Hermes's own Stop leaves a
    * compression be). `turn` is the turn that asked for it, until Stop let go of it
@@ -639,7 +658,8 @@ export class HermesSession implements ProviderSession {
         return;
       }
       default:
-        // session.info, subagent.*, tool.generating and the rest: not shown through the bridge (yet).
+        // subagent.*, tool.generating and the rest: not shown through the bridge (yet).
+        this.unknowns.note(type);
         return;
     }
   }
@@ -656,10 +676,13 @@ export class HermesSession implements ProviderSession {
 
   private complete(payload: Frame): void {
     if (!this.turnOpen) return;
-    const status = payload.status === "error" ? "error" : payload.status === "interrupted" ? "interrupted" : "complete";
+    // A turn that says no status ended as before Hermes said one; one that says a status the
+    // bridge does not know did not surely finish, and is not told as finished.
+    const said = payload.status ?? "complete";
+    const status = said === "error" || said === "interrupted" || said === "complete" ? said : null;
     const text = typeof payload.text === "string" ? payload.text : "";
     // The whole reply, when it did not come as deltas (a provider that does not stream).
-    if (status === "complete" && text !== "" && this.streamed === "" && payload.response_previewed !== true) {
+    if (status !== "error" && status !== "interrupted" && text !== "" && this.streamed === "" && payload.response_previewed !== true) {
       this.report({ type: "text", text });
     }
     const usage = usageOf(payload.usage);
@@ -673,6 +696,10 @@ export class HermesSession implements ProviderSession {
       const retryable = typeof surface?.retryable === "boolean" ? surface.retryable : typeof payload.recoverable === "boolean" ? payload.recoverable : true;
       const error = text || (typeof payload.error === "string" ? payload.error : "") || "The request failed.";
       this.endTurn({ type: "turn.end", status, error, retryable, ...(usage ? { usage } : {}), ...spent });
+      return;
+    }
+    if (status === null) {
+      this.endTurn({ type: "turn.end", status: "error", error: `Hermes ended the turn in a way Portals does not know ("${String(said)}").`, ...(usage ? { usage } : {}), ...spent });
       return;
     }
     this.endTurn({ type: "turn.end", status, ...(usage ? { usage } : {}), ...spent });

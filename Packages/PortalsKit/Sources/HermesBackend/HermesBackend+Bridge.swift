@@ -161,7 +161,8 @@ extension HermesBackend: ThreadActivityReporting {
             list: offers(BridgeWire.Feature.threadSync) ? result.list : nil,
             looks: offers(BridgeWire.Feature.agentLooks) ? result.lookList : nil,
             order: offers(BridgeWire.Feature.sidebarOrder) ? result.orderList : nil,
-            update: offers(BridgeWire.Feature.updateNotice) ? result.laterVersion : nil
+            update: offers(BridgeWire.Feature.updateNotice) ? result.laterVersion : nil,
+            disk: offers(BridgeWire.Feature.diskSpace) ? result.hostDisk : nil
         )
     }
 }
@@ -418,5 +419,24 @@ extension HermesBackend: NetReporting {
         } catch let error as JSONRPCError where error.code == JSONRPCError.invalidParamsCode {
             throw NetError.refused(error.message)
         }
+    }
+}
+
+// MARK: - Message-level forks
+
+extension HermesBackend: MessageForking {
+    public var offersMessageFork: Bool? {
+        gatewayReady.map { _ in offers(BridgeWire.Feature.messageFork) }
+    }
+
+    public func fork(_ thread: ThreadRef, at checkpoint: MessageCheckpoint, before: Bool) async throws -> ThreadRef {
+        guard offers(BridgeWire.Feature.messageFork), !checkpoint.id.isEmpty,
+              before ? checkpoint.canEdit : checkpoint.canFork else { throw MessageForkError.unavailable }
+        let created: HermesWire.SessionCreateResult = try await peer().call(
+            BridgeWire.Method.sessionFork,
+            BridgeWire.SessionForkParams(sessionID: thread.id.rawValue, checkpointID: checkpoint.id, before: before),
+            timeout: .seconds(120)
+        )
+        return follow(created, with: thread.agent, title: nil, workingDirectory: thread.workingDirectory)
     }
 }

@@ -107,10 +107,15 @@ export const testCommands: SlashCommand[] = [
   { name: "clear", description: "Start a new session with empty context", argumentHint: "", builtin: true },
   { name: "model", description: "Set the AI model for Claude Code", argumentHint: "<model>", builtin: true },
   { name: "grill-me", description: "Interview the user about a plan", argumentHint: "", builtin: false },
+  // Ones that need a terminal, which Claude Code 2.1.318 lists in `terminal_slash_commands`.
+  { name: "doctor", description: "Diagnose and verify your Claude Code installation and settings", argumentHint: "", builtin: true },
+  { name: "send-to-project", description: "Send this session to another project", argumentHint: "", builtin: true },
 ];
 
 /** What every FakeQuery answers for `/usage` (its own `/usage`), until a test says otherwise; an error is thrown. */
 export const planUsage: { answer: PlanUsage | Error } = { answer: new Error("not set") };
+/** What `mcpServerStatus` answers, in turn: each ask takes the first, the last staying. */
+export const mcpStatus: { answers: { name: string; status: string; error?: string; tools?: unknown[] }[][] } = { answers: [[]] };
 
 export const maxPlanUsage: PlanUsage = {
   subscription_type: "max",
@@ -201,9 +206,11 @@ export class FakeQuery implements QueryLike {
     }
   }
 
-  async interrupt(): Promise<unknown> {
-    this.calls.push(["interrupt"]);
-    return undefined;
+  /** What `interrupt` answers: an older Claude Code's nothing, unless a test gives a receipt. */
+  interruptReceipt: unknown = undefined;
+  async interrupt(options?: { cancelQueued?: boolean }): Promise<unknown> {
+    this.calls.push(options ? ["interrupt", options] : ["interrupt"]);
+    return this.interruptReceipt;
   }
   async stopTask(taskId: string): Promise<void> {
     this.calls.push(["stopTask", taskId]);
@@ -244,6 +251,10 @@ export class FakeQuery implements QueryLike {
     this.calls.push(["usage", options]);
     if (planUsage.answer instanceof Error) throw planUsage.answer;
     return structuredClone(planUsage.answer);
+  }
+  async mcpServerStatus(): Promise<{ name: string; status: string; error?: string; tools?: unknown[] }[]> {
+    this.calls.push(["mcpServerStatus"]);
+    return structuredClone(mcpStatus.answers.length > 1 ? mcpStatus.answers.shift()! : mcpStatus.answers[0]);
   }
   close(): void {
     this.calls.push(["close"]);
@@ -345,6 +356,11 @@ export class FakeFiles implements SessionFiles {
   async messages(id: string): Promise<unknown[]> {
     return this.stored.get(id)?.messages ?? [];
   }
+  /** Subagents' own messages, by session and agent id (`session/agent`). */
+  readonly subagents = new Map<string, unknown[]>();
+  async subagentMessages(id: string, agent: string): Promise<unknown[]> {
+    return this.subagents.get(`${id}/${agent}`) ?? [];
+  }
   /** Workflows' journals, by path. */
   readonly journals = new Map<string, unknown>();
   async journal(path: string): Promise<unknown> {
@@ -364,12 +380,19 @@ export class FakeFiles implements SessionFiles {
     const stored = this.stored.get(id);
     if (stored) stored.title = title;
   }
-  async fork(id: string, cwd: string): Promise<string> {
-    const from = this.sessions.find((session) => session.sessionId === id)!;
+  async fork(id: string, cwd: string, upToMessageId?: string): Promise<string> {
+    const from = [...this.sessions, ...this.started].find((session) => session.sessionId === id);
+    if (!from) throw new Error("Session not found");
     const fork = randomUUID();
     const title = `${from.customTitle ?? from.summary} (fork)`;
     this.sessions.push({ ...from, sessionId: fork, customTitle: title, cwd, lastModified: Date.now() });
-    this.stored.set(fork, { title, messages: structuredClone(this.stored.get(id)?.messages ?? []) });
+    const messages = this.stored.get(id)?.messages ?? [];
+    const end = upToMessageId ? messages.findIndex((entry) => (entry as { uuid?: string })?.uuid === upToMessageId) : messages.length - 1;
+    if (upToMessageId && end < 0) throw new Error("Fork message not found");
+    this.stored.set(fork, { title, messages: structuredClone(messages.slice(0, end + 1)).map((entry) => {
+      const message = entry as { uuid?: string };
+      return typeof message?.uuid === "string" ? { ...message, uuid: randomUUID() } : entry;
+    }) });
     this.forks.push([id, fork]);
     return fork;
   }
@@ -377,18 +400,21 @@ export class FakeFiles implements SessionFiles {
 
 /** A Claude provider whose queries are FakeQuery objects, in the order they start. */
 export function fakeClaude(
-  options: { maxWarm?: number; idleMinutes?: number; files?: FakeFiles; agents?: () => Promise<unknown>; appliedModel?: string | null; now?: () => number; interruptGraceMs?: number; titleWatchMs?: number[]; home?: string; managedSettings?: string } = {},
+  options: { maxWarm?: number; idleMinutes?: number; files?: FakeFiles; agents?: () => Promise<unknown>; authStatus?: () => Promise<unknown>; appliedModel?: string | null; now?: () => number; interruptGraceMs?: number; titleWatchMs?: number[]; home?: string; managedSettings?: string; checkpointPath?: string } = {},
 ) {
   const queries: FakeQuery[] = [];
   const files = options.files ?? new FakeFiles();
   const provider = new ClaudeProvider({
     settings: { path: "/nonexistent/claude", idleMinutes: options.idleMinutes ?? 15, maxWarm: options.maxWarm ?? 6, apiKey: null, folder: "/tmp" },
     files,
+    checkpointPath: options.checkpointPath,
     // A home of its own, never Dana's: Claude Code's settings there count (`mentionLimit`).
     env: { PATH: "/usr/bin", HOME: options.home ?? "/nonexistent/home", CLAUDE_CODE_ENTRYPOINT: "cli", ANTHROPIC_API_KEY: "sk-from-env" },
     managedSettings: options.managedSettings ?? "/nonexistent/managed-settings.json",
     // No terminal has anything open unless the test says so.
     agents: options.agents ?? (async () => []),
+    // Signed in with no end said, unless the test says.
+    authStatus: options.authStatus ?? (async () => ({ loggedIn: true, loginExpiresAt: null })),
     now: options.now,
     interruptGraceMs: options.interruptGraceMs,
     titleWatchMs: options.titleWatchMs,
