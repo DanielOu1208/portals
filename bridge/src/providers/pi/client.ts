@@ -103,24 +103,43 @@ export class PiClient {
   /**
    * Writes a command and resolves with the `data` of Pi's answer. Rejects with
    * `PiRefused` when Pi says no, `PiGone` when the process ends first, and `PiSilent`
-   * when no answer comes in `timeoutMs` (null: however long Pi takes).
+   * when no answer comes in `timeoutMs` (null: however long Pi takes). `signal` gives up
+   * on the answer, rejecting with its reason; one that comes later is let go of.
    */
-  call<T = any>(command: PiCommand, timeoutMs: number | null = untimed.has(command.type) ? null : this.timeoutMs): Promise<T> {
+  call<T = any>(command: PiCommand, timeoutMs: number | null = untimed.has(command.type) ? null : this.timeoutMs, signal?: AbortSignal): Promise<T> {
     const id = `b${this.nextId++}`;
     return new Promise<T>((resolve, reject) => {
       if (this.exit || !this.child.send({ id, ...command })) {
         reject(new PiGone(this.exit?.reason ?? "Pi is not running."));
         return;
       }
-      const waiting: Waiting = { command: command.type, resolve, reject, timer: null };
+      const givenUp = () => {
+        if (this.waiting.get(id) !== waiting) return;
+        this.waiting.delete(id);
+        if (waiting.timer) clearTimeout(waiting.timer);
+        reject(signal!.reason);
+      };
+      const waiting: Waiting = {
+        command: command.type,
+        resolve: (data) => {
+          signal?.removeEventListener("abort", givenUp);
+          resolve(data);
+        },
+        reject: (error) => {
+          signal?.removeEventListener("abort", givenUp);
+          reject(error);
+        },
+        timer: null,
+      };
       if (timeoutMs !== null) {
         waiting.timer = setTimeout(() => {
           this.waiting.delete(id);
-          reject(new PiSilent(`Pi did not answer ${command.type} in ${Math.round(timeoutMs / 100) / 10} seconds.`));
+          waiting.reject(new PiSilent(`Pi did not answer ${command.type} in ${Math.round(timeoutMs / 100) / 10} seconds.`));
         }, timeoutMs);
         waiting.timer.unref();
       }
       this.waiting.set(id, waiting);
+      signal?.addEventListener("abort", givenUp, { once: true });
     });
   }
 

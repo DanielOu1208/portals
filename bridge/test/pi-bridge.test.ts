@@ -10,6 +10,7 @@ import { WaitingStore } from "../src/sessions/waiting.ts";
 import { agentInstructions, mathInstructions, visualInstructions } from "../src/portals/guide.ts";
 import { makeProviders } from "../src/providers/index.ts";
 import type { PiProvider } from "../src/providers/pi/provider.ts";
+import { refusalText } from "../src/providers/pi/session.ts";
 import { isEvent, RpcFailure, startTestBridge, streamedText, TestClient, unspent, type Frame, type TestBridge } from "./helpers.ts";
 import { piProvider, standin, until, type Standin } from "./pi-standin.ts";
 
@@ -171,7 +172,7 @@ test("a thread starts no process; its first message starts Pi on the thread's id
   const events = turnEvents(session, start);
   assert.deepEqual(kinds(events), ["message.start", "session.title", "message.delta", "message.complete"]);
   assert.deepEqual(events.find((entry) => entry.type === "session.title").payload, { title: "play plain" });
-  const said = "A JSON line is a single line of text containing one valid JSON value. It’s commonly used in newline-delimited JSON files, where each line is a separate record.";
+  const said = "A JSON line is one complete JSON value written on a single line. In JSON Lines files, each line is a separate record, usually followed by a newline.";
   assert.equal(streamedText(events), said);
   assert.ok(events.filter((entry) => entry.type === "message.delta").length > 10);
   assert.equal(done.payload.status, "complete");
@@ -194,12 +195,12 @@ test("a thread starts no process; its first message starts Pi on the thread's id
   assert.deepEqual(pi.sentTo(session, "set_thinking_level"), []);
   // The ring, from what Pi says of the session after the answer.
   const usage = await event(session, start, "session.usage");
-  assert.deepEqual(usage.payload, { usage: { context_used: 1214, context_max: 272_000 } });
+  assert.deepEqual(usage.payload, { usage: { context_used: 1194, context_max: 272_000 } });
 
   const resumed = await client.call("session.resume", { session_id: session });
   assert.deepEqual(resumed.messages.map((message: Frame) => [message.role, message.text]), [["user", "play plain\nand a second line"], ["assistant", said]]);
   assert.equal(resumed.info.title, "play plain");
-  assert.deepEqual(resumed.info.usage, { context_used: 1214, context_max: 272_000 });
+  assert.deepEqual(resumed.info.usage, { context_used: 1194, context_max: 272_000 });
   // The process stays for the next message.
   assert.equal(pi.alive().length, 1);
   const second = await turn(session, "and again");
@@ -227,8 +228,8 @@ test("a turn with tools: the rows, their results and a diff, as the app reads th
       ["write_file", { path: "done.txt", content: "done" }, { diff: "--- a/done.txt\n+++ b/done.txt\n+done\n" }],
     ],
   );
-  assert.equal(rows[1].duration_s, 0.016);
-  assert.equal(events.at(-1).payload.text, "Completed the five steps in order; `ls no-such-file.txt` failed as expected.");
+  assert.equal(rows[1].duration_s, 0.021);
+  assert.equal(events.at(-1).payload.text, "Updated `hello.txt`, ran both commands, and wrote `done` to `done.txt`.");
   // The ring was asked for after each answer of the run.
   assert.ok(pi.sentTo(session, "get_session_stats").length >= 6);
 });
@@ -238,8 +239,8 @@ test("other recorded runs: thinking streams as reasoning, a provider's refusal f
   const thought = await turn(thinking, "play thinking");
   assert.deepEqual(kinds(thought), ["message.start", "session.title", "reasoning.delta", "message.delta", "message.complete"]);
   // The summary's trailing blank line is not said.
-  assert.equal(streamedText(thought, "reasoning.delta"), "**Checking the count two ways**");
-  assert.match(thought.at(-1).payload.text, /^115 — inclusion–exclusion/);
+  assert.equal(streamedText(thought, "reasoning.delta"), "**Cross-checking the count**");
+  assert.match(thought.at(-1).payload.text, /^115 — By inclusion–exclusion/);
 
   // The model's provider refused the request: its sentence, without the JSON around it.
   const refused = await turn(await createThread(), "play error");
@@ -253,12 +254,12 @@ test("other recorded runs: thinking streams as reasoning, a provider's refusal f
   // Pi compacts by itself after `agent_end` and before it settles: the turn ends only then.
   const compacted = await turn(await createThread(), "play compact-auto");
   assert.deepEqual(kinds(compacted), ["message.start", "session.title", "message.delta", "thinking.delta", "session.compacted", "message.complete"]);
-  assert.deepEqual(compacted.find((entry) => entry.type === "session.compacted").payload, { trigger: "auto", tokens_before: 1213 });
+  assert.deepEqual(compacted.find((entry) => entry.type === "session.compacted").payload, { trigger: "auto", tokens_before: 1199 });
 
   // His own Pi runs a `codemode` script that reads two files: one row, not three.
   const script = await turn(await createThread(), "play own");
   assert.deepEqual(script.filter((entry) => entry.type === "tool.complete").map((entry) => entry.payload.name), ["execute_code"]);
-  assert.equal(script.at(-1).payload.text, "one.txt has 11 characters; two.txt has 12 characters.");
+  assert.equal(script.at(-1).payload.text, "`one.txt` has 11 characters, and `two.txt` has 12.");
 });
 
 test("images go to Pi as base64 with their type; one Pi cannot read is left out, and a model that takes none gets the text only", async () => {
@@ -296,6 +297,10 @@ test("Stop is clear_queue then abort; the turn ends interrupted, and a message P
   const session = await createThread();
   const start = await send(session, "play stop");
   await event(session, start, "message.delta");
+  // The recording (Pi 1.5.0) goes on writing the reply after the recorder sent its message,
+  // and the stand-in does not wait for the bridge's: send it once the whole reply has come,
+  // so the end of the reply cannot land after the message's row on a busy machine.
+  await until(() => streamedText(turnEvents(session, start)) === "1\n2\n3\n");
   // A message while it works, which Pi queues behind the reply it is writing.
   assert.deepEqual(await client.call("prompt.submit", { session_id: session, text: "Then say the word banana." }), { status: "steered" });
   await until(() => pi.sentTo(session, "prompt").length === 2);
@@ -318,7 +323,7 @@ test("Stop is clear_queue then abort; the turn ends interrupted, and a message P
     resumed.messages.map((message: Frame) => [message.role, message.text, message.display_kind ?? message.display_metadata?.interrupted ?? null]),
     [
       ["user", "play stop", null],
-      ["assistant", "1", null],
+      ["assistant", "1\n2\n3\n", null],
       ["user", "Then say the word banana.", "steer"],
       // Nothing more was said before the stop.
       ["assistant", "", true],
@@ -844,6 +849,34 @@ test("a message Pi takes and then never begins to answer fails its turn, when th
   }
 });
 
+test("a message Pi never answers, and is not at work on, is said again in a turn of its own, and the messages after it are not held up", async () => {
+  const impatient = piProvider(pi, { folder: cwd, callTimeoutMs: 1000 });
+  const own = await startTestBridge({ providers: new Map([["pi", impatient]]), config: { generalFolder: cwd } });
+  const phone = await TestClient.open(own);
+  try {
+    const session = await createThread({}, phone);
+    const start = await send(session, "hold lost-1 lose-late", phone);
+    await event(session, start, "message.delta", phone);
+    // Handed to the run as it settles, Pi takes it and never answers (an extension compacting at `agent_settled`).
+    assert.equal(await submit(session, "the lost one", phone), "steered");
+    await until(() => pi.sentTo(session, "prompt").length === 2);
+    pi.release("lost-1");
+    const [first] = await ends(session, start, 1, phone);
+    assert.equal(first.text, "Working. You said: hold lost-1 lose-late");
+    // Before, the next message waited for that answer for good.
+    await submit(session, "the next one", phone);
+    const [, second, third] = await ends(session, start, 3, phone);
+    assert.deepEqual([second.status, second.text], ["complete", "Working. You said: the next one"]);
+    assert.deepEqual([third.status, third.text], ["complete", "Working. You said: the lost one"]);
+    // Pi was asked how it was, twice at rest, before the message was taken as not sent.
+    assert.ok(pi.sentTo(session, "get_state").length >= 3);
+    assert.deepEqual(pi.sentTo(session, "prompt").map((record) => record.message), ["hold lost-1 lose-late", "the lost one", "the next one", "the lost one"]);
+  } finally {
+    await phone.close();
+    await own.dispose();
+  }
+});
+
 // MARK: /compact
 
 test("/compact is carried out with Pi's compact: a status line, the mark, the ring, and a message sent meanwhile waits", async () => {
@@ -1248,6 +1281,24 @@ test("a thread's model and level are kept until its process starts; a model Pi t
   assert.equal(streamedText(await turn(locked, "hello again")), "Working. You said: hello again");
 });
 
+test("a message Pi will not run for want of a sign-in fails the turn with what to run on the host, and can be tried again", async (t) => {
+  // The model a new thread runs on is one Pi has no key for: nothing refuses it before the message.
+  pi.configure({ ...standinSettings, noKey: [...standinSettings.noKey, "openai/gpt-6-luna"] });
+  t.after(() => pi.configure(standinSettings));
+  const session = await createThread();
+  const failed = (await turn(session, "hello")).at(-1).payload;
+  assert.deepEqual([failed.status, failed.text, failed.error_surface?.retryable], ["error", `Pi is not signed in to openai on this ${machineWord()}. Run \`pi\` in a terminal there and sign in with /login, then try again.`, true]);
+});
+
+test("Pi's sentences for a provider it has no sign-in for are what to run on the host; any other refusal is Pi's own", () => {
+  const signedOut = (to: string) => `Pi is not signed in${to} on this ${machineWord()}. Run \`pi\` in a terminal there and sign in with /login, then try again.`;
+  // As Pi 1.5.0 words them.
+  assert.equal(refusalText("No API key found for openai.\n\nUse /login to log into a provider via OAuth or API key. See:\n  /opt/pi/docs/providers.md\n  /opt/pi/docs/models.md"), signedOut(" to openai"));
+  assert.equal(refusalText("No API key found for the selected model.\n\nUse /login to log into a provider via OAuth or API key."), signedOut(""));
+  assert.equal(refusalText(`Authentication failed for "openai-codex". Credentials may have expired or network is unavailable. Run '/login openai-codex' to re-authenticate.`), signedOut(" to openai-codex"));
+  assert.equal(refusalText("Nothing to compact (session too small)"), "Nothing to compact (session too small)");
+});
+
 test("one model id under two of Pi's providers: the default's provider is listed first, and a thread that names none runs on it", async () => {
   const mimo = { id: "mimo-v2", name: "MiMo v2", reasoning: true, input: ["text"], contextWindow: 1_000_000 };
   const twice = standin({ models: [{ ...mimo, provider: "paid" }, { ...mimo, provider: "plan" }], default: "plan/mimo-v2", level: "medium" });
@@ -1511,7 +1562,7 @@ test("after a restart of the bridge a thread's history is read from Pi's session
       ["patch", "", ""],
       ["terminal", "", ""],
       ["write_file", "", ""],
-      ["assistant", "Completed the five steps in order; `ls no-such-file.txt` failed as expected.", ""],
+      ["assistant", "Updated `hello.txt`, ran both commands, and wrote `done` to `done.txt`.", ""],
     ]);
     const resumed = await again.call("session.resume", { session_id: session });
     assert.equal(resumed.info.title, "play tools");
@@ -1782,17 +1833,21 @@ async function versionLines(t: TestContext): Promise<string[]> {
   return lines();
 }
 
-test("at start the bridge logs which Pi is installed: an error for none or one too old, a warning for another release, a line for the tested one", async (t) => {
+test("at start the bridge logs which Pi is installed: an error for none or one too old, a warning for another release, a line for a tested one", async (t) => {
   assert.deepEqual(await versionLines(t), ["info  Pi 1.1.0"]);
+  pi.version("1.5.0");
+  assert.deepEqual(await versionLines(t), ["info  Pi 1.5.0"]);
   pi.version("1.2.0");
-  assert.deepEqual(await versionLines(t), ["warn  Pi is 1.2.0; this bridge was tested with 1.1.0. Check a thread before relying on it."]);
+  assert.deepEqual(await versionLines(t), ["warn  Pi is 1.2.0; this bridge was tested with 1.1.0, 1.5.0. Check a thread before relying on it."]);
+  pi.version("1.6.0");
+  assert.deepEqual(await versionLines(t), ["warn  Pi is 1.6.0, newer than this bridge was tested with (1.1.0, 1.5.0). Check a thread before relying on it."]);
   pi.version("0.99.2");
   assert.deepEqual(await versionLines(t), ["error Pi is 0.99.2, which is too old for this bridge: it needs 1.1.0 or newer. No Pi thread runs until it is updated (pi update)."]);
   pi.install(false);
   assert.deepEqual(await versionLines(t), [`error Pi was not found or did not run at ${pi.path}. Set pi.path in config.json.`]);
 });
 
-test("a turn on a Pi older than the tested release fails at once with a sentence naming the release it needs, and runs once Pi is updated", async () => {
+test("a turn on a Pi older than the minimum fails at once with a sentence naming the release it needs, and runs once Pi is updated", async () => {
   pi.version("0.99.2");
   const own = await startTestBridge({ providers: new Map([["pi", piProvider(pi, { folder: cwd, checkVersion: true })]]), config: { generalFolder: cwd } });
   const phone = await TestClient.open(own);

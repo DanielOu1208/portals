@@ -236,6 +236,15 @@ export class CodexClient {
     return this.rpc.listen(listener);
   }
 
+  /**
+   * What the app server said of itself in `initialize`, which names its release
+   * ("portals-bridge/0.166.0 (Mac OS …)"): the shared daemon may run an older Codex than
+   * the installed one. Null while not connected.
+   */
+  get userAgent(): string | null {
+    return this.isConnected ? this.serverUserAgent : null;
+  }
+
   /** Connects (once); on failure keeps trying in the background. Resolves after the first attempt either way. */
   start(): Promise<void> {
     return this.rpc.start();

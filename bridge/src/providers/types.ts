@@ -8,6 +8,7 @@ import type { TurnDiff } from "../sessions/turnDiff.ts";
 import type { MentionLimit } from "../sessions/mentions.ts";
 import type { From } from "../fleet/line.ts";
 import type { SearchFile } from "../search/readers.ts";
+import type { VersionCheck } from "./program.ts";
 
 /** An agent as the app's sidebar lists it (`profiles.list`). */
 export interface AgentProfile {
@@ -208,6 +209,11 @@ export type ProviderEvent =
   | { type: "queue.failed"; requestId: string; error: string }
   /** Droid's receipt for a message whose earlier delivery could not be confirmed. */
   | { type: "queue.taken"; requestId: string; prompt: Prompt }
+  /**
+   * A message handed over with `steer` that a Stop took back before the agent read it:
+   * it was never sent, and never will be.
+   */
+  | { type: "steer.withdrawn"; prompt: Prompt }
   /** A piece of the reply. */
   | { type: "text"; text: string }
   /** A closed piece of text written beside tool calls. `alreadyStreamed` when it also came as `text`. */
@@ -518,7 +524,8 @@ export interface ProviderSession {
    * off mid-way (its agent's process stopped with the bridge, a crash) rather than ended,
    * as the agent's own record shows (Claude Code: its last entry is not the model's
    * finished answer). A turn the bridge recorded running that is over at the next load is
-   * then told as stopped, not as finished. Agents whose record cannot tell need not have it.
+   * then told as stopped, not as finished. Agents whose record cannot tell need not have it:
+   * a record that ends on the person's message or a tool's row is taken as cut off anyway.
    */
   lastTurnCutOff?(): boolean;
   /** Starts a turn. The provider reports it through the sink and ends it with `turn.end`. */
@@ -789,6 +796,8 @@ export interface Provider {
    * is asked first.
    */
   usage?(thread: string, options?: { fresh?: boolean }): Promise<UsageReport>;
+  /** The release of the agent's program the bridge knows of, and where it stands against the tested ones, for `/status`. */
+  readonly version?: VersionCheck;
   /**
    * The thread whose agent knows it now by `id`, when that is not the thread's own id:
    * a Cursor thread whose conversation was started afresh keeps its id, while the

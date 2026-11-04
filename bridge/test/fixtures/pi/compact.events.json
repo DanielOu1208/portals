@@ -1,14 +1,14 @@
 [
  {
   "type": "text",
-  "text": "The sea keeps secrets in its blue,  \nAnd hums beneath the moonlit foam;  \nEach wave returns, then slips from view,  \nAs tides carry the wide world home.",
-  "pieces": 37
+  "text": "The sea hums softly beneath the moonlit sky,  \nSilver waves chase stars as clouds drift by.  \nTides whisper secrets to the waiting shore,  \nAnd carry dreams beyond the harbor door.",
+  "pieces": 40
  },
  {
   "type": "turn.end",
   "status": "complete",
   "spent": {
-   "tokens": 1216
+   "tokens": 1201
   }
  },
  {
@@ -20,13 +20,13 @@
   "type": "turn.end",
   "status": "complete",
   "spent": {
-   "tokens": 1245
+   "tokens": 1230
   }
  },
  {
   "type": "usage",
   "usage": {
-   "used": 1245,
+   "used": 1230,
    "max": 272000
   }
  },
@@ -41,13 +41,13 @@
  {
   "type": "compacted",
   "trigger": "manual",
-  "tokensBefore": 1245
+  "tokensBefore": 1230
  },
  {
   "type": "turn.end",
   "status": "complete",
   "usage": {
-   "used": 1245,
+   "used": 1230,
    "max": 272000
   }
  },
@@ -65,7 +65,7 @@
   "error": "Already compacted",
   "retryable": true,
   "usage": {
-   "used": 1245,
+   "used": 1230,
    "max": 272000
   }
  },
@@ -78,17 +78,17 @@
   "type": "turn.end",
   "status": "complete",
   "usage": {
-   "used": 1245,
+   "used": 1230,
    "max": 272000
   },
   "spent": {
-   "tokens": 1375
+   "tokens": 1335
   }
  },
  {
   "type": "usage",
   "usage": {
-   "used": 1375,
+   "used": 1335,
    "max": 272000
   }
  }

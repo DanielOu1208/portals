@@ -196,6 +196,10 @@ public enum BridgeWire {
         /// An empty list in `model_levels` says the model takes no thinking level (Cursor's
         /// Auto, a Droid model without reasoning), and none is offered for it.
         public static let modelLevelsNone = "model_levels_none"
+        /// A `status.update` may carry `withdrawn`, a message steered into the running turn
+        /// that a Stop took back before the agent read it: it leaves the turn, and goes back
+        /// to the composer of the device that sent it.
+        public static let steerWithdrawn = "steer_withdrawn"
     }
 
     /// A later version of portals-host, as a bridge with `update_notice` says it

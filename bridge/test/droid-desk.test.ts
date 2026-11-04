@@ -98,6 +98,53 @@ test("Droid desk summaries update after a file changes, and ids cannot traverse 
   assert.equal(await r.files.find(randomUUID()), null);
 });
 
+test("Droid offers the folders its sessions ran in from each file's header alone, read again only once the file changes", async (t) => {
+  const r = scratch(t);
+  const garden = r.session(randomUUID(), "/Users/dana/garden");
+  r.session(randomUUID(), "/Users/dana/recipes", { lastCwd: "/Users/dana/recipes/web" });
+  // No message yet: the folder was used all the same.
+  r.session(randomUUID(), "/Users/dana/notes", {}, []);
+  // Not the desk's: a subagent's, a fork's snapshot, a title the bridge had made, and files that are no session.
+  r.session(randomUUID(), "/Users/dana/child", { callingSessionId: garden.id });
+  r.session(randomUUID(), "/Users/dana/snapshot", { [snapshotField]: "marker" });
+  r.session(randomUUID(), join(r.state, "names"));
+  writeFileSync(r.session(randomUUID(), "/Users/dana/broken").path, '{"type":"session_start"\n');
+  const hidden = join(r.home, ".factory", "sessions", "btw", `${randomUUID()}.jsonl`);
+  mkdirSync(dirname(hidden), { recursive: true });
+  writeFileSync(hidden, jsonl({ type: "session_start", id: basename(hidden, ".jsonl"), cwd: "/Users/dana/side-chat" }));
+  const folders = async () => (await r.provider.recentFolders()).map((folder) => folder.path).sort();
+  assert.deepEqual(await folders(), ["/Users/dana/garden", "/Users/dana/notes", "/Users/dana/recipes/web"]);
+  // When each was last used: when its file last changed.
+  fs.utimesSync(garden.path, new Date(1_800_000_000_000), new Date(1_800_000_000_000));
+  assert.deepEqual((await r.provider.recentFolders()).find((folder) => folder.path === "/Users/dana/garden"), { path: "/Users/dana/garden", lastUsed: 1_800_000_000_000 });
+
+  // A header as it was is not read again; one that changed is, and a file gone is forgotten.
+  const moved = readFileSync(garden.path, "utf8").replace("/Users/dana/garden", "/Users/dana/meadow");
+  writeFileSync(garden.path, moved);
+  fs.utimesSync(garden.path, new Date(1_800_000_000_000), new Date(1_800_000_000_000));
+  assert.ok((await folders()).includes("/Users/dana/garden"));
+  fs.utimesSync(garden.path, new Date(1_800_000_060_000), new Date(1_800_000_060_000));
+  assert.deepEqual(await folders(), ["/Users/dana/meadow", "/Users/dana/notes", "/Users/dana/recipes/web"]);
+  rmSync(garden.path);
+  assert.deepEqual(await folders(), ["/Users/dana/notes", "/Users/dana/recipes/web"]);
+  assert.equal(r.loads(), 0);
+});
+
+test("folders.list offers a folder Droid worked in only at the desk", async (t) => {
+  const r = scratch(t);
+  const root = realpathSync(r.home);
+  const garden = join(root, "dana-garden");
+  mkdirSync(garden);
+  const bridge = await startTestBridge({ providers: new Map([["droid", r.provider]]), config: { generalFolder: root }, temporaryFolders: [] });
+  t.after(() => bridge.dispose());
+  const phone = await TestClient.open(bridge);
+  t.after(() => phone.close());
+  assert.deepEqual((await phone.call("folders.list", { profile: "droid" })).folders, []);
+  const { path } = r.session(randomUUID(), garden);
+  fs.utimesSync(path, new Date(1_800_000_000_000), new Date(1_800_000_000_000));
+  assert.deepEqual((await phone.call("folders.list", { profile: "droid" })).folders, [{ path: garden, name: "dana-garden", last_used: 1_800_000_000 }]);
+});
+
 test("Droid read adoption preserves displayed history and settings without loading or rewriting the original", async (t) => {
   const r = scratch(t);
   const source = r.session(undefined, undefined, {}, [

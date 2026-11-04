@@ -5,6 +5,7 @@ import { log } from "../../log.ts";
 import type { ChildExit } from "../child.ts";
 import { imageType, skippedImagesText } from "../images.ts";
 import type { Warmable, WarmPool } from "../pool.ts";
+import { notSignedIn } from "../signIn.ts";
 import { titleFrom } from "../titles.ts";
 import type { ModelChangeResult, Prompt, ProviderEvent, ProviderSession, SessionOptions, SessionSettings, SessionSink, StoredMessage } from "../types.ts";
 import { PiClient, PiGone, PiRefused } from "./client.ts";
@@ -161,6 +162,12 @@ type PromptAnswer = { disposition?: string } | undefined;
 /** A `prompt` that was not written: Stop was asked for after its message was handed over. */
 class Unsent extends Error {}
 
+/** A `prompt` Pi never answered, and is not at work on: it never had the message (`promptAnswer`). */
+class Unanswered extends Error {}
+
+/** Why a message Pi never answered did not reach it. */
+const unansweredText = "Pi never answered this message and is not working on it. Send it again.";
+
 /** Why a thread taken up only to be read starts no process. The bridge refuses its messages before they come this far. */
 const onlyRead = "This thread is only for reading, so Pi is not started for it.";
 
@@ -207,6 +214,18 @@ function quoted(message: string): string {
 function unsentText(messages: string[]): string {
   const one = messages.length === 1;
   return `${one ? "A message was" : `${messages.length} messages were`} not sent, because Pi was stopped before it read ${one ? "it" : "them"}: ${messages.map(quoted).join(", ")}`;
+}
+
+/**
+ * Why Pi would not run a message, as the thread says it. For a model provider it has no
+ * sign-in or key for, what to run on the host, in place of Pi's own words: they name its
+ * /login as if typed here and the paths of its docs on the host (Pi 1.5.0, "No API key
+ * found for openai." and "Authentication failed for "openai". … Run '/login openai'").
+ */
+export function refusalText(message: string): string {
+  const provider = /^No API key found for (.+?)\.(?:\s|$)/.exec(message)?.[1] ?? /^Authentication failed for "([^"]+)"/.exec(message)?.[1];
+  if (provider === undefined) return message;
+  return notSignedIn("pi", provider === "the selected model" ? {} : { to: provider });
 }
 
 export class PiSession implements ProviderSession, Warmable {
@@ -363,8 +382,8 @@ export class PiSession implements ProviderSession, Warmable {
       // Pi's error answer to a `prompt` is thrown before it queues the message or begins a
       // run, and an error after it has answered is never answered (Pi 1.1.0's rpc-mode.js
       // and agent-session.js `prompt`, read 2026-10-26): Pi surely never had it. A lost
-      // answer (Pi gone) stays uncertain.
-      if (error instanceof PiRefused) return "refused";
+      // answer (Pi gone) stays uncertain. One never answered, with Pi at rest since, it never had either.
+      if (error instanceof PiRefused || error instanceof Unanswered) return "refused";
       if (!(error instanceof Unsent)) return false;
       // Stop came before it was written. It is not sent afterwards either, in a turn of its own: the thread is told.
       this.sink.emit({ type: "notice", level: "warn", text: unsentText([message]) });
@@ -393,7 +412,7 @@ export class PiSession implements ProviderSession, Warmable {
     const answer = live.prompting.then(() => {
       if (this.stops !== stops) throw new Unsent("Stop was asked for before the message was written.");
       live.unsized = true;
-      return live.client.call<PromptAnswer>(promptCommand(message, images));
+      return this.promptAnswer(live, message, images);
     });
     live.onTheWay += 1;
     const begun = answer
@@ -410,6 +429,51 @@ export class PiSession implements ProviderSession, Warmable {
       });
     live.prompting = begun;
     return { answer, begun };
+  }
+
+  /**
+   * Writes a `prompt` and resolves with Pi's answer. Pi answers one at once, but for one
+   * that reaches it as a run settles: that one waits for the run's `agent_settled`
+   * handlers (an extension compacting there), and if it fails then, Pi tells nobody (its
+   * issue 10388). Unanswered, it would hold up every message after it (`prompting`). So
+   * while it is, Pi is asked how it is each time the time a command has passes: found at
+   * rest twice in a row (no run, no compaction, nothing waiting, no card open), it never
+   * had the message, and this fails with `Unanswered`. Not for a command (`/name`), which
+   * an extension may take its time over.
+   */
+  private promptAnswer(live: Live, message: string, images: PiImage[]): Promise<PromptAnswer> {
+    const lost = new AbortController();
+    const answer = live.client.call<PromptAnswer>(promptCommand(message, images), null, lost.signal);
+    if (message.trimStart().startsWith("/")) return answer;
+    let answered = false;
+    let timer: NodeJS.Timeout | null = null;
+    let atRest = 0;
+    const look = () => {
+      timer = setTimeout(async () => {
+        timer = null;
+        let state: PiState | undefined;
+        try {
+          state = await live.client.call<PiState>({ type: "get_state" });
+        } catch {
+          // Gone (which answers the prompt too), or slow to say: looked at again.
+        }
+        if (answered) return;
+        const idle = state !== undefined && state.isStreaming !== true && state.isCompacting !== true && (state.pendingMessageCount ?? 0) === 0 && live.dialogs.size === 0;
+        atRest = idle ? atRest + 1 : 0;
+        if (atRest < 2) {
+          look();
+          return;
+        }
+        log.warn("Pi never answered a message and is at rest: it is taken as not sent", { session: this.id });
+        lost.abort(new Unanswered(unansweredText));
+      }, this.host.callTimeoutMs);
+      timer.unref();
+    };
+    look();
+    return answer.finally(() => {
+      answered = true;
+      if (timer) clearTimeout(timer);
+    });
   }
 
   private async send(prompt: Prompt): Promise<void> {
@@ -443,7 +507,7 @@ export class PiSession implements ProviderSession, Warmable {
         return;
       }
       // No model, no key, a sign-in that ran out. A process that ended has ended the turn itself.
-      if (!(error instanceof PiGone)) this.finish(live, "error", (error as Error).message);
+      if (!(error instanceof PiGone)) this.finish(live, "error", refusalText((error as Error).message));
       return;
     }
     if (!this.mine(turn)) return;

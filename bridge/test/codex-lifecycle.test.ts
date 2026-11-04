@@ -30,6 +30,7 @@ async function fixture(subscribed = true) {
     interruptGraceMs: 100,
     readyMs: 1000,
     nameThread() {}, forget() {},
+    skill: async () => null,
   };
   const adapter = new CodexSession({ id: "thread", cwd: "/tmp", settings, title: "Test" }, core.sink, host, { applied: null, subscribed });
   await core.attach(adapter);

@@ -158,6 +158,8 @@ export interface SessionOptions {
   diffs?: DiffStore;
   /** The last id a session of this thread gave a message waiting earlier in this run: ids number on from it. */
   lastQueueID?: number;
+  /** The agent's name as people know it ("Codex"), for what the bridge says of it in the thread; "the agent" without one. */
+  agentName?: string;
 }
 
 export interface SubmitOutcome {
@@ -285,6 +287,24 @@ const hiddenOpener: HostNote = { kind: "hidden", text: "" };
  */
 export const replayLimit = 500;
 
+/**
+ * How long a running turn may go without a word from the agent before its status line
+ * says so (`watchQuiet`): a turn the agent lost (an end it never sent, a request that
+ * never returns) otherwise shows as working for ever, with nothing to say Stop is the
+ * way out. A long command that prints nothing is quiet as well, so the line says no more
+ * than that it is quiet.
+ */
+export const quietLimitMs = 5 * 60_000;
+
+/**
+ * How long Stop waits for the agent to take it before the turn ends here all the same
+ * (`interrupt`): an agent that cannot be reached, or a call that hangs, would otherwise
+ * keep the turn running for the app, and the app gives up on Stop after a minute. Longer
+ * than the time the providers give an agent to end a turn it took the Stop for (their
+ * `interruptGraceMs`, 15 seconds), so theirs end it first where they can.
+ */
+export const stopWaitMs = 20_000;
+
 export class Session {
   /** A message waits for the agent's side to catch up (`startNext`), which starts it then. */
   private awaitingCatchUp = false;
@@ -338,6 +358,21 @@ export class Session {
    * bridge did not see begin.
    */
   private turnBegan: number | null = null;
+  /** When the agent last said anything (ms since the epoch), or a card it asked was opened or closed: what `watchQuiet` goes by. */
+  private heard = 0;
+  /** The one timer that looks whether the running turn has gone quiet (`watchQuiet`). */
+  private quietTimer: NodeJS.Timeout | null = null;
+  /** The status line says the turn has gone quiet; what it said before, which the agent's next word puts back. */
+  private quietOver: { before: string } | null = null;
+  /**
+   * Stop ended the running turn here, the agent not having taken it in time (`stopWithin`),
+   * and the agent may still run it. Its events carry no turn of their own, so until the
+   * agent ends it (its `turn.end`), says nothing was running, or begins a turn of its own,
+   * what it says of that turn is let go of, and no message goes to it: one sent meanwhile
+   * waits on the list (`heldByStop`). Of the agent it was asked of only: one attached since
+   * is not held.
+   */
+  private stoppedHere: { provider: ProviderSession } | null = null;
   /** The reads of the folder's branch begun so far (`noteBranch`). */
   private branchReads = 0;
   /**
@@ -376,6 +411,8 @@ export class Session {
    * and no message of its own for it.
    */
   private readonly cardAnswerOf = new WeakMap<Prompt, string>();
+  /** The id its device gave each message handed to the running turn, which a Stop may take back from the agent (`steer.withdrawn`). */
+  private readonly steeredIDs = new WeakMap<Prompt, string>();
   /**
    * The notes given with a no that go to the agent a step later (`ask`), until they have:
    * a close in between says them at once (to disk, `sayNote` while closing), since the
@@ -420,6 +457,8 @@ export class Session {
    * kept on disk with those waiting, so that it shows them once loaded again.
    */
   private failed: FailedMessage[] = [];
+  /** The agent's name, as the status line of a quiet turn says it. */
+  private readonly agentName: string;
 
   constructor(record: ThreadRecord, registry: Registry, options: SessionOptions = {}) {
     this.record = record;
@@ -429,6 +468,7 @@ export class Session {
     this.waiting = options.waiting;
     this.spentStore = options.spent;
     this.diffStore = options.diffs;
+    this.agentName = options.agentName ?? "the agent";
     // A device that still holds an id of the session before never meets it again here.
     this.queued = options.lastQueueID ?? 0;
     this.log = new EventLog(record.id, options.logCapacity, options.lastSeq);
@@ -439,6 +479,8 @@ export class Session {
       // has closed the card itself, and a seq it skips is fine.
       closed: (id, reason, answeredBy, details) => {
         this.questionRuns.delete(id);
+        // Answered, the agent has its turn again: the quiet is counted from now.
+        this.heardNow();
         // Which device's answer settled it (feature answer_owner): one that answered too,
         // its answer not taken yet, shows the one that won in its place.
         const owner = answeredBy?.deviceID ? { answered_by: answeredBy.deviceID } : {};
@@ -448,6 +490,7 @@ export class Session {
       opened: (request) => {
         const owner = typeof request.params.subagent === "string" ? this.subagents.get(request.params.subagent)?.info : undefined;
         if (owner && this.requests.has(request.id)) this.questionRuns.set(request.id, { id: owner.id, run: owner.run, startedAt: owner.startedAt });
+        this.heardNow();
         // Put again (`askAgain`), it was notified when it was asked.
         this.tell((listener) => listener.requestOpened?.(this.id, this.askingAgain ? { ...request, again: true } : request));
         this.noteActivity();
@@ -473,8 +516,67 @@ export class Session {
   }
 
   private set running(value: boolean) {
+    // A turn's quiet is counted from its start.
+    if (value && !this.turnRunning) this.heard = Date.now();
     this.turnRunning = value;
+    this.watchQuiet();
     this.noteActivity();
+  }
+
+  /**
+   * Keeps the one timer that looks whether the running turn has gone quiet armed while a
+   * turn runs, and takes it down, with the line it put up, once none does. Cheap per event:
+   * the agent's words only move `heard`, and the timer, when it fires early, arms itself
+   * again for what is left.
+   */
+  private watchQuiet(): void {
+    if (!this.running || this.retired || this.closing) {
+      if (this.quietTimer) clearTimeout(this.quietTimer);
+      this.quietTimer = null;
+      // The turn's end takes the line down on the devices too.
+      this.quietOver = null;
+      return;
+    }
+    if (this.quietTimer || this.quietOver) return;
+    this.armQuiet(this.heard + quietLimitMs - Date.now());
+  }
+
+  private armQuiet(delay: number): void {
+    this.quietTimer = setTimeout(() => this.lookQuiet(), Math.max(delay, 0));
+    this.quietTimer.unref();
+  }
+
+  /**
+   * The running turn has had no word from the agent in `quietLimitMs`: the status line
+   * says so, and that Stop ends it. Nothing is stopped and nothing failed: the agent may
+   * still be at work (a command that prints nothing). Not while a card is open, where the
+   * agent waits for the person and not the other way round.
+   */
+  private lookQuiet(): void {
+    this.quietTimer = null;
+    if (!this.running || this.retired || this.closing) return;
+    const now = Date.now();
+    if (this.requests.list().length > 0) this.heard = now;
+    const left = this.heard + quietLimitMs - now;
+    if (left > 0 || !this.transcript.isInTurn) {
+      this.armQuiet(left > 0 ? left : quietLimitMs);
+      return;
+    }
+    this.quietOver = { before: this.statusLine };
+    this.emit("thinking.delta", { text: `No word from ${this.agentName} for ${quietLimitMs / 60_000} minutes. It may still be working; Stop ends it.` });
+  }
+
+  /**
+   * The agent said something, or a card it asked opened or closed: the quiet is over,
+   * and the status line it had before the quiet's is put back (`putBack`).
+   */
+  private heardNow(putBack = true): void {
+    this.heard = Date.now();
+    const over = this.quietOver;
+    if (!over) return;
+    this.quietOver = null;
+    if (putBack) this.emit("thinking.delta", { text: over.before });
+    this.watchQuiet();
   }
 
   /**
@@ -621,7 +723,7 @@ export class Session {
    */
   get atRest(): boolean {
     if (this.checkpointing) return false;
-    if (this.isBusy || this.transcript.isInTurn || this.activity !== undefined || this.closing || this.settingsOnTheWay > 0) return false;
+    if (this.isBusy || this.heldByStop || this.transcript.isInTurn || this.activity !== undefined || this.closing || this.settingsOnTheWay > 0) return false;
     if (this.queue.length > 0 || this.awaitingCatchUp || this.notesDue.size > 0 || this.askedBefore !== null || this.askedOpen !== null) return false;
     return [...this.attached.values()].every((attached) => attached.images.length === 0 && attached.files.length === 0 && attached.saving === 0 && attached.pending.size === 0);
   }
@@ -1020,7 +1122,8 @@ export class Session {
     const messageID = options.messageID;
     // The agent's side catching up on turns it missed: it waits on the list until then.
     const catchingUp = this.running ? undefined : this.provider?.catchingUp?.();
-    if (!this.running && this.queue.length === 0 && !catchingUp) {
+    // Nor while the agent may still run a turn Stop ended here: it waits on the list until the agent is past it.
+    if (!this.running && this.queue.length === 0 && !catchingUp && !this.heldByStop) {
       this.running = true;
       return { status: "streaming", begin: () => this.begin(prompt, { fleet, messageID }) };
     }
@@ -1075,6 +1178,7 @@ export class Session {
     this.withdrawAsked("replied");
     // The answers given on a card (feature async_questions): their row shows them.
     const cardAnswer = this.cardAnswerOf.get(prompt);
+    if (messageID !== undefined) this.steeredIDs.set(prompt, messageID);
     this.transcript.steer(storedUserText(prompt), messageID, cardAnswer);
     if (told) this.emit("message.steered", messageFields(storedUserText(prompt), told.sender, told.messageID, this.fromOf(storedUserText(prompt)), cardAnswer));
     const cleared = this.endedToClear(prompt);
@@ -1292,7 +1396,7 @@ export class Session {
       if (this.provider === provider) withdraw(this.turns === turn);
       return withdrawn || pending || stopped;
     }
-    const stopped = await provider.interrupt();
+    const stopped = await this.stopWithin(provider, turn);
     if (this.provider !== provider) return stopped;
     if (this.turns !== turn) {
       // The stopped turn ended and the next began (a message waiting) before the agent
@@ -1308,6 +1412,53 @@ export class Session {
     if (!keepBackground) await this.stopBackground(turn, background, stopping);
     if (this.provider === provider) withdraw(this.turns === turn);
     return stopped;
+  }
+
+  /**
+   * Stop as the agent takes it, waited for `stopWaitMs` at most. An agent that has not
+   * taken it by then (it cannot be reached, a call to it hangs), or that failed to, has
+   * its turn ended here, as stopped: the app can go on, and the agent may still be at it
+   * (`stopping`, which keeps such a thread from being removed). What it still says of that
+   * turn is let go of (`take`), and a message sent meanwhile waits until the agent is past
+   * it (`stoppedHere`).
+   */
+  private async stopWithin(provider: ProviderSession, turn: number): Promise<boolean> {
+    const asked = provider.interrupt();
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<"late">((resolve) => {
+      timer = setTimeout(() => resolve("late"), stopWaitMs);
+      timer.unref();
+    });
+    let failure: Error | undefined;
+    let answeredLate = false;
+    try {
+      const answer = await Promise.race([asked, late]);
+      if (answer !== "late") return answer;
+      answeredLate = true;
+    } catch (error) {
+      failure = error as Error;
+    } finally {
+      clearTimeout(timer);
+    }
+    // The turn ended meanwhile, or the next began: there is nothing left to end here.
+    if (this.provider !== provider || this.turns !== turn || !this.running || !this.transcript.isInTurn) {
+      if (failure) throw failure;
+      return true;
+    }
+    log.warn(failure ? "the agent failed to take a Stop, so its turn ends here" : "the agent did not take a Stop in time, so its turn ends here", { session: this.id, error: failure?.message });
+    // Before its end, which would start a message waiting: that waits for the agent to be past this turn.
+    const held = (this.stoppedHere = { provider });
+    this.end({ type: "turn.end", status: "interrupted" });
+    // Its answer, when it comes: true, the agent ends the turn as it does any it stopped;
+    // false, nothing was running any more, and no end comes. A failure leaves the turn to
+    // end as the agent ends it.
+    if (answeredLate) {
+      asked.then(
+        (stopped) => { if (!stopped) this.letGoOfStop(held); },
+        (error: Error) => log.warn("the agent failed to take a Stop after its turn was ended here", { session: this.id, error: error?.message }),
+      );
+    }
+    return true;
   }
 
   /**
@@ -1638,7 +1789,21 @@ export class Session {
    * not reported yet): the thread is still at work.
    */
   async stopping(): Promise<boolean> {
+    // A turn Stop ended here that the agent has not ended yet (`stopWithin`).
+    if (this.heldByStop) return true;
     return (await this.provider?.stopping?.()) ?? false;
+  }
+
+  /** The agent may still run a turn Stop ended here (`stoppedHere`): nothing goes to it until it is past that turn. */
+  private get heldByStop(): boolean {
+    return this.stoppedHere !== null && this.stoppedHere.provider === this.provider;
+  }
+
+  /** The agent is past the turn Stop ended here (`held`): the message waiting, if one does, goes now. */
+  private letGoOfStop(held: { provider: ProviderSession }): void {
+    if (this.stoppedHere !== held) return;
+    this.stoppedHere = null;
+    if (!this.running && !this.retired) this.startNext();
   }
 
   /**
@@ -1660,6 +1825,7 @@ export class Session {
     this.followers.clear();
     this.queue.length = 0;
     this.watchReach();
+    this.watchQuiet();
   }
 
   /**
@@ -1670,12 +1836,14 @@ export class Session {
     this.closing = true;
     this.sayNotesDue();
     this.watchReach();
+    this.watchQuiet();
   }
 
   async close(): Promise<void> {
     this.closing = true;
     this.sayNotesDue();
     this.watchReach();
+    this.watchQuiet();
     this.followers.clear();
     await this.provider?.close();
   }
@@ -1766,6 +1934,8 @@ export class Session {
     if (!host && user.trim() !== "" && !(command ?? isCommand({ text: user, images: [] }))) this.withdrawAsked("replied");
     // A message waiting for the agent's side to catch up waits for this turn now.
     this.watchReach();
+    // The agent is past a turn Stop ended here: what waits goes once this one ends.
+    this.stoppedHere = null;
     this.turns += 1;
     this.answeredByTurn = null;
     this.replyText = "";
@@ -1945,6 +2115,8 @@ export class Session {
         return;
       }
       if (next.requestId || next.changing) return;
+      // The agent may still run a turn Stop ended here: the message waits until it is past it (`letGoOfStop`).
+      if (this.heldByStop) return;
       // The agent's side catching up on turns it missed (the connection to it dropped): those
       // are told first, as turns of their own, and the message's turn begins once they are.
       const catchingUp = this.provider?.catchingUp?.();
@@ -2181,7 +2353,7 @@ export class Session {
     // on disk with the others, for the next start.
     const catchingUp = this.provider?.catchingUp?.();
     const earlierOut = [...this.steersOut].some((out) => out < steered);
-    if (this.running || catchingUp || earlierOut || this.closing) {
+    if (this.running || catchingUp || earlierOut || this.closing || this.heldByStop) {
       // Ahead of the messages waiting, and behind those said again that were sent before
       // it, whichever the agent turned down first: one waiting since before a restart
       // (no `steered`) came before them all.
@@ -2216,7 +2388,7 @@ export class Session {
       this.keepQueue();
       return;
     }
-    if (!this.running) {
+    if (!this.running && !this.heldByStop) {
       this.running = true;
       // Opened by Portals for an app without the feature turn_messages, which shows such a turn's message.
       this.begin(prompt, { fleet: true, sender: "user" });
@@ -2240,6 +2412,17 @@ export class Session {
    * (`endAnyway`).
    */
   private take(event: ProviderEvent): void {
+    // What the agent still says of a turn Stop ended here (`stopWithin`) has no turn to
+    // show it in; its end is the last of it, and lets a message waiting go.
+    if (this.stoppedHere && this.heldByStop && !this.transcript.isInTurn) {
+      if (event.type === "turn.end") {
+        this.letGoOfStop(this.stoppedHere);
+        return;
+      }
+      if (ofTheTurn(event)) return;
+    }
+    // Its end takes the line down on the devices by itself.
+    this.heardNow(event.type !== "turn.end");
     // The agent produced something in the turn: the message that opened it reached it.
     // From the agent only, not the rows the bridge itself puts (`askAhead`).
     if (this.answeredByTurn && producedIn(event)) this.answeredByTurn = null;
@@ -2336,6 +2519,20 @@ export class Session {
         // Taken after the turn had ended (Droid takes a steering message still queued once
         // its loop is idle): the messages waiting behind it go on, as after one that failed.
         if (!this.running) this.startNext();
+        return;
+      }
+      case "steer.withdrawn": {
+        // Stopped before the agent read it: it leaves the turn it was shown in, and goes
+        // back to the composer of the device that sent it (feature steer_withdrawn). An app
+        // without the feature shows the notice, with the whole message, so that it is not
+        // lost unseen.
+        const text = storedUserText(event.prompt);
+        const messageID = this.steeredIDs.get(event.prompt);
+        this.transcript.withdraw(text, messageID);
+        this.emit("status.update", {
+          kind: "warn", text: `Stop took back a message before the agent read it, so it was not sent: “${text}”`,
+          withdrawn: { text, ...(messageID !== undefined ? { message_id: messageID } : {}) },
+        });
         return;
       }
       case "queue.failed": {
@@ -2712,6 +2909,31 @@ function producedIn(event: ProviderEvent): boolean {
 }
 
 /**
+ * Part of a running turn, which shows only in one: its words, thoughts, status lines,
+ * tools begun and what it spent. Not what outlives a turn (a tool's progress or end, which
+ * may be of a command left running in the background; a subagent's news, a title, the
+ * context's size, a notice).
+ */
+function ofTheTurn(event: ProviderEvent): boolean {
+  switch (event.type) {
+    case "text":
+    case "commentary":
+    case "reasoning":
+    case "assistant.replace":
+    case "status":
+    case "headline":
+    case "working":
+    case "tool.start":
+    case "turn.usage":
+    case "turn.opener":
+    case "questions":
+      return true;
+    default:
+      return false;
+  }
+}
+
+/**
  * A row that has left the line, as the session keeps it for the rest of its run: only to
  * know it again (its id, its run, how it ended), never listed or shown again. What it
  * showed goes: a background command's output alone is up to 8 KB, and a thread that runs
@@ -2796,7 +3018,8 @@ export function isCommand(prompt: Prompt): boolean {
 /**
  * How the last turn of a stored conversation ended, for one that ended while the bridge
  * was off, from what the agent kept of it: failed (a failed turn's line), stopped (the
- * interrupted mark), or else finished, with its last reply as a turn's end is told.
+ * interrupted mark, or a record that ends where the turn was cut off), or else finished,
+ * with its last reply as a turn's end is told.
  */
 function endedWhileAway(messages: readonly StoredMessage[]): { status: TurnStatus; text: string } {
   let reply = "";
@@ -2807,6 +3030,11 @@ function endedWhileAway(messages: readonly StoredMessage[]): { status: TurnStatu
     // ended it. One before a reply is a boundary, as any user row: Pi keeps a failed try,
     // a steer and the reply that ended the turn well.
     if (last && message.role === "user" && message.display_kind === "steer") continue;
+    // A crash that took the agent's process with the bridge leaves a record that ends
+    // where the turn was cut off, with no mark of it (Pi's file: the message, and the row
+    // of a command it ran): the turn was stopped when the bridge stopped, as a restart
+    // stops one (recovery-7), not finished. Claude Code's says so itself (`lastTurnCutOff`).
+    if (last && cutOffAt(message)) return { status: "interrupted", text: "" };
     if (message.role === "user") break;
     const text = typeof message.text === "string" ? message.text : "";
     if (message.display_kind === "failed_turn") return { status: "error", text };
@@ -2815,4 +3043,16 @@ function endedWhileAway(messages: readonly StoredMessage[]): { status: TurnStatu
     if (reply === "" && message.role === "assistant" && text.trim() !== "") reply = text;
   }
   return { status: "complete", text: reply };
+}
+
+/**
+ * Whether a stored conversation that ends on `message` ends mid-turn: on the person's
+ * message, which nothing answered, or on a tool's row with no reply after it. Not on a
+ * command, which may end its turn with no answer (a `/compact` that failed), nor on a plan
+ * or questions, which can be how a turn ends (Codex's plan mode, its questions asked
+ * without waiting).
+ */
+function cutOffAt(message: StoredMessage): boolean {
+  if (message.role === "user") return !isCommand({ text: message.text, images: [] });
+  return message.role === "tool" && message.name !== "plan" && message.name !== "clarify";
 }

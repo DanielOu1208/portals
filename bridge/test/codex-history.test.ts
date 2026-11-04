@@ -26,13 +26,13 @@ test("a turn with commentary, a command, an edit and a reply reads back with its
   assert.deepEqual(patch.args, { path: `${fixtureCwd}/hello.txt` });
   // The result is JSON text, as the app reads it.
   assert.deepEqual(JSON.parse(patch.content!), { success: true, diff: "--- a/hello.txt\n+++ b/hello.txt\n@@ -1 +1 @@\n-hi\n+hello\n" });
-  assert.equal(patch.tool_call_id, "exec-1ffa67cc-2790-40a8-b8aa-2b40ed44892d");
+  assert.equal(patch.tool_call_id, "exec-d5f2b71e-9664-4cef-9578-b966781771ed");
   const command = messages[2];
   assert.deepEqual(command.role === "tool" && JSON.parse(command.content!), { output: "hi\n", exit_code: 0 });
-  assert.equal(messages[1].role === "assistant" && messages[1].text, "I’ll patch `hello.txt`, then check its byte count.");
+  assert.equal(messages[1].role === "assistant" && messages[1].text, "I’ll patch `hello.txt`, then check its byte count.\n");
   // Times are the turn's, in seconds.
-  assert.equal(messages[0].timestamp, 1_791_976_628);
-  assert.equal(messages[5].timestamp, 1_791_976_638);
+  assert.equal(messages[0].timestamp, 1_793_783_604);
+  assert.equal(messages[5].timestamp, 1_793_783_618);
 });
 
 test("a declined change reads back as blocked", () => {
@@ -107,6 +107,7 @@ test("a running Codex attachment keeps completed reasoning once through redelive
   const host = {
     client: {
       async call(method: string) {
+        if (method === "thread/turns/list") return { data: [...thread.turns].reverse(), nextCursor: null };
         assert.ok(method === "thread/read" || method === "thread/resume", method);
         return { thread };
       },
@@ -154,7 +155,7 @@ test("a running Codex attachment keeps completed reasoning once through redelive
 test("an interrupted turn is marked; a failed one says why", () => {
   const interrupted = historyFromThread(recordedHistory("interrupt"), fixtureCwd, false).messages;
   // With how long it ran, as Codex keeps it (feature turn_usage).
-  assert.deepEqual(interrupted.at(-1), { role: "assistant", text: "", timestamp: interrupted.at(-1)!.timestamp, display_metadata: { interrupted: true }, turn_usage: { seconds: 3.482 } });
+  assert.deepEqual(interrupted.at(-1), { role: "assistant", text: "", timestamp: interrupted.at(-1)!.timestamp, display_metadata: { interrupted: true }, turn_usage: { seconds: 2.167 } });
   const failed = historyFromThread(
     { turns: [{ id: "t", items: [{ type: "userMessage", id: "u", clientId: null, content: [{ type: "text", text: "Go", text_elements: [] }] }], itemsView: "full", status: "failed", error: { message: "Usage limit reached", codexErrorInfo: null, additionalDetails: null, misalignment: null }, startedAt: 5, completedAt: 6, durationMs: 1000 }] } as never,
     "/w",
@@ -221,8 +222,8 @@ test("a /compact reads back as the command and the mark of where it compacted; C
   );
   // The command opens its turn; the mark is where it ended. History does not say how full the context was.
   assert.deepEqual(messages.slice(2), [
-    { role: "user", text: "/compact", timestamp: 1_791_976_566 },
-    { role: "compaction", trigger: "manual", timestamp: 1_791_976_567, turn_usage: { seconds: 0.858 } },
+    { role: "user", text: "/compact", timestamp: 1_793_783_835 },
+    { role: "compaction", trigger: "manual", timestamp: 1_793_783_835, turn_usage: { seconds: 0.207 } },
   ]);
 
   const message = (id: string, text: string) => ({ type: "userMessage", id, clientId: null, content: [{ type: "text", text, text_elements: [] }] });
@@ -250,6 +251,37 @@ test("a /compact reads back as the command and the mark of where it compacted; C
   );
 });
 
+test("a review reads back as /review, its commands, then its row and the findings as the reply; the review's own turn is told inside it", () => {
+  // As Codex 0.166 keeps a review: the review's own turn (its prompt and work, cut off)
+  // first, under the review's turn as its root; then the review's start, end and reply.
+  const turn = (id: string, items: unknown[], status: string, durationMs: number | null) => ({ id, rootTurnId: "review", items, itemsView: "full", status, error: null, startedAt: 5, completedAt: 9, durationMs });
+  const command = { type: "commandExecution", id: "exec-1", command: "/bin/zsh -lc 'git diff'", cwd: "/w", processId: null, status: "completed", commandActions: [], aggregatedOutput: "+helo\n", exitCode: 0, durationMs: 5 };
+  const prompt = { type: "userMessage", id: "u", clientId: null, content: [{ type: "text", text: "Review the current code changes and provide prioritized findings.", text_elements: [] }] };
+  const findings = "hello.txt says helo: a typo.";
+  const thread = (review: unknown[], status = "completed") => ({
+    turns: [
+      turn("reviewer", [prompt, { type: "reasoning", id: "r", summary: [], content: [] }, command], "interrupted", null),
+      turn("review", review, status, 24_000),
+    ],
+  }) as never;
+  const entered = { type: "enteredReviewMode", id: "entered", review: "current changes" };
+  const ended = [entered, { type: "exitedReviewMode", id: "exited", review: findings }, { type: "agentMessage", id: "a", text: findings, phase: null }];
+  const { messages } = historyFromThread(thread(ended), "/w", false);
+  assert.deepEqual(messages, [
+    { role: "user", text: "/review", timestamp: 5 },
+    { role: "tool", name: "terminal", args: { command: "git diff" }, content: JSON.stringify({ output: "+helo\n", exit_code: 0 }), tool_call_id: "exec-1", timestamp: 9 },
+    { role: "tool", name: "review", args: {}, context: "current changes", content: JSON.stringify({}), tool_call_id: "entered", timestamp: 9 },
+    { role: "assistant", text: findings, timestamp: 9, turn_usage: { seconds: 24 } },
+  ]);
+
+  // Stopped before it ended: its row says so, after what it did.
+  const stopped = historyFromThread(thread([entered], "interrupted"), "/w", false).messages;
+  assert.deepEqual(
+    stopped.map((message) => (message.role === "tool" ? [message.name, JSON.parse(message.content!)] : [message.role, "text" in message ? message.text : null])),
+    [["user", "/review"], ["terminal", { output: "+helo\n", exit_code: 0 }], ["review", { status: "error", error: "Stopped before it finished." }], ["assistant", ""]],
+  );
+});
+
 test("images in a message read back as @image lines after its text", () => {
   assert.equal(
     userInputText([
@@ -265,7 +297,7 @@ test("a wait reads back naming the sub-agent it was about, as the line names it 
   const tools = messages.filter((message) => message.role === "tool");
   assert.deepEqual(
     tools.map((message) => message.role === "tool" && [message.name, message.context, message.args]),
-    [["delegate_task", "wait", { agents: ["pear reply"] }]],
+    [["delegate_task", "wait", { agents: ["pear"] }]],
   );
   const spawn = { type: "collabAgentToolCall", id: "spawn", tool: "spawnAgent", status: "completed", receiverThreadIds: ["c1"], prompt: "Count the files.", model: "gpt-6-luna", agentsStates: {} };
   const close = { type: "collabAgentToolCall", id: "close", tool: "closeAgent", status: "completed", receiverThreadIds: ["c1"], prompt: null, model: null, agentsStates: { c1: { status: "shutdown" } } };

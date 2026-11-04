@@ -18,6 +18,9 @@ const commandListSchema = z.object({ commands: z.array(z.object({
   name: z.string(), description: z.string(), argumentHint: z.string().optional(), isExecutable: z.boolean().optional(),
 })) });
 
+// Droid's answer to `droid.kill_background_process`, an RPC the SDK does not have (CLI 1.3).
+const killedSchema = z.object({ killed: z.boolean() });
+
 /** The SDK surface used here, kept injectable without starting a real Droid in tests. */
 export type DroidHandle = Pick<DroidSession, "id" | "cwd" | "settings" | "stream" | "interrupt" | "close" | "updateSettings" | "rename" | "getContextStats" | "onNotification" |
   "listSkills" | "setSkillDisabled" | "listMcpServers" | "listMcpTools" | "toggleMcpServer" | "authenticateMcpServer"> & {
@@ -42,6 +45,10 @@ export type DroidHandle = Pick<DroidSession, "id" | "cwd" | "settings" | "stream
   onPickOptions?(handler: (params: PickOptionsRequestParams) => Promise<PickOptionsResult>): void;
   /** Copies the current conversation without replacing or closing this handle. */
   fork?(title: string): Promise<string>;
+  /** Who is told the commands the process runs in the background, each time they change (`DroidTransport.backgroundProcesses`). */
+  onBackgroundProcesses?(listener: (session: string, processes: unknown) => void): void;
+  /** Stops one command Droid runs in the background, by Droid's id for it: whether Droid stopped it. */
+  killBackgroundProcess?(processId: string): Promise<boolean>;
 };
 
 /** One short request for a thread's name (`DroidSdk.title`). */
@@ -152,6 +159,8 @@ export function localSdk(command: string, env: Record<string, string>): DroidSdk
           onPickOptions(handler) {
             transport.pickOptions = async (params) => PickOptionsResultSchema.parse(await handler(PickOptionsRequestParamsSchema.parse(params)));
           },
+          onBackgroundProcesses(listener) { transport.backgroundProcesses = listener; },
+          killBackgroundProcess: async (processId) => killedSchema.parse(await transport.request("droid.kill_background_process", { processId })).killed,
           onExit(listener) {
             const child = transport.getManagedProcess()?.childProcess;
             return onDroidExit(child, listener);

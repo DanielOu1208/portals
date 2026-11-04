@@ -283,3 +283,51 @@ test("both providers refuse native cwd drift before a fork, including a fresh em
   assert.equal(files.cuts.length, 0);
   assert.equal(calls.some((call) => call.method === "thread/fork"), false);
 });
+
+test("Codex offers no checkpoint for a review, though its stream has the prompt Codex gives its reviewer", async (t) => {
+  const events: ProviderEvent[] = [];
+  let started = 0;
+  const host = {
+    client: { supportsMessageForks: true, async call(method: string) {
+      assert.equal(method, "review/start");
+      started += 1;
+      return { turn: { id: "review-1" } };
+    } },
+    defaults: () => null,
+    async defaultsFor() { throw new Error("No folder defaults"); },
+    efforts: () => [],
+    forget() {},
+    nameThread() {},
+  };
+  // The thread's last turn ran on the model and level it has, or #19 refuses the review.
+  const applied = { model: "model", effort: "high", approvalPolicy: null, sandboxPolicy: null, summary: null };
+  const session = new CodexSession({ id: "live", cwd, title: "live", mode: "default", settings: { model: "model", provider: "openai", reasoningEffort: "high" } }, { emit: (event) => events.push(event), ask: async () => ({}) as never }, host as never, { applied, subscribed: true });
+  session.attached();
+  t.after(() => session.close());
+  session.startTurn({ text: "/review", images: [] });
+  await until(() => started === 1);
+  await new Promise((resolve) => setImmediate(resolve));
+  const prompt = { type: "userMessage", id: "prompt", clientId: null, content: [{ type: "text", text: "Review the current code changes and provide prioritized findings.", text_elements: [] }] };
+  session.notification("item/started", { threadId: "live", turnId: "review-1", item: { type: "enteredReviewMode", id: "entered", review: "current changes" } });
+  session.notification("turn/started", { threadId: "live", turn: { id: "reviewer-1", rootTurnId: "review-1", items: [], status: "inProgress" } });
+  session.notification("item/started", { threadId: "live", turnId: "review-1", item: prompt });
+  session.notification("item/completed", { threadId: "live", turnId: "review-1", item: prompt });
+  session.notification("item/completed", { threadId: "live", turnId: "review-1", item: { type: "exitedReviewMode", id: "exited", review: "No findings." } });
+  session.notification("turn/completed", { threadId: "live", turn: { id: "review-1", rootTurnId: "review-1", status: "completed", items: [] } });
+  assert.ok(events.some((event) => event.type === "turn.end"));
+  assert.equal(events.some((event) => event.type === "checkpoint"), false);
+});
+
+test("Claude keeps a turn's checkpoint when a Stop took back a message steered into it, before or after the turn ended", () => {
+  for (const after of [false, true]) {
+    const checkpoints = new ClaudeCheckpoints();
+    checkpoints.sent("s", "open", false);
+    checkpoints.sent("s", "steer", true);
+    if (!after) checkpoints.withdrawn("s", "steer");
+    checkpoints.observed("s", assistant("reply"));
+    checkpoints.finish("s");
+    if (after) checkpoints.withdrawn("s", "steer");
+    // Claude Code never wrote the message it took back.
+    assert.deepEqual([...checkpoints.forSession("s", [user("open"), assistant("reply")]).keys()], ["open"]);
+  }
+});

@@ -8,15 +8,15 @@ import { fixture, recordedHistory } from "./codex-fixtures.ts";
 // sub-agent spawned and waited for, multi-agent v2), and from the shapes of v1's
 // collabAgentToolCall items and a sub-agent's own thread.
 
-const child = "01a13a21-3e05-7212-b29e-4fb66eb40f01";
+const child = "01a1a5d6-3d08-73e1-bb31-9ec1b5857c73";
 
 test("v2: a recorded sub-agent starts with its path for a name and its model, and completes", () => {
   const agents = new CodexAgents(() => 1000);
   const news = fixture("subagent")
     .filter((entry) => entry.kind === "notification" && entry.method === "item/completed")
     .flatMap((entry) => agents.item(entry.params.item));
-  assert.deepEqual(news[0], { id: child, kind: "agent", goal: "pear reply", status: "running", startedAt: 1000, background: true, stoppable: true, model: "gpt-6.1-sol" });
-  assert.deepEqual(news.at(-1), { id: child, kind: "agent", goal: "pear reply", status: "completed", startedAt: 1000, endedAt: 1000, background: true, stoppable: false, model: "gpt-6.1-sol" });
+  assert.deepEqual(news[0], { id: child, kind: "agent", goal: "pear", status: "running", startedAt: 1000, background: true, stoppable: true, model: "gpt-6.1-sol" });
+  assert.deepEqual(news.at(-1), { id: child, kind: "agent", goal: "pear", status: "completed", startedAt: 1000, endedAt: 1000, background: true, stoppable: false, model: "gpt-6.1-sol" });
   assert.equal(agents.isRunning, false);
   // Its own thread says what it was asked and answered.
   const described = agents.described(child, {
@@ -82,7 +82,7 @@ test("a stored thread's turns tell of its sub-agents, with their times and the t
   const past = agents.remember(recordedHistory("subagent").turns);
   assert.deepEqual(past, [
     {
-      subagent: { id: child, kind: "agent", goal: "pear reply", status: "completed", startedAt: 1791976616000, endedAt: 1791976624000, background: true, stoppable: false, model: "gpt-6.1-sol" },
+      subagent: { id: child, kind: "agent", goal: "pear", status: "completed", startedAt: 1793783638000, endedAt: 1793783647000, background: true, stoppable: false, model: "gpt-6.1-sol" },
       turn: 0,
     },
   ]);
@@ -387,7 +387,7 @@ test("v2: the recorded wait is about the sub-agent at work as it started, and st
     if (entry.method === "item/completed" || item.type !== "subAgentActivity") agents.item(item);
     if (item.type === "collabAgentToolCall") said.push(agents.calledAbout(item));
   }
-  assert.deepEqual(said, [["pear reply"], ["pear reply"]]);
+  assert.deepEqual(said, [["pear"], ["pear"]]);
   const wait = items.find((entry) => entry.params.item.type === "collabAgentToolCall")!.params.item;
   agents.adopt(child, { agentNickname: "Darwin", agentRole: "worker" });
   assert.deepEqual(agents.calledAbout(wait), ["Darwin"]);

@@ -53,6 +53,27 @@ export class ClaudeCheckpoints {
     else this.running.get(session)?.sent.push(uuid);
   }
 
+  /**
+   * A message steered in that a Stop took back unread (`steer.withdrawn`): Claude Code
+   * never writes it, so its turn's checkpoint no longer waits to see it. Its receipt may
+   * come after the turn ended.
+   */
+  withdrawn(session: string, uuid: string): void {
+    const running = this.running.get(session);
+    if (running && running.opener !== uuid && running.sent.includes(uuid)) {
+      running.sent = running.sent.filter((id) => id !== uuid);
+      return;
+    }
+    const turn = [...(this.turns.get(session)?.values() ?? [])].find((entry) => entry.opener !== uuid && entry.sent.includes(uuid));
+    if (!turn) return;
+    turn.sent = turn.sent.filter((id) => id !== uuid);
+    try {
+      this.save();
+    } catch (error) {
+      log.warn("could not save Claude message checkpoints", { session, error: (error as Error).message });
+    }
+  }
+
   observed(session: string, raw: unknown): void {
     const entry = raw as Entry;
     const turn = this.running.get(session);
