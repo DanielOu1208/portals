@@ -5,6 +5,11 @@ import AgentCore
 import Darwin
 import Foundation
 
+enum Platform {
+    // As on a Mac or in the simulator, where 127.0.0.1 can be a host: run() goes on to its action.
+    static let loopbackIsNeverAHost = false
+}
+
 final class Net {
     enum Outcome { case joined, added, known, withoutNet, refused(String) }
     var membership = NetMembership()

@@ -7,6 +7,8 @@ enum AppLog {
 }
 enum Platform {
     static let thisDevice = "this device"
+    // As on a Mac or in the simulator, where 127.0.0.1 can be a host: run() goes on to its action.
+    static let loopbackIsNeverAHost = false
 }
 @MainActor final class Credentials {
     var token: String? = "old-token"
@@ -73,6 +75,8 @@ struct Host {
     var netWork: Task<Void, Never>?
     var macRefused: String?
     var didDismiss = false
+    var address = ""
+    var joinLink: JoinLink?
     init(_ net: Net) { self.net = net }
     func save() { preconditionFailure("No host saved by itself") }
     func dismiss() { didDismiss = true }
