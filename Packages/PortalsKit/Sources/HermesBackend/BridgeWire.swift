@@ -21,6 +21,8 @@ public enum BridgeWire {
         public static let pushHost = "push_host"
         /// `desk.list` and `session.adopt`: sessions started in a terminal on the host.
         public static let deskSessions = "desk_sessions"
+        /// Message-level forks with provider-native positions.
+        public static let messageFork = "message_fork"
         /// `model.options` carries `model_names`.
         public static let modelNames = "model_names"
         /// The `session.compacted` event and the stored `compaction` message: where the
@@ -224,6 +226,7 @@ public enum BridgeWire {
         public static let foldersSearch = "folders.search"
         public static let deskList = "desk.list"
         public static let sessionAdopt = "session.adopt"
+        public static let sessionFork = "session.fork"
         public static let sessionRename = "session.rename"
         public static let sessionLeave = "session.leave"
         public static let sessionsActivity = "sessions.activity"
@@ -1344,6 +1347,32 @@ public enum BridgeWire {
             case profile, mode
             case sessionID = "session_id"
         }
+    }
+
+    /// Forks a stored thread at a provider-native checkpoint, not a client message id.
+    public struct SessionForkParams: Encodable, Sendable {
+        public var sessionID: String
+        public var checkpointID: String
+        public var before: Bool
+
+        public init(sessionID: String, checkpointID: String, before: Bool) {
+            self.sessionID = sessionID
+            self.checkpointID = checkpointID
+            self.before = before
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case sessionID = "session_id"
+            case checkpointID = "checkpoint_id"
+            case before
+        }
+    }
+
+    static func messageCheckpoint(_ value: JSONValue?) -> MessageCheckpoint? {
+        guard let value, let id = value["id"]?.stringValue, !id.isEmpty,
+              let canFork = value["can_fork"]?.boolValue,
+              let canEdit = value["can_edit"]?.boolValue else { return nil }
+        return MessageCheckpoint(id: id, canFork: canFork, canEdit: canEdit)
     }
 
     // MARK: Compaction

@@ -16,6 +16,9 @@ struct TurnView: View {
     /// Whether "Try again" can be offered now.
     let canRetry: Bool
     var onRetry: () -> Void
+    var offersMessageFork = false
+    var canForkMessage = false
+    var onForkMessage: (UserMessage, MessageCheckpoint, Bool) -> Void = { _, _, _ in }
     /// On the latest ended turn: its footer lists the threads the agent started.
     var startedThreads: StartedThreadsLink?
 
@@ -166,7 +169,36 @@ struct TurnView: View {
                 segment: segment
             )
         } else {
-            WorkItemView(item: item)
+            VStack(alignment: .trailing, spacing: Theme.grid / 2) {
+                WorkItemView(item: item)
+                if offersMessageFork, !turn.isRunning,
+                   item.id == turn.items.first(where: \.isUserMessage)?.id,
+                   case let .user(message) = item.content,
+                   let checkpoint = message.checkpoint, checkpoint.canFork || checkpoint.canEdit {
+                    Menu {
+                        if checkpoint.canFork {
+                            Button("Fork from here", systemImage: "arrow.triangle.branch") {
+                                onForkMessage(message, checkpoint, false)
+                            }
+                        }
+                        if checkpoint.canEdit {
+                            Button("Edit and send again", systemImage: "square.and.pencil") {
+                                onForkMessage(message, checkpoint, true)
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.app.footnote)
+                            .foregroundStyle(.secondary)
+                            .frame(minWidth: 44, minHeight: 32)
+                            .contentShape(.rect)
+                    }
+                    .disabled(!canForkMessage)
+                    .accessibilityLabel("Message actions")
+                    .accessibilityHint(canForkMessage ? "Creates a new thread from this message" : "Available when this thread is idle and connected")
+                    .accessibilityIdentifier("message-fork-actions")
+                }
+            }
         }
     }
 
@@ -227,6 +259,7 @@ struct TurnView: View {
 extension TurnView: Equatable {
     static func == (lhs: TurnView, rhs: TurnView) -> Bool {
         lhs.turn == rhs.turn && lhs.status == rhs.status && lhs.plan == rhs.plan && lhs.canRetry == rhs.canRetry
+            && lhs.offersMessageFork == rhs.offersMessageFork && lhs.canForkMessage == rhs.canForkMessage
             && (lhs.startedThreads == nil) == (rhs.startedThreads == nil)
     }
 }

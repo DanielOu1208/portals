@@ -804,6 +804,11 @@ final class HostModel: Identifiable {
         let ref = try await provider.adopt(session, as: mode)
         guard !isRetired else { return }
         deskSessions[session.agent]?.removeAll { $0.id == session.id }
+        showAdopted(ref)
+    }
+
+    /// Registers a newly adopted or forked thread and opens its own composer.
+    private func showAdopted(_ ref: ThreadRef, draft: String? = nil) {
         // A thread taken up before (only read, say) is followed anew.
         controllers[ref.id]?.close()
         controllers[ref.id] = nil
@@ -830,6 +835,7 @@ final class HostModel: Identifiable {
         guard let agent = agent(ref.agent) else { return }
         let controller = makeController(agent: agent, record: record)
         controllers[ref.id] = controller
+        if let draft { controller.composer.text = draft }
         fleet?.show(controller)
         fleet?.threadUsed(controller)
         wasShown(ref.id)
@@ -851,6 +857,24 @@ final class HostModel: Identifiable {
         forkingThreads.insert(thread.id)
         defer { forkingThreads.remove(thread.id) }
         try await adopt(DeskSession(thread: thread), as: .fork)
+    }
+
+    func canForkMessage(in controller: ThreadController) -> Bool {
+        guard let thread = controller.thread else { return false }
+        return controller.offersMessageFork && controller.canForkMessage && connection == .connected
+            && activity(of: thread.id) == .idle && !forkingThreads.contains(thread.id)
+    }
+
+    /// Keeps the source and its draft, opening a separate thread at the selected turn.
+    func forkMessage(in controller: ThreadController, checkpoint: MessageCheckpoint, before: Bool, draft: String?) async throws {
+        guard let thread = controller.thread, let provider = backend as? any MessageForking,
+              controller.offersMessageFork else { throw MessageForkError.unavailable }
+        guard canForkMessage(in: controller) else { throw MessageForkError.busy }
+        forkingThreads.insert(thread.id)
+        defer { forkingThreads.remove(thread.id) }
+        let ref = try await provider.fork(thread, at: checkpoint, before: before)
+        guard !isRetired else { return }
+        showAdopted(ref, draft: draft)
     }
 
     func forkViewOnly(_ controller: ThreadController) async throws {

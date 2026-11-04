@@ -162,7 +162,8 @@
    "model_levels_none",
    "git_status",
    "usage_read",
-   "open_on_host"
+   "open_on_host",
+   "message_fork"
   ],
   "events": {
    "mcp.auth": {
@@ -198,6 +199,9 @@
    },
    "status.headline": {
     "feature": "status_headline"
+   },
+   "message.checkpoint": {
+    "feature": "message_fork"
    }
   },
   "methods": {
@@ -528,6 +532,14 @@
      "cursor",
      "agent",
      "folder"
+    ]
+   },
+   "session.fork": {
+    "feature": "message_fork",
+    "params": [
+     "session_id",
+     "checkpoint_id",
+     "before"
     ]
    }
   }

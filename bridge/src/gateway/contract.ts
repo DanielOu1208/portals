@@ -13,6 +13,7 @@ import { methods } from "./methods.ts";
 const events: [string, string][] = [
   ["gateway.ready", "First frame on every connection: replay_epoch, heartbeat, bridge {protocol, features, machine, net {id, revision} (feature net), relay_problem: in_use, only while another bridge holds this Mac's relay id, latest: a later portals-host that is out, only while there is one (feature update_notice)}."],
   ["message.start", "A turn started; queue_id: the waiting message that opened it (feature queue); text, sender, message_id: that message (feature turn_messages)."],
+  ["message.checkpoint", "The current turn's opening user message has a native checkpoint for forking or editing (feature message_fork). Sent before message.complete."],
   ["message.steered", "A message was handed to the running turn: text, sender, message_id (feature turn_messages)."],
   ["message.taken", "Remove only the failed turn named by request_id, before its message.steered arrives; replay_base: new replay base; removed_start, removed_count: deleted stored-message range in the previous history, for paging cursors (feature message_reconciliation)."],
   ["message.delta", "A piece of the reply."],

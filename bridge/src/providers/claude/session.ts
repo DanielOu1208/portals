@@ -25,6 +25,7 @@ import type {
   StoredMessage,
   ThreadMode,
 } from "../types.ts";
+import type { ClaudeCheckpoints } from "./checkpoints.ts";
 import { historyFromSession } from "./history.ts";
 import { ClaudeTodos } from "./todos.ts";
 import { InputQueue } from "./input.ts";
@@ -109,7 +110,7 @@ export interface SessionFiles {
   /** One session, whatever its folder; undefined when Claude has none by that id. */
   info(id: string): Promise<StoredSession | undefined>;
   /** Copies a session into a new one with the same history, and returns the new one's id. */
-  fork(id: string, cwd: string): Promise<string>;
+  fork(id: string, cwd: string, upToMessageId?: string): Promise<string>;
   /** Gives a session a title of its own, which `title` then reads. */
   rename(id: string, cwd: string, title: string): Promise<void>;
   /**
@@ -127,6 +128,7 @@ export interface ClaudeHost {
   readonly portals?: CommandAccess;
   readonly query: QueryFactory;
   readonly files: SessionFiles;
+  readonly checkpoints?: ClaudeCheckpoints;
   readonly pool: WarmPool;
   /** How long a turn may take to end after Stop before its process is stopped. */
   readonly interruptGraceMs: number;
@@ -288,7 +290,8 @@ export class ClaudeSession implements ProviderSession, Warmable {
   }
 
   async reload(): Promise<StoredMessage[]> {
-    return historyFromSession(await this.host.files.messages(this.id, this.cwd), this.cwd);
+    const messages = await this.host.files.messages(this.id, this.cwd);
+    return historyFromSession(messages, this.cwd, this.host.checkpoints?.forSession(this.id, messages));
   }
 
   // MARK: Turns
@@ -335,6 +338,7 @@ export class ClaudeSession implements ProviderSession, Warmable {
     live.stream.sent(uuid);
     try {
       live.input.push(message);
+      if (steering || !prompt.text.trimStart().startsWith("/")) this.host.checkpoints?.sent(this.id, uuid, steering);
     } catch (error) {
       if (!steering) this.endTurn({ type: "turn.end", status: "error", error: (error as Error).message });
       return "refused";
@@ -563,9 +567,17 @@ export class ClaudeSession implements ProviderSession, Warmable {
       log.debug("dropped Claude's API retry between turns", { session: this.id });
       return;
     }
+    this.host.checkpoints?.observed(this.id, message);
     for (const event of live.stream.map(message)) {
-      if (event.type === "turn.end") this.endTurn(event);
-      else if (event.type === "turn.begin") this.beginOwn(event);
+      if (event.type === "turn.end") {
+        try {
+          const checkpoint = this.host.checkpoints?.finish(this.id);
+          if (checkpoint) this.sink.emit({ type: "checkpoint", checkpoint });
+        } catch (error) {
+          log.warn("could not save Claude message checkpoints", { session: this.id, error: (error as Error).message });
+        }
+        this.endTurn(event);
+      } else if (event.type === "turn.begin") this.beginOwn(event);
       else this.emit(event);
     }
     this.observeMode(live);
@@ -633,6 +645,7 @@ export class ClaudeSession implements ProviderSession, Warmable {
   private endTurn(event: Extract<ProviderEvent, { type: "turn.end" }>): void {
     if (!this.turnOpen) return;
     this.turnOpen = false;
+    this.host.checkpoints?.abandon(this.id);
     if (this.stopTimer) clearTimeout(this.stopTimer);
     this.stopTimer = null;
     const live = this.live;

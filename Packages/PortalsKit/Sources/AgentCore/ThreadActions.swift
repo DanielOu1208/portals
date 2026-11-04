@@ -101,3 +101,42 @@ extension ThreadRecord {
         return String(words.prefix(200))
     }
 }
+
+/// A provider-native turn position, with the actions the host explicitly allows.
+public struct MessageCheckpoint: Codable, Hashable, Sendable {
+    public var id: String
+    public var canFork: Bool
+    public var canEdit: Bool
+
+    public init(id: String, canFork: Bool, canEdit: Bool) {
+        self.id = id
+        self.canFork = canFork
+        self.canEdit = canEdit
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case canFork = "can_fork"
+        case canEdit = "can_edit"
+    }
+}
+
+/// Creates a separate thread at a message's provider-native position.
+public protocol MessageForking: Sendable {
+    var offersMessageFork: Bool? { get async }
+    /// `before` leaves the selected turn out so its edited opener can be sent anew.
+    /// Otherwise the new thread includes the completed selected turn.
+    func fork(_ thread: ThreadRef, at checkpoint: MessageCheckpoint, before: Bool) async throws -> ThreadRef
+}
+
+public enum MessageForkError: LocalizedError, Hashable, Sendable {
+    case unavailable
+    case busy
+
+    public var errorDescription: String? {
+        switch self {
+        case .unavailable: "This host does not offer this message action."
+        case .busy: "Wait for this thread to finish before creating a new thread."
+        }
+    }
+}

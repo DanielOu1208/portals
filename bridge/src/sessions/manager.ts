@@ -223,6 +223,50 @@ export class SessionManager {
     return this.make(provider, options, (await provider.newThread?.({ cwd: options.cwd, settings: options.settings })) ?? randomUUID());
   }
 
+  /** Copy a completed native turn's conversation, retaining the source's policy. */
+  async fork(source: Session, checkpointId: string, before: boolean): Promise<Session> {
+    if (this.closing || this.live.get(source.id) !== source) throw new DeskRefused("Open this thread again before forking it.");
+    const provider = this.provider(source.record.agent);
+    if (!provider.forkAt) throw new DeskRefused("This agent does not support forking from a message.");
+    return source.forkAt(checkpointId, before, async () => {
+      const policy = { ...source.record };
+      const adoption = await provider.forkAt!(source.id, checkpointId, before, policy.cwd);
+      if (adoption.cwd !== policy.cwd) throw new DeskRefused("The agent's folder changed. Open the thread again before forking it.");
+      if (adoption.id === source.id || this.registry.get(adoption.id) || this.registry.removedRecord(adoption.id) || this.adopting.has(adoption.id) || this.loading.has(adoption.id)) throw new DeskRefused("The agent did not create an available new thread.");
+      if (this.closing) throw new DeskRefused("The host is closing. Open the fork from the sessions list after reconnecting.");
+      const now = Math.floor(Date.now() / 1000);
+      const record: ThreadRecord = {
+        id: adoption.id, agent: policy.agent, cwd: policy.cwd,
+        title: `${policy.title ?? "Thread"} (fork)`,
+        model: policy.model, provider: policy.provider, reasoningEffort: policy.reasoningEffort,
+        createdAt: now, updatedAt: now, origin: "phone",
+      };
+      if (policy.mode) record.mode = policy.mode;
+      if (policy.modeBeforePlan) record.modeBeforePlan = policy.modeBeforePlan;
+      if (policy.modeReset) record.modeReset = true;
+      const taking = this.keepFork(provider, record);
+      this.adopting.set(record.id, taking);
+      try { return await taking; }
+      finally { this.adopting.delete(record.id); }
+    });
+  }
+
+  private async keepFork(provider: Provider, record: ThreadRecord): Promise<Session> {
+    const session = this.session(record);
+    try {
+      await session.attach(await provider.resumeSession(this.sessionOptions(record), session.sink));
+      if (this.closing) throw new DeskRefused("The host is closing. Reconnect before opening the fork.");
+      record.preview = lastPreview(session.messages);
+      noteRepo(record);
+      this.registry.add(record);
+      this.live.set(record.id, session);
+      return session;
+    } catch (error) {
+      await session.close();
+      throw error;
+    }
+  }
+
   /** A new thread `id` (the agent's session id: Codex's own, else the bridge's choice). */
   private async make(provider: Provider, options: CreateOptions, id: string, ongoing?: OngoingThread): Promise<Session> {
     const now = Math.floor(Date.now() / 1000);
@@ -672,6 +716,7 @@ export class SessionManager {
         continue;
       }
       const session = this.live.get(id);
+      if (session?.historyOperationInProgress) throw new RemoveRefused("Wait for this thread's fork to finish before removing it.");
       if (!session && provider?.liveThreads && (await this.stillOpen(provider, id))) {
         await this.load(id);
         continue;
@@ -680,6 +725,7 @@ export class SessionManager {
       if (session?.hasBackgroundWork) throw inBackground();
       // The agent was asked meanwhile: the step is taken only on what holds now.
       if (this.registry.get(id) !== record || this.live.get(id) !== session || this.loading.has(id) || this.adopting.has(id)) continue;
+      if (session?.historyOperationInProgress) throw new RemoveRefused("Wait for this thread's fork to finish before removing it.");
       if (session?.isAtWork) throw atWork();
       if (session?.hasBackgroundWork) throw inBackground();
       // The record first: when its files cannot be written, nothing else changes.

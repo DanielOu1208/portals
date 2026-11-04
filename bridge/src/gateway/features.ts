@@ -352,6 +352,7 @@
 //   folder in one, on the host's own screen (src/openers.ts).
 
 export const bridgeFeatures = [
+  "message_fork",
   "mcp_auth",
   "folders",
   "model_levels",

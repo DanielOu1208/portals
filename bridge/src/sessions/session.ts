@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { SettingRefused } from "../providers/types.ts";
+import { DeskRefused, SettingRefused } from "../providers/types.ts";
 import type { McpAuthAction, McpAuthCard } from "../providers/mcpAuth.ts";
 import { isAbsolute } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -11,6 +11,7 @@ import type {
   HostNote,
   ImageInput,
   ModelChangeResult,
+  MessageCheckpoint,
   ModeState,
   ModeOption,
   Prompt,
@@ -408,6 +409,7 @@ export class Session {
   private toldActivity: ThreadActivity | undefined;
   /** Let go of for good (`retire`): it starts nothing and writes nothing again. */
   private retired = false;
+  private checkpointing = false;
   /** Closing with the bridge: a turn that ends now opens no turn for a message waiting, which waits on disk for the next start. */
   private closing = false;
   private readonly waiting: WaitingStore | undefined;
@@ -547,6 +549,10 @@ export class Session {
     return this.transcript.messages;
   }
 
+  get historyOperationInProgress(): boolean {
+    return this.checkpointing;
+  }
+
   /**
    * For a thread continued here and at rest: whether the agent's copy of the
    * conversation was written elsewhere since it was read (a Pi at the desk), so it is to
@@ -614,6 +620,7 @@ export class Session {
    * attachment waiting for a message, and no work going on.
    */
   get atRest(): boolean {
+    if (this.checkpointing) return false;
     if (this.isBusy || this.transcript.isInTurn || this.activity !== undefined || this.closing || this.settingsOnTheWay > 0) return false;
     if (this.queue.length > 0 || this.awaitingCatchUp || this.notesDue.size > 0 || this.askedBefore !== null || this.askedOpen !== null) return false;
     return [...this.attached.values()].every((attached) => attached.images.length === 0 && attached.files.length === 0 && attached.saving === 0 && attached.pending.size === 0);
@@ -998,6 +1005,7 @@ export class Session {
 
   submit(text: string, options: SubmitOptions = {}): SubmitOutcome {
     if (this.retired) throw new Error("This thread is no longer on the bridge's list.");
+    if (this.checkpointing) throw new DeskRefused("Wait for this thread's fork to finish before sending a message.");
     const fleet = options.fleet === true;
     // A message through the fleet takes nothing a device attached.
     const attached = fleet ? undefined : this.attached.get(options.by);
@@ -1557,11 +1565,28 @@ export class Session {
    * made and lose it (Codex's review of a6e4bd2c).
    */
   async setting<T>(work: () => Promise<T>): Promise<T> {
+    if (this.checkpointing) throw new DeskRefused("Wait for this thread's fork to finish before changing it.");
     this.settingsOnTheWay += 1;
     try {
       return await work();
     } finally {
       this.settingsOnTheWay -= 1;
+    }
+  }
+
+  /** Hold an idle source while its native conversation is copied. */
+  async forkAt<T>(checkpointId: string, before: boolean, work: () => Promise<T>): Promise<T> {
+    if (this.retired || this.isReadOnly) throw new DeskRefused("Continue this thread before forking it.");
+    if (!this.atRest || this.provider?.hasBackgroundWork?.()) throw new DeskRefused("Wait until this thread has finished before forking it.");
+    const checkpoint = this.messages.flatMap((message) => message.role === "user" && message.checkpoint ? [message.checkpoint] : []).find((point) => point.id === checkpointId);
+    if (!checkpoint || !(before ? checkpoint.can_edit : checkpoint.can_fork)) throw new DeskRefused("This message cannot be forked. Open the thread again to refresh its history.");
+    this.checkpointing = true;
+    try {
+      if (await this.provider?.stopping?.()) throw new DeskRefused("Wait until the agent has stopped before forking this thread.");
+      if (this.retired || this.closing || this.isAtWork || this.provider?.hasBackgroundWork?.()) throw new DeskRefused("Wait until this thread has finished before forking it.");
+      return await work();
+    } finally {
+      this.checkpointing = false;
     }
   }
 
@@ -2246,6 +2271,15 @@ export class Session {
 
   private handle(event: ProviderEvent): void {
     switch (event.type) {
+      case "checkpoint": {
+        const from = this.transcript.turnStart;
+        const opener = from === null ? undefined : this.transcript.messages[from];
+        if (opener?.role !== "user") return;
+        const checkpoint: MessageCheckpoint = { ...event.checkpoint };
+        opener.checkpoint = checkpoint;
+        this.emit("message.checkpoint", { checkpoint });
+        return;
+      }
       case "mcp.auth":
         this.emit("mcp.auth", {});
         return;

@@ -18,6 +18,8 @@ public enum ThreadEvent: Hashable, Sendable {
     /// `from`: who sent it through Portals, as the host says (`senders`). `cardAnswer`:
     /// the answers given on a card, which its row shows (`UserMessage.cardAnswer`).
     case turnOpened(by: String, queueID: String? = nil, from: MessageSender? = nil, cardAnswer: String? = nil)
+    /// The provider-native position of the current turn's opening user message.
+    case messageCheckpoint(MessageCheckpoint)
     /// A message from elsewhere (another device, or another agent through Portals), as
     /// stored, joined the running turn; `from` and `cardAnswer` as for `turnOpened`.
     case messageSteered(String, from: MessageSender? = nil, cardAnswer: String? = nil, messageID: UUID? = nil)

@@ -127,6 +127,9 @@ final class ThreadController: Identifiable {
     /// The host takes the files a message mentions beside its text (a bridge's
     /// `file_mentions`), as far as it has said (`checkHost`).
     private(set) var takesFileMentions = false
+    /// Message-level forks are offered only by a host that explicitly lists them.
+    private(set) var offersMessageFork = false
+    var canForkMessage: Bool { isAtRest && !isSending && !isLoadingHistory && !isClosed }
     /// Counts what was sent from here (a message, a command, a retry): the chat keeps to its
     /// end from each, to show what it becomes (`ChatScreen`).
     private(set) var sentHere = 0
@@ -581,6 +584,7 @@ final class ThreadController: Identifiable {
 
     /// Asks the host what it takes, once it is connected: files of any kind, or images only.
     func checkHost() async {
+        offersMessageFork = await (backend as? any MessageForking)?.offersMessageFork ?? false
         takesFiles = await (backend as? any FileAttaching)?.attachesFiles ?? false
         readsFiles = await (backend as? any FileReading)?.readsFiles ?? false
         searchesFiles = await (backend as? any FileSearching)?.searchesFiles ?? false

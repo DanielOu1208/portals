@@ -62,7 +62,7 @@ export interface CodexHistory {
  * off (Codex stopped), and is shown as interrupted. `nicknames`: what Codex calls the
  * sub-agents its calls name, by thread id, read from their own threads.
  */
-export function historyFromThread(thread: Pick<Thread, "turns">, cwd: string, active: boolean, nicknames?: ReadonlyMap<string, string>): CodexHistory {
+export function historyFromThread(thread: Pick<Thread, "turns">, cwd: string, active: boolean, nicknames?: ReadonlyMap<string, string>, checkpoints = true): CodexHistory {
   const messages: StoredMessage[] = [];
   let running: CodexHistory["running"] = null;
   const ends = new Map<string, number>();
@@ -88,7 +88,7 @@ export function historyFromThread(thread: Pick<Thread, "turns">, cwd: string, ac
           latest = text;
           if (opener === null) {
             opener = text;
-            messages.push({ role: "user", text, timestamp: start });
+            messages.push({ role: "user", text, timestamp: start, ...(checkpoints && turn.status !== "inProgress" ? { checkpoint: { id: turn.id, can_fork: true, can_edit: true } } : {}) });
           } else {
             messages.push({ role: "user", text, timestamp: start, display_kind: "steer" });
           }

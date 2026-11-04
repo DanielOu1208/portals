@@ -674,6 +674,13 @@ public struct ThreadState: Hashable, Sendable {
                 turnOrigin += was - (transcript.turns.count - 1)
             }
 
+        case let .messageCheckpoint(checkpoint):
+            guard let turn = openTurnIndex,
+                  let item = transcript.turns[turn].items.firstIndex(where: \.isUserMessage),
+                  case var .user(message) = transcript.turns[turn].items[item].content else { return }
+            message.checkpoint = checkpoint
+            transcript.turns[turn].items[item].content = .user(message)
+
         case let .messageSteered(text, from, cardAnswer, messageID):
             // Handed to the running turn from elsewhere: it shows there.
             append(TurnItem(id: messageID ?? UUID(), .user(Self.message(text, delivery: .steered, at: now, from: from, cardAnswer: cardAnswer))), to: openOrStartTurn(now), at: now)
@@ -1164,6 +1171,7 @@ public struct ThreadState: Hashable, Sendable {
         guard case let .user(shown) = transcript.turns[turnIndex].items[itemIndex].content else { return false }
         var message = waiting.message
         message.delivery = shown.delivery
+        message.checkpoint = shown.checkpoint
         transcript.turns[turnIndex].items[itemIndex] = TurnItem(id: waiting.id, .user(message))
         return true
     }

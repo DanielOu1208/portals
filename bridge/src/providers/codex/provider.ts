@@ -1,9 +1,10 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, realpathSync, rmSync } from "node:fs";
 import { connect as connectSocket } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { performance } from "node:perf_hooks";
 import { counters } from "../../counters.ts";
 import { codexProjects, type RecentFolder } from "../../folders.ts";
@@ -668,6 +669,63 @@ export class CodexProvider implements Provider, CodexHost {
       throw new DeskRefused(`Codex could not fork this thread: ${(error as Error).message}`);
     }
     return { id: fork.thread.id, cwd: fork.cwd ?? thread.cwd, title: `${title} (fork)`, settings: settings({ model: fork.model, reasoningEffort: fork.reasoningEffort }) };
+  }
+
+  /** Copies exactly the native turn prefix, leaving the source untouched. */
+  async forkAt(id: string, checkpointId: string, before: boolean, expectedCwd: string): Promise<DeskAdoption> {
+    let thread: Thread;
+    try {
+      thread = (await this.client.call("thread/read", { threadId: id, includeTurns: true })).thread;
+    } catch (error) {
+      throw new DeskRefused(`Codex could not read this thread: ${(error as Error).message}`);
+    }
+    if (thread.id !== id) throw new DeskRefused("Use the exact Codex thread id shown in the sessions list.");
+    try {
+      if (realpathSync(thread.cwd) !== realpathSync(expectedCwd)) throw new Error("folder changed");
+    } catch {
+      throw new DeskRefused("The Codex thread's folder no longer matches this Portals thread. Branching was refused.");
+    }
+    if (!this.client.supportsMessageForks) throw new DeskRefused("This Codex app server must be version 0.166.0 or newer to branch at a message.");
+    const turn = thread.turns?.find((turn) => turn.id === checkpointId);
+    if (!turn || !turn.items.some((item) => item.type === "userMessage")) throw new DeskRefused("Codex has no user turn at this checkpoint.");
+    if (turn.status === "inProgress" || thread.status?.type === "active") throw new DeskRefused("Wait for this Codex thread to finish before branching it.");
+    if (thread.turns.some((turn) => turn.itemsView !== "full")) throw new DeskRefused("Codex did not provide the complete source history, so it cannot be branched safely.");
+    const catalog = await this.models();
+    let fork: ThreadForkResponse;
+    try {
+      fork = await this.client.callVersioned<ThreadForkResponse>("thread/fork", {
+        threadId: id,
+        ...(before ? { beforeTurnId: checkpointId } : { lastTurnId: checkpointId }),
+        excludeTurns: true,
+        deferGoalContinuation: true,
+      }, "0.166.0");
+    } catch (error) {
+      throw new DeskRefused(`Codex could not fork at this checkpoint: ${(error as Error).message}`);
+    }
+    if (!fork.thread.id || fork.thread.id === id) throw new DeskRefused("Codex did not create a separate fork, so it was not adopted.");
+    const position = thread.turns.findIndex((turn) => turn.id === checkpointId);
+    const expected = thread.turns.slice(0, position + (before ? 0 : 1));
+    const copied = (await this.client.call<{ thread: Thread }>("thread/read", { threadId: fork.thread.id, includeTurns: true })).thread;
+    const samePrefix = copied.id === fork.thread.id && copied.status?.type !== "active" && copied.turns.length === expected.length && expected.every((turn, index) => {
+      const actual = copied.turns[index];
+      return actual.id === turn.id && actual.status === turn.status && turn.itemsView === "full" && actual.itemsView === "full" && isDeepStrictEqual(actual.items, turn.items);
+    });
+    if (!samePrefix) throw new DeskRefused("Codex did not return the exact requested turn prefix, so the fork was not adopted.");
+    try {
+      if (realpathSync(copied.cwd) !== realpathSync(expectedCwd)) throw new Error("folder changed");
+    } catch {
+      throw new DeskRefused("Codex returned a fork in a different folder, so it was not adopted.");
+    }
+    return {
+      id: fork.thread.id,
+      cwd: expectedCwd,
+      title: `${thread.name?.trim() || titleFrom(thread.preview ?? "") || "Untitled thread"} (fork)`,
+      settings: {
+        model: fork.model ?? thread.model ?? catalog.model,
+        provider: "openai",
+        reasoningEffort: fork.reasoningEffort ?? thread.reasoningEffort ?? catalog.reasoning,
+      },
+    };
   }
 
   // MARK: Names

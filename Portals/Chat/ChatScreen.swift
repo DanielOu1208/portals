@@ -49,6 +49,8 @@ struct ChatScreen: View {
     /// Forks a thread that is only read into one that can be continued.
     var offersFork = false
     var onFork: () async throws -> Void = {}
+    var canForkMessage = false
+    var onForkMessage: (MessageCheckpoint, Bool, String?) async throws -> Void = { _, _, _ in }
     /// The threads agents started from this one (`Fleet.startedThreads`): asked for by
     /// the line at the chat's foot as it is drawn, so that only it follows their news.
     var startedThreads: () -> [StartedThread] = { [] }
@@ -81,6 +83,8 @@ struct ChatScreen: View {
     /// The window's image opened on its own, over the chat (`ImageLightbox`).
     @Environment(\.imageLightbox) private var lightbox
 
+    @State private var messageFork: MessageForkRequest?
+    @State private var openedMessageForkForDebug = false
     /// When this chat was put on screen: a long reply new to it after a moment came while
     /// someone looked, and plays in (`ReplyTextView`).
     @State private var shownSince = Date.now
@@ -667,6 +671,19 @@ struct ChatScreen: View {
             // take it with it. Select Text from any copy menu in the chat; a widget
             // expanded; the detail of a subagent or workflow from its line, while it is
             // still on the line; what a turn changed.
+            .onChange(of: debugMessageForkTurn?.id, initial: true) { _, id in
+                guard id != nil, let turn = debugMessageForkTurn,
+                      let opener = turn.items.first(where: \.isUserMessage),
+                      case let .user(message) = opener.content, let checkpoint = message.checkpoint,
+                      let before = DebugLaunch.opensMessageFork else { return }
+                openedMessageForkForDebug = true
+                messageFork = MessageForkRequest(message: message, checkpoint: checkpoint, before: before)
+            }
+            .sheetOrPanel($messageFork, width: 620) { request, close in
+                MessageForkSheet(request: request, canCreate: canForkMessage, onDone: close) { draft in
+                    try await onForkMessage(request.checkpoint, request.before, draft)
+                }
+            }
             .selectsTextHere()
             .expandsWidgetsHere()
             .showsTurnDiffsHere()
@@ -718,6 +735,17 @@ struct ChatScreen: View {
                     isComposing = true
                 }
             }
+    }
+
+    private var debugMessageForkTurn: Turn? {
+        guard !openedMessageForkForDebug, isShown, !isCovered, !hidesChat,
+              !chat.isLoadingHistory, canForkMessage, let before = DebugLaunch.opensMessageFork else { return nil }
+        return chat.turns.first { turn in
+            guard !turn.isRunning, let opener = turn.items.first(where: \.isUserMessage),
+                  case let .user(message) = opener.content, let checkpoint = message.checkpoint else { return false }
+            if before { return checkpoint.canEdit && message.images.isEmpty && message.files.isEmpty }
+            return checkpoint.canFork
+        }
     }
 
     /// Does what a command or the app asked of the screen (`ThreadController.screenRequest`).
@@ -816,6 +844,8 @@ struct ChatScreen: View {
                                 status: hasLast ? chat.runStatus : nil,
                                 plan: hasRunning ? chat.state.runningPlan : nil,
                                 canRetry: chat.canRetry,
+                                offersMessageFork: chat.offersMessageFork,
+                                canForkMessage: canForkMessage,
                                 listing: listing.flatMap { id in blockTurns.contains { $0.id == id } ? id : nil },
                                 staysBuilt: block.index >= lastBlocks || hasRunning
                             )) { turn in
@@ -826,6 +856,11 @@ struct ChatScreen: View {
                                     plan: turn.isRunning ? chat.state.runningPlan : nil,
                                     canRetry: chat.canRetry,
                                     onRetry: { swipeGuard { chat.retry(turn.id) } },
+                                    offersMessageFork: chat.offersMessageFork,
+                                    canForkMessage: canForkMessage,
+                                    onForkMessage: { message, checkpoint, before in
+                                        swipeGuard { messageFork = MessageForkRequest(message: message, checkpoint: checkpoint, before: before) }
+                                    },
                                     // The latest ended turn's footer lists the threads the agent started.
                                     startedThreads: turn.id == listing
                                         ? StartedThreadsLink(threads: startedThreads, onOpen: onOpenThread, onShare: onShareThread) : nil
