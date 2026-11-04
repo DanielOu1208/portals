@@ -28,8 +28,14 @@ public struct DeskSession: Identifiable, Hashable, Sendable {
     /// When it last changed, when the host says.
     public var updated: Date?
     public var state: State
+    /// The ways the host takes it up, when not all its agent's (`adopt_modes`): a chat of
+    /// Cursor's terminal is only forked. Nil for all of them.
+    public var adoptModes: [AdoptMode]?
 
-    public init(id: String, agent: Agent.ID, title: String? = nil, folder: String, updated: Date? = nil, state: State) {
+    public init(
+        id: String, agent: Agent.ID, title: String? = nil, folder: String, updated: Date? = nil, state: State,
+        adoptModes: [AdoptMode]? = nil
+    ) {
         self.id = id
         self.agent = agent
         let trimmed = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -37,6 +43,7 @@ public struct DeskSession: Identifiable, Hashable, Sendable {
         self.folder = folder
         self.updated = updated
         self.state = state
+        self.adoptModes = adoptModes
     }
 
     /// What to call its folder: "No project" for the host's General folder (`general`, its
@@ -48,8 +55,14 @@ public struct DeskSession: Identifiable, Hashable, Sendable {
     /// Continuing it is not offered: a terminal has it open, so it is forked or read.
     public var isOpenInTerminal: Bool { state == .open }
 
+    /// Whether the host takes it up as `mode`, as far as the session itself says.
+    public func allows(_ mode: AdoptMode) -> Bool { adoptModes?.contains(mode) ?? true }
+
+    /// It cannot be continued at all, only forked (a chat of Cursor's terminal).
+    public var isForkOnly: Bool { !allows(.continue) && !allows(.read) && allows(.fork) }
+
     /// How a tap takes it up when nothing has to be asked first: continued.
-    public var defaultMode: AdoptMode? { isOpenInTerminal ? nil : .continue }
+    public var defaultMode: AdoptMode? { isOpenInTerminal || !allows(.continue) ? nil : .continue }
 
     /// A thread only read, as a desk session again, to fork it.
     public init(viewOnly thread: ThreadRef) {

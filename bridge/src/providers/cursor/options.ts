@@ -96,6 +96,20 @@ export function turnFailure(piece: string): string | null {
   return error ? error : null;
 }
 
+// MARK: The terminal's chats
+
+/** Why a chat of Cursor's terminal is not continued or read, only forked (./desk.ts). */
+export const chatForkedOnlyText = `${cursorName} opens a chat from its terminal here only as a copy: fork it to go on in a new thread.`;
+
+/**
+ * What a fork of a terminal chat says as its first turn starts, when Cursor keeps Run
+ * Everything in the chat's store (`keepsRunEverything`): the copy keeps it too, and Cursor
+ * searches the web and fetches pages for the thread without asking, whatever its mode.
+ * The store is Cursor's, and left alone (2026-11-03: "tell me is enough for cursor").
+ */
+export const keptFullAccessText =
+  "Cursor keeps part of Full access for this thread: it will go on searching the web and fetching pages without asking, also after a restart and in forks of this thread.";
+
 /** One of Cursor's own slash commands that is left out: it writes the Mac's clipboard. */
 export const hiddenCommands = new Set(["copy-request-id"]);
 

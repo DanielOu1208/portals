@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { setTimeout as sleep } from "node:timers/promises";
 import { after, before, test, type TestContext } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -11,7 +13,7 @@ import { promisify } from "node:util";
 import { setLogLevel } from "../src/log.ts";
 import { machineWord } from "../src/platform.ts";
 import type { CommandAccess } from "../src/portals/access.ts";
-import { levelLeftToCursorText, notSignedInText, noSuchModeText, testedCursorVersion } from "../src/providers/cursor/options.ts";
+import { chatForkedOnlyText, keptFullAccessText, levelLeftToCursorText, notSignedInText, noSuchModeText, testedCursorVersion } from "../src/providers/cursor/options.ts";
 import { ProcessNotes } from "../src/providers/cursor/leftovers.ts";
 import { CursorProvider } from "../src/providers/cursor/provider.ts";
 import { providerModeOptions } from "../src/providers/modes.ts";
@@ -793,6 +795,8 @@ test("Keep planning sends the plan back with the user's note, and the second pla
   client.answer(second.id, { choice: "once" });
   const done = await client.nextEvent("message.complete", session);
   assert.equal(done.payload.text, "pong: Go ahead with the plan.");
+  // The note went as the reason only: it is not sent again as a message, which would stop Cursor's planning.
+  assert.ok(!calls(agentDir).some((call) => call.method === "session/prompt" && call.params.sessionId === session && call.params.prompt[0].text === "Make it one step."));
 
   // Without a note, the reason says what to do.
   await client.call("session.set_mode", { session_id: session, mode: "plan" });
@@ -1213,11 +1217,11 @@ test("what a process that is being stopped still sends is shown in no turn: the 
   await until(() => !alive(pid), "the old process is killed");
 });
 
-test("a message sent while a turn runs waits in the bridge: Cursor gets it only after it answered the first", async () => {
+test("a message sent to wait while a turn runs waits in the bridge: Cursor gets it only after it answered the first", async () => {
   const session = await createThread();
   await client.call("prompt.submit", { session_id: session, text: "slow first" });
   await client.nextEvent("message.delta", session);
-  assert.deepEqual(await client.call("prompt.submit", { session_id: session, text: "second" }), { status: "queued", queue_id: "1" });
+  assert.deepEqual(await client.call("prompt.submit", { session_id: session, text: "second", when_busy: "queue" }), { status: "queued", queue_id: "1" });
   const first = await client.nextEvent("message.complete", session);
   // Complete, not cancelled: a second prompt would have cancelled the first at Cursor.
   assert.equal(first.payload.status, "complete");
@@ -1225,6 +1229,88 @@ test("a message sent while a turn runs waits in the bridge: Cursor gets it only 
   assert.equal(second.payload.text, "pong: second");
   const prompts = timeline(agentDir).filter((entry) => entry.method === "session/prompt" && entry.session === session);
   assert.deepEqual(prompts.map((entry) => entry.event), ["got", "answered", "got", "answered"]);
+});
+
+// Cursor has no way to add a message to a running prompt, and a second prompt for the
+// session cancels the one running (recorded, second-prompt): a message handed to the turn
+// stops what Cursor was doing and runs in its place (2026-11-03: "stop and send").
+test("a message handed to a running turn stops what Cursor was doing and runs in its place, in the same turn, kept where it came", async (t) => {
+  const state = await rig(t);
+  const session = await createThread({}, state.phone);
+  const mark = state.phone.frames.length;
+  await state.phone.call("prompt.submit", { session_id: session, text: "slow trail first" });
+  await eventFrom(state.phone, mark, "message.delta", session);
+  assert.deepEqual(await state.phone.call("prompt.submit", { session_id: session, text: "second" }), { status: "steered" });
+  const done = await eventFrom(state.phone, mark, "message.complete", session);
+  assert.equal(done.payload.status, "complete");
+  assert.match(done.payload.text, /pong: second$/);
+  assert.equal(ofType(state.phone.events(session).slice(0), "message.complete").length, 1);
+  // The first was cancelled, and the second went once Cursor had answered it and said no more of it.
+  const prompts = timeline(state.agentDir).filter((entry) => (entry.method === "session/prompt" || entry.method === "session/cancel") && entry.session === session);
+  assert.deepEqual(prompts.map((entry) => `${entry.event} ${entry.method}`), ["got session/prompt", "answered session/prompt", "got session/prompt", "answered session/prompt"]);
+  assert.equal(calls(state.agentDir).filter((call) => call.method === "session/cancel" && call.params.sessionId === session).length, 1);
+  // Nothing Cursor still said of the first streams after the message.
+  const events = state.phone.events(session);
+  const at = events.findIndex((event) => event.type === "message.steered");
+  assert.ok(at > 0);
+  assert.ok(!events.slice(at).some((event) => event.type === "message.delta" && /late|word/.test(event.payload.text)));
+  // The thread keeps the message after what Cursor said before it, also across a restart.
+  await state.restart();
+  const messages = (await state.phone.call("session.resume", { session_id: session })).messages;
+  const said = messages.map((message: { role: string; text?: string; display_kind?: string }) => [message.role, message.display_kind ?? null, message.text?.startsWith("word0") ? "word0…" : message.text]);
+  assert.deepEqual(said, [["user", null, "slow trail first"], ["assistant", null, "word0…"], ["user", "steer", "second"], ["assistant", null, "pong: second"]]);
+  assert.ok(!JSON.stringify(messages).includes("late"));
+});
+
+test("a message handed to a turn whose card is open closes the card, answered cancelled; one sent as Cursor starts goes once the turn's own message has", async (t) => {
+  const state = await rig(t);
+  const session = await createThread({}, state.phone);
+  let mark = state.phone.frames.length;
+  await state.phone.call("prompt.submit", { session_id: session, text: "approve this" });
+  const card = await state.phone.nextRequest();
+  assert.deepEqual(await state.phone.call("prompt.submit", { session_id: session, text: "never mind" }), { status: "steered" });
+  assert.deepEqual((await eventFrom(state.phone, mark, "request.cancel", session)).payload, { id: card.id, reason: "withdrawn" });
+  const done = await eventFrom(state.phone, mark, "message.complete", session);
+  assert.match(done.payload.text, /pong: never mind$/);
+  assert.deepEqual(answers(state.agentDir).at(-1)?.result, { outcome: { outcome: "cancelled" } });
+  // Cursor says no more of the command it asked about: its row is closed, as at a stop.
+  assert.deepEqual(tools(state.phone.events(session)).filter((row) => row.type === "tool.complete").map((row) => row.result), [{ status: "error", error: "Stopped before it finished." }]);
+
+  // After a restart Cursor starts and loads the session before the first message goes: the second waits for it.
+  await state.restart();
+  await state.phone.call("session.resume", { session_id: session });
+  mark = state.phone.frames.length;
+  await state.phone.call("prompt.submit", { session_id: session, text: "slow again" });
+  assert.deepEqual(await state.phone.call("prompt.submit", { session_id: session, text: "and this" }), { status: "steered" });
+  assert.match((await eventFrom(state.phone, mark, "message.complete", session)).payload.text, /pong: and this$/);
+  const prompts = calls(state.agentDir).filter((call) => call.method === "session/prompt" && call.params.sessionId === session).slice(-2);
+  assert.deepEqual(prompts.map((call) => call.params.prompt[0].text), ["slow again", "and this"]);
+});
+
+test("Stop after a message was handed to the turn stops the message's run; a Stop before it went sends it not at all, and the turn ends interrupted", async (t) => {
+  const state = await rig(t);
+  const session = await createThread({}, state.phone);
+  const prompts = (event: "got" | "answered") => timeline(state.agentDir).filter((entry) => entry.method === "session/prompt" && entry.session === session && entry.event === event).length;
+  let mark = state.phone.frames.length;
+  await state.phone.call("prompt.submit", { session_id: session, text: "slow first" });
+  await eventFrom(state.phone, mark, "message.delta", session);
+  assert.deepEqual(await state.phone.call("prompt.submit", { session_id: session, text: "slow second" }), { status: "steered" });
+  await until(() => prompts("got") === 2, "Cursor got the message");
+  await state.phone.call("session.interrupt", { session_id: session });
+  assert.equal((await eventFrom(state.phone, mark, "message.complete", session)).payload.status, "interrupted");
+  assert.equal(calls(state.agentDir).filter((call) => call.method === "session/cancel" && call.params.sessionId === session).length, 2);
+
+  // Stopped while the message waits for Cursor to end what it was doing: it never goes.
+  mark = state.phone.frames.length;
+  await state.phone.call("prompt.submit", { session_id: session, text: "slow third" });
+  await eventFrom(state.phone, mark, "message.delta", session);
+  assert.deepEqual(await state.phone.call("prompt.submit", { session_id: session, text: "fourth" }), { status: "steered" });
+  await state.phone.call("session.interrupt", { session_id: session });
+  assert.equal((await eventFrom(state.phone, mark, "message.complete", session)).payload.status, "interrupted");
+  await sleep(500);
+  assert.equal(prompts("got"), 3);
+  const kept = (await state.phone.call("session.resume", { session_id: session })).messages.filter((message: { role: string }) => message.role === "user");
+  assert.deepEqual(kept.map((message: { text: string; display_kind?: string }) => [message.text, message.display_kind ?? null]), [["slow first", null], ["slow second", "steer"], ["slow third", null], ["fourth", "steer"]]);
 });
 
 // MARK: Models and thinking levels
@@ -2034,6 +2120,121 @@ test("a fork whose conversation cannot be written is refused, and leaves no copy
     chmodSync(threads, 0o700);
   }
   assert.deepEqual(readdirSync(join(cursorHome, "acp-sessions")).sort(), before);
+});
+
+// MARK: The terminal's chats
+
+interface ChatOptions {
+  cwd?: string;
+  title?: string;
+  /** The conversation, as the stand-in keeps it: what it sends again when it opens a copy. */
+  said?: { role: "user" | "agent"; text: string }[];
+  /** Cursor keeps Run Everything in the chat's store. */
+  runsEverything?: boolean;
+  /** What else `meta.json` says, or leaves out (undefined). */
+  meta?: Record<string, unknown>;
+  /** No store the stand-in can open. */
+  unreadable?: boolean;
+}
+
+/** What a folder holds; nothing when there is no such folder. */
+function inFolder(folder: string): string[] {
+  return existsSync(folder) ? readdirSync(folder) : [];
+}
+
+/**
+ * A chat of Cursor's terminal as Cursor keeps one (`chats/<md5 of the folder>/<chat>/`):
+ * its `meta.json`, Cursor's own store with its metadata row (hex JSON, as Cursor writes
+ * it), and the stand-in's store, which it opens a copy of as Cursor does.
+ */
+function terminalChat(cursorHome: string, id: string, options: ChatOptions = {}): string {
+  const at = options.cwd ?? cwd;
+  const folder = join(cursorHome, "chats", createHash("md5").update(at).digest("hex"), id);
+  mkdirSync(folder, { recursive: true });
+  const meta: Record<string, unknown> = { schemaVersion: 1, createdAtMs: 1_790_000_000_000, hasConversation: true, updatedAtMs: 1_790_000_100_000, cwd: at, ...(options.title ? { title: options.title } : {}), ...options.meta };
+  writeFileSync(join(folder, "meta.json"), JSON.stringify(meta));
+  const db = new DatabaseSync(join(folder, "store.db"));
+  db.exec("CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB); CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);");
+  const row = { agentId: id, name: "New Agent", mode: "default", ...(options.runsEverything ? { isRunEverything: true } : {}) };
+  db.prepare("INSERT INTO meta (key, value) VALUES (?, ?)").run("0", Buffer.from(JSON.stringify(row)).toString("hex"));
+  db.close();
+  if (!options.unreadable) writeFileSync(join(folder, "store.json"), JSON.stringify({ id, cwd: at, model: "default", level: "", mode: "agent", said: options.said ?? [{ role: "user", text: "hello from the terminal" }, { role: "agent", text: "pong: hello from the terminal" }] }));
+  return folder;
+}
+
+test("Cursor's terminal chats are offered to fork alone: the fork shows the chat as Cursor sends it again, and Cursor goes on from it; the chat is left as it was", async (t) => {
+  const cursorHome = temporaryHome();
+  t.after(() => rmSync(cursorHome, { recursive: true, force: true }));
+  const chat = "c0ffee00-0000-4000-8000-000000000001";
+  const folder = terminalChat(cursorHome, chat, { title: "Count the files", said: [{ role: "user", text: "count the files" }, { role: "agent", text: "There are 3." }] });
+  // Not offered: one with no conversation, a subagent's, and one from a Cursor that did not say its folder.
+  terminalChat(cursorHome, "c0ffee00-0000-4000-8000-000000000002", { meta: { hasConversation: false } });
+  terminalChat(cursorHome, "c0ffee00-0000-4000-8000-000000000003", { meta: { isSubagent: true } });
+  terminalChat(cursorHome, "c0ffee00-0000-4000-8000-000000000004", { meta: { cwd: undefined } });
+  const state = await rig(t, { cursorHome });
+  const listed = (await state.phone.call("desk.list", { profile: "cursor" })).sessions;
+  assert.deepEqual(listed.map(({ updated, ...session }: { updated: number }) => session), [{ id: chat, title: "Count the files", folder: cwd, state: "closed", adopt_modes: ["fork"] }]);
+
+  // Neither continued nor read: Cursor's ACP opens no chat of its terminal.
+  for (const mode of ["continue", "read"]) {
+    await assert.rejects(state.phone.call("session.adopt", { profile: "cursor", session_id: chat, mode }), (error: RpcFailure) => error.code === -32602 && error.message === chatForkedOnlyText);
+  }
+  assert.deepEqual(inFolder(join(cursorHome, "acp-sessions")), []);
+
+  const forked = await state.phone.call("session.adopt", { profile: "cursor", session_id: chat, mode: "fork" });
+  const fork = forked.session_id;
+  assert.notEqual(fork, chat);
+  assert.equal(forked.info.mode, "default");
+  // Cursor's session for it is a copy of the chat's folder, with the chat's folder and title.
+  assert.deepEqual(JSON.parse(readFileSync(join(cursorHome, "acp-sessions", fork, "meta.json"), "utf8")), { schemaVersion: 1, cwd, title: "Count the files" });
+  const resumed = await state.phone.call("session.resume", { session_id: fork });
+  assert.equal(resumed.info.title, "Count the files");
+  assert.deepEqual(resumed.messages.map((message: { role: string; text: string }) => [message.role, message.text]), [["user", "count the files"], ["assistant", "There are 3."]]);
+  // Cursor goes on from it, already open: the fork's first message loads nothing.
+  assert.equal(await reply(fork, "and then", state.phone), "pong: and then");
+  assert.equal(calls(state.agentDir).filter((call) => call.method === "session/load" && call.params.sessionId === fork).length, 1);
+  const copy = JSON.parse(readFileSync(join(cursorHome, "acp-sessions", fork, "store.json"), "utf8"));
+  assert.deepEqual(copy.said.map((entry: { text: string }) => entry.text), ["count the files", "There are 3.", "and then", "pong: and then"]);
+  // The chat is the terminal's still, and offered again.
+  assert.ok(!readFileSync(join(folder, "store.json"), "utf8").includes("and then"));
+  assert.deepEqual((await state.phone.call("desk.list", { profile: "cursor" })).sessions.map((session: { id: string }) => session.id), [chat]);
+});
+
+test("a fork of a terminal chat Cursor keeps Run Everything in says so as its first turn starts, once; one of a chat that does not says nothing", async (t) => {
+  const cursorHome = temporaryHome();
+  t.after(() => rmSync(cursorHome, { recursive: true, force: true }));
+  terminalChat(cursorHome, "c0ffee00-0000-4000-8000-000000000011", { runsEverything: true });
+  terminalChat(cursorHome, "c0ffee00-0000-4000-8000-000000000012");
+  const state = await rig(t, { cursorHome });
+  const told = async (chat: string) => {
+    const fork = (await state.phone.call("session.adopt", { profile: "cursor", session_id: chat, mode: "fork" })).session_id;
+    const said = [];
+    for (const text of ["first", "second"]) {
+      const mark = state.phone.events(fork).length;
+      await reply(fork, text, state.phone);
+      said.push(notices(state.phone.events(fork).slice(mark)));
+    }
+    return { fork, said };
+  };
+  const kept = await told("c0ffee00-0000-4000-8000-000000000011");
+  assert.deepEqual(kept.said, [[keptFullAccessText], []]);
+  assert.deepEqual((await told("c0ffee00-0000-4000-8000-000000000012")).said, [[], []]);
+  // Told once: not again after a restart.
+  await state.restart();
+  await state.phone.call("session.resume", { session_id: kept.fork });
+  const mark = state.phone.events(kept.fork).length;
+  await reply(kept.fork, "third", state.phone);
+  assert.deepEqual(notices(state.phone.events(kept.fork).slice(mark)), []);
+});
+
+test("a terminal chat Cursor cannot open is refused with what Cursor said, and leaves no copy", async (t) => {
+  const cursorHome = temporaryHome();
+  t.after(() => rmSync(cursorHome, { recursive: true, force: true }));
+  terminalChat(cursorHome, "c0ffee00-0000-4000-8000-000000000021", { unreadable: true });
+  const state = await rig(t, { cursorHome });
+  await assert.rejects(state.phone.call("session.adopt", { profile: "cursor", session_id: "c0ffee00-0000-4000-8000-000000000021", mode: "fork" }), (error: RpcFailure) => error.code === -32602 && /^Cursor could not open the chat: /.test(error.message));
+  assert.deepEqual(inFolder(join(cursorHome, "acp-sessions")), []);
+  assert.deepEqual(inFolder(join(state.stateDir, "threads")).filter((name) => name.endsWith(".json")), []);
 });
 
 // MARK: Subagents

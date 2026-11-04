@@ -662,6 +662,8 @@ export interface DeskSession {
   /** Milliseconds since 1970. */
   updated: number;
   state: DeskState;
+  /** The ways it can be taken up, when not all its agent's (`adopt`): a chat of Cursor's terminal is only forked. */
+  modes?: AdoptMode[];
 }
 
 export const deskStates = ["open", "closed", "running", "waiting", "idle"] as const;
@@ -811,6 +813,12 @@ export interface Provider {
    * offers. Answers quickly: what is slow is cached.
    */
   deskSessions?(wanted: number): Promise<DeskSession[]>;
+  /**
+   * The agent's sessions from the desk are only forked (Cursor's terminal chats): a thread
+   * of its taken off the list comes back as it was, from its record, as one of an agent
+   * with no sessions from the desk does.
+   */
+  readonly deskForksOnly?: boolean;
   /**
    * Whether the agent still keeps a thread taken off the bridge's list, which `desk.list`
    * offers again only while it does (Claude Code deletes old sessions after a while).

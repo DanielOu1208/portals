@@ -533,6 +533,8 @@ test("a plan's card and its answers; a request nobody can be shown is never answ
     description: "Cursor has a plan",
     choices: ["once", "deny"],
     plan: { startsIn: "default" },
+    // A note given with a no goes as the reason, not again as a message.
+    takesNote: true,
   });
   assert.equal((planCard({}) as { command: string }).command, "Cursor has finished planning.");
   // Accepted with no `planUri`: Cursor keeps the plan where it keeps its plans.

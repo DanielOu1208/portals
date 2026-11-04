@@ -9,18 +9,19 @@ import { machineWord } from "../../platform.ts";
 import { onPath, type CommandAccess } from "../../portals/access.ts";
 import { readBackedUp, readJSON, writeJSON } from "../../store/jsonFile.ts";
 import { version } from "../../version.ts";
-import { AcpClient, AgentStopped, refuse } from "../acp/client.ts";
-import type { AvailableCommand, ConfigOption, InitializeResult, RpcId } from "../acp/protocol.ts";
+import { AcpClient, AcpError, AgentStopped, refuse } from "../acp/client.ts";
+import { authRequiredCode, type AvailableCommand, type ConfigOption, type InitializeResult, type RpcId, type SessionState, type SessionUpdate } from "../acp/protocol.ts";
 import { reportVersion } from "../program.ts";
-import { DeskRefused, type AdoptMode, type AgentCommand, type AgentProfile, type DeskAdoption, type ModelCatalog, type ModeOption, type Provider, type ProviderSession, type SessionOptions, type SessionSettings, type SessionSink, type StoredMessage, type UsageReport } from "../types.ts";
+import { DeskRefused, type AdoptMode, type AgentCommand, type AgentProfile, type DeskAdoption, type DeskSession, type ModelCatalog, type ModeOption, type Provider, type ProviderSession, type SessionOptions, type SessionSettings, type SessionSink, type StoredMessage, type UsageReport } from "../types.ts";
 import type { RecentFolder } from "../../folders.ts";
 import type { SearchFile } from "../../search/readers.ts";
+import { keepsRunEverything, replayed, terminalChat, terminalChats, type TerminalChat } from "./desk.ts";
 import { cursorFolders } from "./folders.ts";
 import { ProcessNotes } from "./leftovers.ts";
 import { cursorCatalog, listedModels, sessionModels, type CursorModel } from "./models.ts";
-import { cursorArgs, cursorCapabilities, cursorForceArgs, cursorModeMeanings, cursorName, cursorVersion, hiddenCommands, testedCursorVersion } from "./options.ts";
+import { chatForkedOnlyText, cursorArgs, cursorCapabilities, cursorForceArgs, cursorModeMeanings, cursorName, cursorVersion, hiddenCommands, notSignedInText, testedCursorVersion } from "./options.ts";
 import { isCursorRequest, keptTodos, permissionRequest, unplacedAnswer } from "./requests.ts";
-import { CursorSession, errorText, newSession, NotSignedIn, type CursorHost, type CursorProcess, type KeptThread } from "./session.ts";
+import { CursorSession, errorText, loadTimeoutMs, newSession, NotSignedIn, type CursorHost, type CursorProcess, type KeptThread } from "./session.ts";
 
 // Cursor as an agent of the bridge: `cursor-agent acp`, which speaks the Agent Client
 // Protocol (../acp), with the user's own Cursor settings and sign-in.
@@ -161,6 +162,11 @@ class Process implements CursorProcess {
 
 type Params = Record<string, any>;
 
+/** An id that is a name alone, never a path: no separator, no `.` or `..`. */
+function isBareName(id: string): boolean {
+  return id !== "" && !/[/\\\0]/.test(id) && !/^\.+$/.test(id);
+}
+
 /** A process's place among those that run: one for each folder, and one more there for threads in Full access. */
 function processKey(cwd: string, forced: boolean): string {
   return forced ? `${cwd}\0force` : cwd;
@@ -181,6 +187,8 @@ export class CursorProvider implements Provider, CursorHost {
   readonly modeMeanings = cursorModeMeanings;
   /** Cursor takes a mode as it takes a prompt: one chosen during a turn counts from the next. */
   readonly modesWaitForTurn = true;
+  /** Its terminal's chats are only forked (`adoptChat`). */
+  readonly deskForksOnly = true;
   readonly interruptGraceMs: number;
   /** What a thread's first message tells Cursor of the `portals` command; null when agents are not told. */
   readonly note: string | null;
@@ -219,6 +227,8 @@ export class CursorProvider implements Provider, CursorHost {
   private readonly asides = new Map<string, string>();
   /** Sessions made by `newThread`, until their thread is started: the process each is in. */
   private readonly made = new Map<string, Process>();
+  /** What Cursor sends again of each fork of a terminal chat it is opening, by the fork's session (`replay`). */
+  private readonly replays = new Map<string, SessionUpdate[]>();
   private kept: Kept;
   private timer: NodeJS.Timeout | null = null;
   /** The folders Cursor worked in, as last read (./folders.ts), and when they are read again. */
@@ -354,6 +364,8 @@ export class CursorProvider implements Provider, CursorHost {
 
   /** A thread from before: its conversation as kept. Cursor starts when the thread gets a message. */
   async resumeSession(options: SessionOptions, sink: SessionSink): Promise<ProviderSession> {
+    // A terminal chat taken up to be read: `adopt` let it pass, since the bridge asks so for a fork's folder too.
+    if (options.readOnly && !this.hasExactThread(options.id) && this.cursorHome !== null && (await terminalChat(this.cursorHome, options.id))) throw new DeskRefused(chatForkedOnlyText);
     // The file's last save but one when a power cut left it unusable (`save`).
     const read = readBackedUp(this.threadFile(options.id));
     if (read.aside) this.asides.set(options.id, read.aside);
@@ -362,7 +374,7 @@ export class CursorProvider implements Provider, CursorHost {
     // A thread taken off the list and taken up again while its process still runs is on it still.
     const process = [...this.running.values()].find((running) => running.loaded.has(session)) ?? null;
     const stored = Array.isArray(file.messages) ? file.messages : [];
-    return this.add(new CursorSession(options, sink, this, { process, stored, session, told: file.told === true, todos: keptTodos(file.todos), cut: file.open === true }), session);
+    return this.add(new CursorSession(options, sink, this, { process, stored, session, told: file.told === true, todos: keptTodos(file.todos), cut: file.open === true, runsEverything: file.runsEverything === true }), session);
   }
 
   private add(session: CursorSession, cursorSession: string): CursorSession {
@@ -390,19 +402,32 @@ export class CursorProvider implements Provider, CursorHost {
   // MARK: Forks
 
   /**
+   * The chats of Cursor's terminal, newest first (./desk.ts), each to be taken up as a
+   * fork alone: Cursor's ACP opens a copy of one, and never the chat itself.
+   */
+  async deskSessions(wanted: number): Promise<DeskSession[]> {
+    if (this.cursorHome === null) return [];
+    return (await terminalChats(this.cursorHome)).slice(0, wanted).map((chat) => ({ id: chat.id, title: chat.title ?? "", cwd: chat.cwd, updated: chat.updated, state: "closed", modes: ["fork"] }));
+  }
+
+  /**
    * A thread of the bridge's, taken up again (`continue`, one taken off the list), only
    * read, or forked: a new thread whose Cursor session is a copy of this one's, which
    * Cursor loads as it would the thread's own and goes on from (recorded with 2026.10.22,
    * scenario fork-copy). Cursor has no call to fork a session; its sessions are folders
    * of its own (`~/.cursor/acp-sessions/<session>/`: a store and a `meta.json` with the
    * folder and title), and the copy is one of those. The thread's conversation as the
-   * app shows it is copied too. Sessions started in Cursor's terminal are not offered:
-   * Cursor's ACP opens none of them.
+   * app shows it is copied too. A chat of Cursor's terminal is forked the same way, and
+   * only forked (`adoptChat`).
    */
   async adopt(id: string, mode: AdoptMode): Promise<DeskAdoption> {
     const read = this.hasExactThread(id) ? readBackedUp(this.threadFile(id)) : null;
     const file = (read?.found ?? null) as ThreadFile | null;
-    if (!file) throw new DeskRefused(`${cursorName} has no thread by that id on this ${machineWord()}.`);
+    if (!file) {
+      const chat = this.cursorHome !== null && isBareName(id) ? await terminalChat(this.cursorHome, id) : null;
+      if (chat) return this.adoptChat(chat, mode);
+      throw new DeskRefused(`${cursorName} has no thread by that id on this ${machineWord()}.`);
+    }
     const session = typeof file.session === "string" && file.session !== "" ? file.session : id;
     const meta = this.sessionMeta(session);
     const cwd = meta?.cwd ?? (typeof file.cwd === "string" ? file.cwd : null);
@@ -416,7 +441,7 @@ export class CursorProvider implements Provider, CursorHost {
     const from = this.sessionsFolder ? join(this.sessionsFolder, session) : null;
     const to = from && existsSync(from) ? join(this.sessionsFolder!, fork) : null;
     // Without Cursor's session (one that never got a message keeps none), the fork's first message starts one afresh.
-    const kept: KeptThread = { messages: Array.isArray(file.messages) ? file.messages : [], cwd, ...(file.told === true ? { told: true } : {}), ...(Array.isArray(file.todos) && file.todos.length > 0 ? { todos: keptTodos(file.todos) } : {}) };
+    const kept: KeptThread = { messages: Array.isArray(file.messages) ? file.messages : [], cwd, ...(file.told === true ? { told: true } : {}), ...(Array.isArray(file.todos) && file.todos.length > 0 ? { todos: keptTodos(file.todos) } : {}), ...(file.runsEverything === true ? { runsEverything: true } : {}) };
     try {
       if (to) {
         cpSync(from!, to, { recursive: true });
@@ -433,9 +458,70 @@ export class CursorProvider implements Provider, CursorHost {
     return { id: fork, ...adoption, title };
   }
 
+  /**
+   * A chat of Cursor's terminal, forked: a copy of its folder as a session of Cursor's
+   * ACP, which Cursor opens now, sending the conversation again, which the fork's thread
+   * shows (./desk.ts). One Cursor cannot open is refused, and its copy goes. The chat
+   * itself is never continued nor read here: `read` answers only with its folder, which
+   * the bridge checks before it asks for a fork (a thread only read is refused as it
+   * starts, `resumeSession`).
+   */
+  private async adoptChat(chat: TerminalChat, mode: AdoptMode): Promise<DeskAdoption> {
+    const settings = { model: "default", provider: this.profile.name, reasoningEffort: "" };
+    if (mode === "read") return { id: chat.id, cwd: chat.cwd, title: chat.title, settings };
+    if (mode !== "fork" || !this.sessionsFolder) throw new DeskRefused(chatForkedOnlyText);
+    const fork = randomUUID();
+    const to = join(this.sessionsFolder, fork);
+    try {
+      cpSync(chat.folder, to, { recursive: true });
+      writeFileSync(join(to, "meta.json"), JSON.stringify({ schemaVersion: 1, cwd: chat.cwd, title: chat.title ?? "Fork" }));
+      // Read before Cursor opens the copy, which writes to its store.
+      const everything = await keepsRunEverything(join(to, "store.db"));
+      const { messages, title } = replayed(await this.replay(fork, chat.cwd), chat.cwd);
+      // Written here, not by `save`, which only logs a failure: a fork whose conversation is not on the disk would open empty.
+      writeJSON(this.threadFile(fork), { messages, cwd: chat.cwd, ...(everything ? { runsEverything: true } : {}) } satisfies KeptThread);
+      log.info(`${cursorName} terminal chat forked`, { chat: chat.id, fork, messages: messages.length, ...(everything ? { runsEverything: true } : {}) });
+      return { id: fork, cwd: chat.cwd, title: chat.title ?? title, settings };
+    } catch (error) {
+      rmSync(to, { recursive: true, force: true });
+      rmSync(this.threadFile(fork), { force: true });
+      if (error instanceof DeskRefused) throw error;
+      throw new DeskRefused(`The ${cursorName} chat could not be copied: ${(error as Error).message}`);
+    }
+  }
+
+  /**
+   * Opens a fork of a terminal chat in the Cursor of its folder, and returns what Cursor
+   * sent again of its conversation. The process has the session loaded from then on, so
+   * the fork's first message loads nothing.
+   */
+  private async replay(session: string, cwd: string): Promise<SessionUpdate[]> {
+    const process = await this.open(cwd);
+    process.touch();
+    const updates: SessionUpdate[] = [];
+    this.replays.set(session, updates);
+    try {
+      await process.making(async () => {
+        const state = await process.client.call<SessionState | null>("session/load", { sessionId: session, cwd, mcpServers: [] }, loadTimeoutMs);
+        process.loaded.add(session);
+        process.learn(state?.configOptions);
+      });
+    } catch (error) {
+      if (error instanceof AcpError && error.code === authRequiredCode) {
+        this.release(process, null, "is not signed in");
+        throw new DeskRefused(notSignedInText);
+      }
+      throw new DeskRefused(`${cursorName} could not open the chat: ${errorText(error)}`);
+    } finally {
+      this.replays.delete(session);
+      process.touch();
+    }
+    return updates;
+  }
+
   /** The manager keys policy by the supplied id, so filesystem aliases are not other identities. */
   private hasExactThread(id: string): boolean {
-    if (!id || /[/\\\0]/.test(id) || /^\.+$/.test(id)) return false;
+    if (!isBareName(id)) return false;
     try { return readdirSync(join(this.directory, "threads")).includes(`${id}.json`); }
     catch { return false; }
   }
@@ -624,6 +710,12 @@ export class CursorProvider implements Provider, CursorHost {
         return;
       default:
         break;
+    }
+    // A terminal chat's fork being opened (`replay`): what Cursor sends again is its conversation.
+    const replay = typeof params.sessionId === "string" ? this.replays.get(params.sessionId) : undefined;
+    if (replay) {
+      replay.push(update);
+      return;
     }
     const found = typeof params.sessionId === "string" ? this.sessionFor(params.sessionId) : undefined;
     if (!found) {
