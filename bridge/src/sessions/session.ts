@@ -2113,7 +2113,7 @@ export class Session {
   /**
    * A write of the thread's (its record, the messages waiting, what its turns kept) failed:
    * for want of space on the host's disk, the thread is told so, once until one of its
-   * turns' writes works again (2026-11-03: "guard against full disk"). The rest went on
+   * turns' writes works again. The rest went on
    * without it, as before.
    */
   private writeFailed(error: unknown): void {

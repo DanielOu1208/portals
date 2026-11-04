@@ -2,7 +2,7 @@ import Foundation
 
 /// The free space on a host's disk, as its bridge says it (feature `disk_space`, `disk`):
 /// Settings shows it on the host's row, with a warning while it runs low, before the disk
-/// is full and agents fail (2026-11-03: "guard against full disk and show it in settings").
+/// is full and agents fail.
 /// The bridge tells the threads itself.
 public struct HostDisk: Hashable, Sendable {
     /// How full the disk is, as the bridge judged it: `low` under 5 GB free, `critical`

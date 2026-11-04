@@ -7,8 +7,7 @@ import { log } from "./log.ts";
 // failed, and history came back short. So the bridge reads the free space of that volume
 // as it starts and every few minutes (one `statfs`, never per event), says it in
 // `gateway.ready`'s `bridge` block and the `sessions.activity` answer for Settings, and
-// below a low mark tells each thread at work, and each that starts a turn, once
-// (2026-11-03: "yes add something to guard against full disk and show it in settings").
+// below a low mark tells each thread at work, and each that starts a turn, once.
 // A write that fails for want of space has the disk read again at once.
 
 /** How full the disk is: `low` below the low mark, `critical` below the lower one. */
