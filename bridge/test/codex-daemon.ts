@@ -129,6 +129,8 @@ export class FakeDaemon {
   onConfigRead: (params: Json) => void | Promise<void> = () => {};
   /** Runs when a `turn/start` arrives, before the turn starts and the call is answered. */
   onTurnStart: (params: Json) => void | Promise<void> = () => {};
+  /** What `skills/list` gives for any folder (0.166's shape); a folder's own (`scope: "repo"`) only when it names one. */
+  skills: Json[] = [];
   /** Runs when a `thread/list` arrives, before it is answered: one that throws is Codex failing to list. */
   onList: (params: Json) => void = () => {};
   /** Runs when a `thread/loaded/list` arrives, before it is answered. */
@@ -257,6 +259,51 @@ export class FakeDaemon {
       this.broadcast("item/completed", { threadId, turnId, item: { ...item, text }, completedAtMs: 2 });
     }
     this.broadcast("turn/completed", { threadId, turn: { id: turnId, items: [], itemsView: "summary", status, error: null, startedAt: 1, completedAt: 2, durationMs: 1000 } });
+  }
+
+  /**
+   * A review starts, as Codex 0.166 runs one (`review/start`, or `/review` at the desk):
+   * its turn, which its start (`enteredReviewMode`) is told under, then a `turn/started`
+   * for the review's own turn, whose root it is, and the prompt Codex gives its reviewer,
+   * told under the review's turn. Returns the review's turn.
+   */
+  startReview(threadId: string, review = "current changes", id = `review-${randomUUID()}`): Json {
+    const thread = this.thread(threadId);
+    const turn = { id, rootTurnId: id, items: [], itemsView: "notLoaded", status: "inProgress", error: null, startedAt: 1, completedAt: null, durationMs: null };
+    thread.turns.push(structuredClone(turn));
+    thread.status = { type: "active", activeFlags: [] };
+    const entered = { type: "enteredReviewMode", id: `entered-${randomUUID()}`, review };
+    this.broadcast("item/started", { threadId, turnId: id, item: entered, startedAtMs: 1 });
+    this.broadcast("item/completed", { threadId, turnId: id, item: entered, completedAtMs: 1 });
+    this.broadcast("turn/started", { threadId, turn: { ...turn, id: `reviewer-${randomUUID()}`, rootTurnId: id } });
+    // Kept as Codex keeps them: the review's own turn before the review's.
+    thread.turns.splice(thread.turns.length - 2, 0, thread.turns.pop());
+    const prompt = { type: "userMessage", id: `user-${randomUUID()}`, clientId: null, content: [{ type: "text", text: "Review the current code changes and provide prioritized findings.", text_elements: [] }] };
+    this.broadcast("item/started", { threadId, turnId: id, item: prompt, startedAtMs: 1 });
+    this.broadcast("item/completed", { threadId, turnId: id, item: prompt, completedAtMs: 1 });
+    return turn;
+  }
+
+  /**
+   * The review of `startReview` ends: its end (`exitedReviewMode`) with the findings, which
+   * Codex then gives as its reply, and the end of the review's turn. Codex keeps the review's
+   * work in the review's own turn, cut off, and only its start, end and reply in the review's.
+   */
+  finishReview(threadId: string, turnId: string, findings: string): void {
+    const exited = { type: "exitedReviewMode", id: `exited-${randomUUID()}`, review: findings };
+    this.broadcast("item/started", { threadId, turnId, item: exited, startedAtMs: 2 });
+    this.broadcast("item/completed", { threadId, turnId, item: exited, completedAtMs: 2 });
+    const reply = { type: "agentMessage", id: `msg-${randomUUID()}`, text: findings, phase: null, memoryCitation: null, delivery: null, questions: null };
+    this.broadcast("item/started", { threadId, turnId, item: reply, startedAtMs: 2 });
+    this.broadcast("item/completed", { threadId, turnId, item: reply, completedAtMs: 2 });
+    this.broadcast("turn/completed", { threadId, turn: { id: turnId, rootTurnId: turnId, items: [], itemsView: "summary", status: "completed", error: null, startedAt: 1, completedAt: 2, durationMs: 1000 } });
+    const thread = this.thread(threadId);
+    const review = thread.turns.find((turn) => turn.id === turnId);
+    const own = thread.turns.find((turn) => turn.rootTurnId === turnId && turn.id !== turnId);
+    const kept = new Set(["enteredReviewMode", "exitedReviewMode"]);
+    own.items = review.items.filter((item: Json) => !kept.has(item.type) && item.id !== reply.id);
+    own.status = "interrupted";
+    review.items = review.items.filter((item: Json) => kept.has(item.type) || item.id === reply.id);
   }
 
   /** Someone at a terminal answers first. */
@@ -489,6 +536,16 @@ export class FakeDaemon {
       case "turn/start":
         await this.onTurnStart(params);
         return this.startTurn(params);
+      case "skills/list":
+        return { data: (params.cwds ?? [""]).map((cwd: string) => ({ cwd, skills: this.skills.filter((skill) => cwd || skill.scope !== "repo"), errors: [] })) };
+      case "review/start": {
+        if (this.thread(params.threadId).status.type === "active") throw new Error("a turn is already running");
+        // As Codex answers, before it tells of the review: the review's turn, with the review it was asked for.
+        const id = `review-${randomUUID()}`;
+        const review = params.target?.type === "custom" ? params.target.instructions : "current changes";
+        setImmediate(() => this.startReview(params.threadId, review, id));
+        return { turn: { id, rootTurnId: null, items: [], itemsView: "notLoaded", status: "inProgress", error: null, startedAt: null, completedAt: null, durationMs: null }, reviewThreadId: params.threadId };
+      }
       case "thread/compact/start":
         // Answered at once with nothing; the recording playing (or the test) starts the
         // turn that compacts.

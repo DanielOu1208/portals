@@ -642,7 +642,10 @@ test("a message Codex says no to while its turn runs waits on disk as one Codex 
 
 test("/compact is offered and runs thread/compact/start: a turn of its own, marked where it compacted, which resume and replay keep", async () => {
   const catalog = await client.call("commands.catalog", { profile: "codex" });
-  assert.deepEqual(catalog.categories[1], { name: "Codex", pairs: [["/compact", "Summarise the conversation so far, to free up context"]] });
+  assert.deepEqual(catalog.categories[1], {
+    name: "Codex",
+    pairs: [["/compact", "Summarise the conversation so far, to free up context"], ["/review", "Review your uncommitted changes (usage: /review [what to review])"]],
+  });
   const session = await createThread();
   assert.deepEqual(await client.call("command.dispatch", { session_id: session, name: "compact" }), { type: "send", message: "/compact" });
 
@@ -683,6 +686,277 @@ test("/compact is offered and runs thread/compact/start: a turn of its own, mark
   );
   const replayed = await client.call("session.events.since", { session_id: session, last_seen: compacted.seq - 1 });
   assert.deepEqual(replayed.events[0], compacted);
+});
+
+test("/review runs review/start: one row from the review's start to its end, its commands between, the findings as the reply; a message waits for it, and it reads back so", async () => {
+  const session = await createThread();
+  assert.deepEqual(await client.call("command.dispatch", { session_id: session, name: "review", arg: "the error handling" }), { type: "send", message: "/review the error handling" });
+  const start = client.frames.length;
+  let from = daemon.calls.length;
+  assert.deepEqual(await client.call("prompt.submit", { session_id: session, text: "/review" }), { status: "streaming" });
+  const call = await daemon.waitForCall((call) => call.method === "review/start", from);
+  assert.deepEqual(call.params, { threadId: session, target: { type: "uncommittedChanges" }, delivery: "inline" });
+  const turnId = await daemon.activeTurn(session);
+  assert.match(turnId, /^review-/);
+  const opened = await client.from(start, (frame) => isEvent(frame, "tool.start", session) && frame.params.payload.name === "review");
+  assert.deepEqual([opened.params.payload.context, opened.params.payload.args], ["current changes", {}]);
+  const command = { type: "commandExecution", id: "exec-diff", command: "/bin/zsh -lc 'git diff'", cwd, processId: null, status: "inProgress", commandActions: [], aggregatedOutput: null, exitCode: null, durationMs: null };
+  daemon.broadcast("item/started", { threadId: session, turnId, item: command, startedAtMs: 1 });
+  daemon.broadcast("item/completed", { threadId: session, turnId, item: { ...command, status: "completed", aggregatedOutput: "+helo\n", exitCode: 0, durationMs: 5 }, completedAtMs: 2 });
+  await client.from(start, (frame) => isEvent(frame, "tool.complete", session) && frame.params.payload.name === "terminal");
+
+  // Codex takes no message into a review: it waits.
+  from = daemon.calls.length;
+  assert.deepEqual(await client.call("prompt.submit", { session_id: session, text: "Then fix it." }), { status: "queued", queue_id: "1" });
+  daemon.finishReview(session, turnId, "hello.txt says helo: a typo.");
+  const done = await completed(session, start);
+  assert.equal(done.payload.text, "hello.txt says helo: a typo.");
+  const events = turnEvents(session, start);
+  assert.deepEqual(events.find((event) => event.type === "message.start").payload, { text: "/review", sender: "user" });
+  assert.deepEqual(
+    events.filter((event) => event.type === "tool.start" || event.type === "tool.complete").map((event) => [event.type, event.payload.name]),
+    [["tool.start", "review"], ["tool.start", "terminal"], ["tool.complete", "terminal"], ["tool.complete", "review"]],
+  );
+  const reviewed = events.find((event) => event.type === "tool.complete" && event.payload.name === "review").payload;
+  assert.deepEqual([reviewed.tool_id, reviewed.context, reviewed.result], [opened.params.payload.tool_id, "current changes", {}]);
+  const next = await daemon.waitForCall((call) => call.method === "turn/start" && call.params.threadId === session, from);
+  daemon.finishTurn(session, await daemon.activeTurn(session), "Fixed.");
+  await until(() => turnEvents(session, start).filter((event) => event.type === "message.complete").length === 2);
+
+  // Each row where it ended, the review's after its commands.
+  const resumed = await client.call("session.resume", { session_id: session });
+  assert.deepEqual(
+    resumed.messages.map((message: Frame) => (message.role === "tool" ? [message.name, message.context ?? null, JSON.parse(message.content)] : [message.role, message.text])),
+    [
+      ["user", "/review"],
+      ["terminal", null, { output: "+helo\n", exit_code: 0 }],
+      ["review", "current changes", {}],
+      ["assistant", "hello.txt says helo: a typo."],
+      ["user", "Then fix it."],
+      ["assistant", "Fixed."],
+    ],
+  );
+});
+
+test("/review after a Full access turn and a switch to Ask, or to a default that is stricter, is refused until a message has taken the access chosen", async () => {
+  const session = await createThread();
+  daemon.folderConfigs.set(cwd, { sandbox_mode: "read-only", approval_policy: "on-request" });
+  try {
+    await client.call("session.set_mode", { session_id: session, mode: "full" });
+    let start = client.frames.length;
+    await send(session, "First under Full.");
+    daemon.finishTurn(session, await daemon.activeTurn(session));
+    await completed(session, start);
+    assert.equal(daemon.threads.get(session)!.approvalPolicy, "never");
+
+    const refused = async (): Promise<void> => {
+      start = client.frames.length;
+      const from = daemon.calls.length;
+      assert.equal((await client.call("prompt.submit", { session_id: session, text: "/review" })).status, "streaming");
+      const done = await completed(session, start);
+      assert.equal(done.payload.status, "error");
+      assert.match(done.payload.text, /Send a message first/);
+      assert.equal(daemon.calls.slice(from).some((call) => call.method === "review/start"), false);
+    };
+    for (const mode of ["ask", "default"]) {
+      await client.call("session.set_mode", { session_id: session, mode });
+      await refused();
+    }
+
+    // Once a message has carried the default's access to Codex, the review runs with it.
+    await client.call("session.set_mode", { session_id: session, mode: "ask" });
+    start = client.frames.length;
+    const turn = await send(session, "Under Ask.");
+    assert.equal(turn.params.approvalPolicy, "untrusted");
+    daemon.finishTurn(session, await daemon.activeTurn(session));
+    await completed(session, start);
+    start = client.frames.length;
+    const from = daemon.calls.length;
+    await client.call("prompt.submit", { session_id: session, text: "/review" });
+    await daemon.waitForCall((call) => call.method === "review/start", from);
+    daemon.finishReview(session, await daemon.activeTurn(session), "Nothing to fix.");
+    assert.equal((await completed(session, start)).payload.text, "Nothing to fix.");
+  } finally {
+    daemon.folderConfigs.delete(cwd);
+  }
+});
+
+test("/review after a change of model, or of thinking level, is refused until a message has taken it to Codex", async () => {
+  const session = await createThread({ model: "gpt-6-luna", reasoning_effort: "low" });
+  let start = client.frames.length;
+  await send(session, "First on Luna.");
+  daemon.finishTurn(session, await daemon.activeTurn(session));
+  await completed(session, start);
+
+  const refused = async (): Promise<void> => {
+    start = client.frames.length;
+    const from = daemon.calls.length;
+    assert.equal((await client.call("prompt.submit", { session_id: session, text: "/review" })).status, "streaming");
+    const done = await completed(session, start);
+    assert.equal(done.payload.status, "error");
+    assert.match(done.payload.text, /Send a message first/);
+    assert.equal(daemon.calls.slice(from).some((call) => call.method === "review/start"), false);
+  };
+  const reviews = async (): Promise<void> => {
+    start = client.frames.length;
+    const from = daemon.calls.length;
+    await client.call("prompt.submit", { session_id: session, text: "/review" });
+    await daemon.waitForCall((call) => call.method === "review/start", from);
+    daemon.finishReview(session, await daemon.activeTurn(session), "Nothing to fix.");
+    assert.equal((await completed(session, start)).payload.text, "Nothing to fix.");
+  };
+  const carried = async (text: string): Promise<Frame> => {
+    start = client.frames.length;
+    const turn = await send(session, text);
+    daemon.finishTurn(session, await daemon.activeTurn(session));
+    await completed(session, start);
+    return turn;
+  };
+
+  // Another model.
+  await client.call("config.set", { session_id: session, key: "model", value: "gpt-6.1-sol --provider openai --session" });
+  await refused();
+  assert.equal((await carried("Now on Sol.")).params.model, "gpt-6.1-sol");
+  await reviews();
+
+  // Another level, the model as it was.
+  await client.call("config.set", { session_id: session, key: "reasoning", value: "high" });
+  await refused();
+  const turn = await carried("Now thinking harder.");
+  assert.equal(turn.params.model, undefined);
+  assert.equal(turn.params.effort, "high");
+  await reviews();
+});
+
+/** The review's command, as `finishReview` keeps it in the review's own turn. */
+function reviewCommandItem(turnId: string, session: string): void {
+  const command = { type: "commandExecution", id: `exec-${turnId}`, command: "/bin/zsh -lc 'git diff'", cwd, processId: null, status: "inProgress", commandActions: [], aggregatedOutput: null, exitCode: null, durationMs: null };
+  daemon.broadcast("item/started", { threadId: session, turnId, item: command, startedAtMs: 1 });
+  daemon.broadcast("item/completed", { threadId: session, turnId, item: { ...command, status: "completed", aggregatedOutput: "+helo\n", exitCode: 0, durationMs: 5 }, completedAtMs: 2 });
+}
+
+/** A turn's rows and messages, as the app was told them. */
+function reviewTold(session: string, start: number): unknown[] {
+  return turnEvents(session, start)
+    .filter((event) => ["message.start", "tool.start", "tool.complete", "message.complete"].includes(event.type))
+    .map((event) => (event.type.startsWith("tool.") ? [event.type, event.payload.name] : [event.type, event.payload.text]));
+}
+
+test("a review run at the desk while the connection to Codex is down is told at the reconnect as one /review, with its commands inside it", async () => {
+  const session = await createThread();
+  let start = client.frames.length;
+  await send(session, "First.");
+  daemon.finishTurn(session, await daemon.activeTurn(session));
+  await completed(session, start);
+  start = client.frames.length;
+  daemon.accepting = false;
+  daemon.dropAll();
+  const turn = daemon.startReview(session);
+  reviewCommandItem(turn.id, session);
+  daemon.finishReview(session, turn.id, "hello.txt says helo: a typo.");
+  daemon.accepting = true;
+  assert.equal((await completed(session, start)).payload.text, "hello.txt says helo: a typo.");
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.deepEqual(reviewTold(session, start), [
+    ["message.start", "/review"],
+    ["tool.start", "review"],
+    ["tool.start", "terminal"],
+    ["tool.complete", "terminal"],
+    ["tool.complete", "review"],
+    ["message.complete", "hello.txt says helo: a typo."],
+  ]);
+});
+
+test("a /review that ends while the connection to Codex is down ends at the reconnect with the commands it ran meanwhile", async () => {
+  const session = await createThread();
+  const start = client.frames.length;
+  const from = daemon.calls.length;
+  await client.call("prompt.submit", { session_id: session, text: "/review" });
+  await daemon.waitForCall((call) => call.method === "review/start", from);
+  const turnId = await daemon.activeTurn(session);
+  await client.from(start, (frame) => isEvent(frame, "tool.start", session) && frame.params.payload.name === "review");
+  daemon.accepting = false;
+  daemon.dropAll();
+  reviewCommandItem(turnId, session);
+  daemon.finishReview(session, turnId, "Nothing to fix.");
+  daemon.accepting = true;
+  assert.equal((await completed(session, start)).payload.text, "Nothing to fix.");
+  assert.deepEqual(reviewTold(session, start), [
+    ["message.start", "/review"],
+    ["tool.start", "review"],
+    ["tool.start", "terminal"],
+    ["tool.complete", "terminal"],
+    ["tool.complete", "review"],
+    ["message.complete", "Nothing to fix."],
+  ]);
+});
+
+test("/review with words after it reviews what they say", async () => {
+  const session = await createThread();
+  const start = client.frames.length;
+  const from = daemon.calls.length;
+  await client.call("prompt.submit", { session_id: session, text: "/review  the error handling " });
+  const call = await daemon.waitForCall((call) => call.method === "review/start", from);
+  assert.deepEqual(call.params.target, { type: "custom", instructions: "the error handling" });
+  const opened = await client.from(start, (frame) => isEvent(frame, "tool.start", session) && frame.params.payload.name === "review");
+  assert.equal(opened.params.payload.context, "the error handling");
+  daemon.finishReview(session, await daemon.activeTurn(session), "Nothing to fix.");
+  assert.equal((await completed(session, start)).payload.text, "Nothing to fix.");
+});
+
+test("a review begun at the desk shows as /review from its start, though the turn Codex starts for it is the review's own", async () => {
+  const session = await createThread();
+  let start = client.frames.length;
+  await send(session, "First.");
+  daemon.finishTurn(session, await daemon.activeTurn(session));
+  await completed(session, start);
+  start = client.frames.length;
+  const turn = daemon.startReview(session);
+  const opened = await client.from(start, (frame) => isEvent(frame, "message.start", session));
+  assert.deepEqual(opened.params.payload, { text: "/review", sender: "desk" });
+  await client.from(start, (frame) => isEvent(frame, "tool.start", session) && frame.params.payload.name === "review");
+  daemon.finishReview(session, turn.id, "Looks right.");
+  const done = await completed(session, start);
+  assert.deepEqual([done.payload.status, done.payload.text], ["complete", "Looks right."]);
+});
+
+test("Codex's skills for the thread's folder are in the menu as skills, and a message that names one carries it", async () => {
+  const skill = (name: string, scope: string, more: Record<string, unknown> = {}) => ({
+    name, description: `The ${name} skill, described at length.`, path: `${cwd}/.agents/skills/${name}/SKILL.md`, scope, enabled: true, pluginId: null, ...more,
+  });
+  daemon.skills = [
+    skill("say-pear", "repo", { interface: { shortDescription: "Says pear", iconSmallUrl: null, iconLargeUrl: null } }),
+    skill("tidy", "user"),
+    // Not offered: turned off, a name the app cannot send, and one the bridge's own /review takes.
+    skill("off", "user", { enabled: false }),
+    skill("Shout", "user"),
+    skill("review", "system"),
+  ];
+  try {
+    const session = await createThread();
+    const catalog = await client.call("commands.catalog", { session_id: session, profile: "codex" });
+    assert.deepEqual(Object.keys(catalog.skills), ["/say-pear", "/tidy"]);
+    assert.deepEqual(catalog.pairs.slice(-2), [["/say-pear", "Says pear"], ["/tidy", "The tidy skill, described at length."]]);
+    // Before there is a thread there is no folder: only skills that are not a folder's own.
+    assert.deepEqual(Object.keys((await client.call("commands.catalog", { profile: "codex" })).skills), ["/tidy"]);
+    assert.deepEqual(await client.call("command.dispatch", { session_id: session, name: "say-pear", arg: "plum" }), { type: "send", message: "/say-pear plum" });
+
+    const start = client.frames.length;
+    const turn = await send(session, "/say-pear plum");
+    assert.deepEqual(turn.params.input, [
+      { type: "text", text: "/say-pear plum", text_elements: [] },
+      { type: "skill", name: "say-pear", path: `${cwd}/.agents/skills/say-pear/SKILL.md` },
+    ]);
+    daemon.finishTurn(session, await daemon.activeTurn(session), "pear plum");
+    await completed(session, start);
+    // A slash that names no skill is words.
+    const plain = await send(session, "/tmp is full");
+    assert.deepEqual(plain.params.input, [{ type: "text", text: "/tmp is full", text_elements: [] }]);
+    daemon.finishTurn(session, await daemon.activeTurn(session));
+    await until(() => turnEvents(session, start).filter((event) => event.type === "message.complete").length === 2);
+  } finally {
+    daemon.skills = [];
+  }
 });
 
 test("/compact with a file attached is words for Codex, as with an image: the message and the file go in a turn, and nothing is compacted", async () => {
