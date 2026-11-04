@@ -17,8 +17,14 @@ export interface GatewayTool {
 
 type Item = Record<string, any>;
 
-/** The item types that are tool rows; the rest are text, reasoning or bookkeeping. */
-const toolTypes = new Set(["commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "webSearch", "collabAgentToolCall", "imageView", "imageGeneration", "plan"]);
+/**
+ * The item types that are tool rows; the rest are text, reasoning or bookkeeping. A review
+ * is one row from `enteredReviewMode` to `exitedReviewMode` (./stream.ts).
+ */
+const toolTypes = new Set([
+  "commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "webSearch", "collabAgentToolCall", "imageView", "imageGeneration", "plan",
+  "sleep", "enteredReviewMode", "exitedReviewMode",
+]);
 
 export function isToolItem(item: ThreadItem | Item): boolean {
   return toolTypes.has((item as Item).type);
@@ -206,9 +212,26 @@ export function gatewayTool(raw: ThreadItem | Item, agents?: readonly string[]):
     case "plan":
       // No label: the row is called Plan already ("Plan Plan").
       return { name: "plan", args: { content: text(item.text) ?? "" } };
+    case "sleep":
+      // Codex waiting (its `clock.sleep` tool), for as long as it asked to.
+      return typeof item.durationMs === "number" ? { name: "wait", args: {}, context: waitWords(item.durationMs) } : { name: "wait", args: {} };
+    case "enteredReviewMode":
+    case "exitedReviewMode": {
+      // What is reviewed ("current changes"), which only the review's start says.
+      const what = item.type === "enteredReviewMode" ? text(item.review)?.trim() : undefined;
+      return what ? { name: "review", args: {}, context: what } : { name: "review", args: {} };
+    }
     default:
       return null;
   }
+}
+
+/** How long a wait is, in words: "under a second", "1 second", "90 seconds", "5 minutes". */
+function waitWords(milliseconds: number): string {
+  if (milliseconds < 1000) return "under a second";
+  const seconds = Math.round(milliseconds / 1000);
+  if (seconds < 120) return seconds === 1 ? "1 second" : `${seconds} seconds`;
+  return `${Math.round(seconds / 60)} minutes`;
 }
 
 const deniedSummaries: Record<string, string> = {
@@ -269,6 +292,10 @@ export function gatewayResult(raw: ThreadItem | Item, cwd: string): unknown {
       return { output: text(item.savedPath) ? `Saved to ${item.savedPath}` : "Made an image." };
     case "plan":
       return { output: "Codex proposed this plan." };
+    case "sleep":
+    case "exitedReviewMode":
+      // Nothing to show: a wait's row says how long, and a review's findings are the reply Codex gives after it.
+      return {};
     default:
       return { output: "" };
   }

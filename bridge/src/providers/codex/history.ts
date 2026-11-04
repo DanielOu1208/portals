@@ -22,6 +22,13 @@ import type { Thread, Turn } from "./types/index.ts";
 // items before it (`CodexAgents.calledAbout`): by nickname when the session has read them
 // from the sub-agents' own threads (`subagentsCalledIn`), else by what each was asked to do.
 //
+// A review is a turn with no message of the user's either: it opens with `/review`, and is
+// one row from its start to its end (`enteredReviewMode`, `exitedReviewMode`), kept where
+// it ended, as the bridge keeps a live turn's rows; its findings are the reply after it.
+// Codex keeps the review's own work (its commands, under the prompt Codex gives its
+// reviewer) as a turn of its own, which names the review's as its root (`rootTurnId`): it
+// is told inside the review's, after its start, as it was live.
+//
 // Questions Codex asked without waiting (./requests.ts) are a `clarify` tool's row, as the
 // bridge keeps them live, never their raw text: answered when a message of the user's
 // came after them, which Codex took as the answer (and which shows after it), else
@@ -29,8 +36,14 @@ import type { Thread, Turn } from "./types/index.ts";
 
 type Item = Record<string, any>;
 
-/** The Codex command the bridge carries out for the app (`CodexProvider.commands`): `thread/compact/start`. */
+/** The Codex commands the bridge carries out for the app (`CodexProvider.commands`): `thread/compact/start`, and `review/start`. */
 export const compactCommand = "compact";
+export const reviewCommand = "review";
+
+/** What a turn with no message of the user's ran, as a command: a review (`enteredReviewMode`), else a compaction. */
+export function commandOf(items: readonly Item[]): string {
+  return items.some((item) => item?.type === "enteredReviewMode") ? `/${reviewCommand}` : `/${compactCommand}`;
+}
 
 /** A user message's text as the bridge stores one it sends: the text, then one `@image:<name>` line per image. */
 export function userInputText(content: unknown): string {
@@ -66,7 +79,7 @@ export function historyFromThread(thread: Pick<Thread, "turns">, cwd: string, ac
   const messages: StoredMessage[] = [];
   let running: CodexHistory["running"] = null;
   const ends = new Map<string, number>();
-  const turns = (thread.turns ?? []) as Turn[];
+  const turns = withReviews((thread.turns ?? []) as Turn[]);
   // The thread's sub-agents as each item found them.
   const agents = new CodexAgents(() => 0);
   // The last questions asked without waiting, until a message of the user's answers them.
@@ -79,6 +92,8 @@ export function historyFromThread(thread: Pick<Thread, "turns">, cwd: string, ac
     let reasoning = "";
     let opener: string | null = null;
     let latest: string | null = null;
+    // The start of the review under way, whose row comes at its end.
+    let review: Item | null = null;
     for (const item of turn.items as Item[]) {
       switch (item.type) {
         case "userMessage": {
@@ -124,22 +139,39 @@ export function historyFromThread(thread: Pick<Thread, "turns">, cwd: string, ac
           messages.push({ role: "compaction", trigger: asked ? "manual" : "auto", timestamp: end });
           break;
         }
+        case "enteredReviewMode": {
+          if (opener === null && !(turn.items as Item[]).some((other) => other.type === "userMessage")) {
+            opener = `/${reviewCommand}`;
+            messages.push({ role: "user", text: opener, timestamp: start });
+          }
+          review = item;
+          break;
+        }
         default: {
           agents.item(item);
-          const tool = gatewayTool(item, agents.calledAbout(item, nicknames));
+          // A review's row is its start's (what it reviewed, under its id), kept where it ended.
+          const row = item.type === "exitedReviewMode" && review ? review : item;
+          if (item.type === "exitedReviewMode") review = null;
+          const tool = gatewayTool(row, agents.calledAbout(item, nicknames));
           if (!tool) break;
           const message: StoredMessage = {
             role: "tool",
             name: tool.name,
             args: tool.args,
             content: JSON.stringify(gatewayResult(item, cwd)),
-            tool_call_id: item.id,
+            tool_call_id: row.id,
             timestamp: end,
           };
           if (tool.context) message.context = tool.context;
           messages.push(message);
         }
       }
+    }
+    // A review that never ended (Codex stopped) closes as the live row did.
+    const unended = review as Item | null;
+    if (unended && !(last && turn.status === "inProgress" && active)) {
+      const tool = gatewayTool(unended)!;
+      messages.push({ role: "tool", name: tool.name, args: tool.args, ...(tool.context ? { context: tool.context } : {}), content: JSON.stringify({ status: "error", error: "Stopped before it finished." }), tool_call_id: unended.id, timestamp: end });
     }
     if (last && turn.status === "inProgress" && turn.items.length === 0) {
       opener = `/${compactCommand}`;
@@ -168,6 +200,38 @@ export function historyFromThread(thread: Pick<Thread, "turns">, cwd: string, ac
     ends.set(turn.id, messages.length);
   });
   return { messages, running, ends };
+}
+
+/**
+ * The turns with the review's own work (a turn whose root, `rootTurnId`, is a review's
+ * turn of the thread) told inside the review's, after its start, without the prompt Codex
+ * gave its reviewer. As a thread is read back, and as a reconnect tells what it missed.
+ */
+export function withReviews(turns: Turn[]): Turn[] {
+  const within = reviewsOwn(turns);
+  const work = new Map<string, Item[]>();
+  for (const turn of turns) {
+    const root = within.get(turn.id);
+    if (root === undefined) continue;
+    work.set(root, [...(work.get(root) ?? []), ...(turn.items as Item[]).filter((item) => item.type !== "userMessage")]);
+  }
+  if (work.size === 0) return turns;
+  return turns.filter((turn) => !within.has(turn.id)).map((turn) => {
+    const items = work.get(turn.id);
+    if (!items) return turn;
+    const after = (turn.items as Item[]).findIndex((item) => item.type === "enteredReviewMode") + 1;
+    return { ...turn, items: [...turn.items.slice(0, after), ...items, ...turn.items.slice(after)] as Turn["items"] };
+  });
+}
+
+/** Each review's own turn (`withReviews`) by its id, with the id of the review's turn it is told in. */
+export function reviewsOwn(turns: readonly Turn[]): Map<string, string> {
+  const reviews = new Set(turns.filter((turn) => (turn.items as Item[]).some((item) => item.type === "enteredReviewMode")).map((turn) => turn.id));
+  const within = new Map<string, string>();
+  for (const turn of turns) {
+    if (typeof turn.rootTurnId === "string" && turn.rootTurnId !== turn.id && reviews.has(turn.rootTurnId)) within.set(turn.id, turn.rootTurnId);
+  }
+  return within;
 }
 
 /**

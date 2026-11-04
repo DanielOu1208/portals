@@ -1957,7 +1957,7 @@
     },
     {
       "name": "status.update",
-      "summary": "A warning or error worth keeping in the thread; kind process: why the agent began a turn by itself."
+      "summary": "A warning or error worth keeping in the thread; kind process: why the agent began a turn by itself; withdrawn {text, message_id?}: a message steered in that a Stop took back before the agent read it (feature steer_withdrawn)."
     },
     {
       "name": "tool.start",
@@ -2120,7 +2120,8 @@
     "model_levels_none",
     "git_status",
     "usage_read",
-    "open_on_host"
+    "open_on_host",
+    "steer_withdrawn"
   ],
   "x-lean-deltas": {
     "capability": "lean_deltas",

@@ -1480,6 +1480,23 @@ test("own Claude login is a choice, with a note on how to use an API key instead
   assert.match(ui.text, /no address the iPhone can reach yet/);
 });
 
+test("choosing the own Claude login drops a token from claude setup-token kept in config.json", async () => {
+  const system = new FakeSystem();
+  const bridgeHome = join(root, "login-over-token");
+  const paths = pathsFor(bridgeHome);
+  mkdirSync(bridgeHome, { recursive: true });
+  writeFileSync(paths.config, JSON.stringify({ port: 39136, providers: { fake: true }, claude: { oauthToken: "stand-in-setup-token" } }));
+  const kept = new ScriptedUi();
+  assert.equal(await setup({ service: false, tailscale: false }, context(system, kept, { PORTALS_BRIDGE_HOME: bridgeHome })), 0, kept.text);
+  assert.match(kept.text, /uses the token in config\.json/);
+  const ui = new ScriptedUi();
+  assert.equal(await setup({ service: false, tailscale: false, claude: "login" }, context(system, ui, { PORTALS_BRIDGE_HOME: bridgeHome })), 0, ui.text);
+  const config = JSON.parse(readFileSync(paths.config, "utf8"));
+  assert.equal(config.providers.claude, true);
+  assert.equal(config.claude.apiKey, null);
+  assert.equal(config.claude.oauthToken, null);
+});
+
 test("a password set by hand is kept when nobody can be asked, and Claude Code turned off stays off", async () => {
   const system = new FakeSystem();
   const ui = new ScriptedUi();

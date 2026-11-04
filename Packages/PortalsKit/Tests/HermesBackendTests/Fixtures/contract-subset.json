@@ -163,6 +163,7 @@
    "git_status",
    "usage_read",
    "open_on_host",
+   "steer_withdrawn",
    "message_fork",
    "turn_file_undo"
   ],

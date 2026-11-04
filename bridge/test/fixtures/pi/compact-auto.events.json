@@ -1,8 +1,8 @@
 [
  {
   "type": "text",
-  "text": "The moon lays silver on the tide,  \nWhile quiet waves roll in and glide.  \nSalt winds sing beneath the sky,  \nThe sea keeps secrets passing by.",
-  "pieces": 33
+  "text": "The sea breathes silver beneath the moon,  \nIts waves hum softly, old as time.  \nStars drift like lanterns on the blue,  \nAnd tides return in quiet rhyme.",
+  "pieces": 37
  },
  {
   "type": "status",
@@ -15,13 +15,13 @@
  {
   "type": "compacted",
   "trigger": "auto",
-  "tokensBefore": 1213
+  "tokensBefore": 1199
  },
  {
   "type": "turn.end",
   "status": "complete",
   "spent": {
-   "tokens": 1213
+   "tokens": 1199
   }
  }
 ]

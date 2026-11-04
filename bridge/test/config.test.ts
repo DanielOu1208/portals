@@ -57,6 +57,8 @@ test("settings that cannot be used are refused with a sentence", (t) => {
     { claude: { maxWarm: 1.5 } },
     { claude: { path: "" } },
     { claude: { apiKey: "" } },
+    { claude: { oauthToken: " " } },
+    { claude: { oauthToken: 5 } },
     { claude: { toolSummaries: "yes" } },
     { providers: { codex: 1 } },
     { codex: { mode: "daemon" } },
@@ -100,7 +102,7 @@ test("Claude Code, Codex, Cursor, Droid and Hermes are on by default, the script
   const home = temporaryHome();
   t.after(() => rmSync(home, { recursive: true, force: true }));
   assert.deepEqual(defaults.providers, { claude: true, codex: true, pi: false, cursor: true, droid: true, hermes: true, fake: false });
-  assert.deepEqual(defaults.claude, { path: "~/.local/bin/claude", idleMinutes: 15, maxWarm: 6, apiKey: null, toolSummaries: true });
+  assert.deepEqual(defaults.claude, { path: "~/.local/bin/claude", idleMinutes: 15, maxWarm: 6, apiKey: null, oauthToken: null, toolSummaries: true });
   assert.deepEqual(defaults.codex, { mode: "shared", path: "codex", socket: null, titleModel: "gpt-5.6-luna" });
   assert.deepEqual(defaults.cursor, { path: "~/.local/bin/cursor-agent", idleMinutes: 15 });
   assert.deepEqual(defaults.hermes, { path: "~/.local/bin/hermes", start: true });
@@ -110,7 +112,9 @@ test("Claude Code, Codex, Cursor, Droid and Hermes are on by default, the script
   );
   const config = loadConfig(home);
   assert.deepEqual(config.providers, { claude: true, codex: true, pi: false, cursor: true, droid: true, hermes: true, fake: true });
-  assert.deepEqual(config.claude, { path: "~/.local/bin/claude", idleMinutes: 15, maxWarm: 2, apiKey: "sk-test", toolSummaries: true });
+  assert.deepEqual(config.claude, { path: "~/.local/bin/claude", idleMinutes: 15, maxWarm: 2, apiKey: "sk-test", oauthToken: null, toolSummaries: true });
+  // A long-lived token from `claude setup-token`, in place of the login.
+  assert.equal(parseConfig({ claude: { oauthToken: " sk-ant-oat01-test " } }).claude.oauthToken, "sk-ant-oat01-test");
   // Claude Code's summaries of its calls, each a small model call of its own, turned off.
   assert.equal(parseConfig({ claude: { toolSummaries: false } }).claude.toolSummaries, false);
   assert.deepEqual(config.codex, { mode: "own", path: "codex", socket: "~/x.sock", titleModel: "gpt-5.6-luna" });

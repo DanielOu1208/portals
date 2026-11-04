@@ -35,6 +35,11 @@ final class ComposerDrafts {
     func text(for key: String) -> String { drafts[key] ?? "" }
     func set(_ text: String, for key: String) { drafts[key] = text }
 }
+extension ComposerDrafts: ComposerWordsKeeping {}
+// As the app wires it (Portals/Chat/ComposerDrafts.swift), over the in-memory drafts.
+extension GivenBackMessages {
+    static let shared = GivenBackMessages(words: ComposerDrafts.shared)
+}
 final class TranscriptHeights {}
 final class CommandAnswerCloser {}
 extension ThreadController {

@@ -245,7 +245,7 @@ test("Claude Code: a session open in a terminal is not continued; once closed it
   const resumed = await client.call("session.resume", { session_id: id, profile: "claude" });
   assert.deepEqual(
     resumed.messages.map((message: Frame) => (message.role === "tool" ? message.name : message.role)),
-    ["user", "assistant", "read_file", "patch", "terminal", "assistant"],
+    ["user", "read_file", "assistant", "patch", "terminal", "assistant"],
   );
   const start = client.frames.length;
   assert.equal((await client.call("prompt.submit", { session_id: id, text: "Hello." })).status, "streaming");
@@ -315,7 +315,7 @@ test("Claude Code: a session only read takes no message, shows what the terminal
   const id = "6d3c8a9e-0000-4000-8000-000000000003";
   const messages = inFolder(claudeHistory("tools"), at("projects/app"));
   files.sessions.push({ sessionId: id, cwd: at("projects/app"), lastModified: now, summary: "Edit hello" });
-  files.stored.set(id, { title: null, messages: messages.slice(0, 2) });
+  files.stored.set(id, { title: null, messages: messages.slice(0, 3) });
   open.add(id);
 
   const read = await client.call("session.adopt", { profile: "claude", session_id: id, mode: "read" });
@@ -512,7 +512,7 @@ test("an agent with no sessions from the desk lists none and takes none up", asy
   });
   assert.deepEqual(await client.call("desk.list", { profile: "fake" }), { sessions: [] });
   await assert.rejects(client.call("session.adopt", { profile: "fake", session_id: "x", mode: "continue" }), (error: RpcFailure) => error.code === -32602);
-  assert.deepEqual(client.readyPayload.bridge.features, ["turn_file_undo", "message_fork", "mcp_auth", "folders", "model_levels", "push_host", "desk_sessions", "model_names", "compaction", "rename", "activity", "model_default_levels", "question_details", "modes", "push_relay", "push_sealed", "push_muting", "folders_add", "machine", "fleet", "fleet_delta", "fleet_delta_positions", "fleet_pages", "thread_sync", "agent_kinds", "queue", "files", "agent_looks", "sidebar_order", "machine_order", "approval_notes", "thread_branch", "subagents", "turn_messages", "subagents_clear", "subagent_names", "subagent_calls", "status_headline", "poll_now", "resume_replay", "agent_threads", "recent_threads", "held_elsewhere", "turn_usage", "session_leave", "worktrees", "turn_diff", "file_read", "session_resync", "message_reconciliation", "push_watcher", "message_ids", "senders", "async_questions", "background_commands", "net", "net_rename", "net_rename_devices", "lean_deltas", "thread_search", "file_search", "file_mentions", "folder_search", "answer_owner", "bot_chat", "history_pages", "tell_starters", "update_notice", "model_levels_none", "git_status", "usage_read", "open_on_host"]);
+  assert.deepEqual(client.readyPayload.bridge.features, ["turn_file_undo", "message_fork", "mcp_auth", "folders", "model_levels", "push_host", "desk_sessions", "model_names", "compaction", "rename", "activity", "model_default_levels", "question_details", "modes", "push_relay", "push_sealed", "push_muting", "folders_add", "machine", "fleet", "fleet_delta", "fleet_delta_positions", "fleet_pages", "thread_sync", "agent_kinds", "queue", "files", "agent_looks", "sidebar_order", "machine_order", "approval_notes", "thread_branch", "subagents", "turn_messages", "subagents_clear", "subagent_names", "subagent_calls", "status_headline", "poll_now", "resume_replay", "agent_threads", "recent_threads", "held_elsewhere", "turn_usage", "session_leave", "worktrees", "turn_diff", "file_read", "session_resync", "message_reconciliation", "push_watcher", "message_ids", "senders", "async_questions", "background_commands", "net", "net_rename", "net_rename_devices", "lean_deltas", "thread_search", "file_search", "file_mentions", "folder_search", "answer_owner", "bot_chat", "history_pages", "tell_starters", "update_notice", "model_levels_none", "git_status", "usage_read", "open_on_host", "steer_withdrawn"]);
 });
 
 // MARK: Codex
