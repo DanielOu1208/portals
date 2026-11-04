@@ -1,5 +1,6 @@
+import { cpSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
-import { join, sep } from "node:path";
+import { join, relative, sep } from "node:path";
 import { log } from "../../log.ts";
 import { Transcript } from "../../sessions/transcript.ts";
 import type { SessionUpdate } from "../acp/protocol.ts";
@@ -78,6 +79,32 @@ export async function terminalChat(home: string, id: string): Promise<TerminalCh
     if ((await names(join(root, hash))).includes(id)) return readChat(join(root, hash, id), id);
   }
   return null;
+}
+
+/** A chat's store, and the files SQLite keeps beside it while the store is open. */
+const storeFile = /^store\.db(?:-wal|-shm|-journal)?$/;
+
+/**
+ * Copies a terminal chat's folder to `to`, which is new. The terminal may be writing the
+ * chat's store as it is copied, and Cursor keeps it in SQLite's write-ahead log mode:
+ * copied file by file, the store and its log could be from different moments, and the
+ * copy malformed or without what was only in the log. So the store is copied by SQLite's
+ * own backup, as one moment of it with its log, and the files beside it are not copied.
+ * Its connection only reads, and waits for a writer as long as Cursor's own do.
+ */
+export async function copyChat(from: string, to: string): Promise<void> {
+  cpSync(from, to, { recursive: true, filter: (source) => !storeFile.test(relative(from, source)) });
+  const store = join(from, "store.db");
+  if (!(await names(from)).includes("store.db")) return;
+  // Loaded only here: Node says once that its SQLite is experimental.
+  const { DatabaseSync, backup } = await import("node:sqlite");
+  const db = new DatabaseSync(store, { readOnly: true });
+  try {
+    db.exec("PRAGMA busy_timeout = 5000;");
+    await backup(db, join(to, "store.db"));
+  } finally {
+    db.close();
+  }
 }
 
 /**

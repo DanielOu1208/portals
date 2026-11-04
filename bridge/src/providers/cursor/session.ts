@@ -418,7 +418,7 @@ export class CursorSession implements ProviderSession {
    * setting says. Cursor has no way to add one to a running prompt; a second prompt for
    * the session cancels the one running and runs instead (recorded with 2026.10.22,
    * scenario second-prompt). So the message stops what Cursor was doing and runs in its
-   * place, in the same turn of the app's (2026-11-03: "stop and send"): cards still open
+   * place, in the same turn of the app's: cards still open
    * close, answered cancelled, rows Cursor will say no more of close as at a stop, and
    * the message is kept after what was said before it. Sent as that second prompt,
    * Cursor was seen to go on with the first one's words after it (live, 2026.10.22). So

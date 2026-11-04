@@ -105,7 +105,7 @@ export const chatForkedOnlyText = `${cursorName} opens a chat from its terminal 
  * What a fork of a terminal chat says as its first turn starts, when Cursor keeps Run
  * Everything in the chat's store (`keepsRunEverything`): the copy keeps it too, and Cursor
  * searches the web and fetches pages for the thread without asking, whatever its mode.
- * The store is Cursor's, and left alone (2026-11-03: "tell me is enough for cursor").
+ * The store is Cursor's, and left alone: saying so is enough.
  */
 export const keptFullAccessText =
   "Cursor keeps part of Full access for this thread: it will go on searching the web and fetching pages without asking, also after a restart and in forks of this thread.";

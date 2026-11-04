@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
+import { createRequire, syncBuiltinESMExports } from "node:module";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1233,7 +1234,7 @@ test("a message sent to wait while a turn runs waits in the bridge: Cursor gets 
 
 // Cursor has no way to add a message to a running prompt, and a second prompt for the
 // session cancels the one running (recorded, second-prompt): a message handed to the turn
-// stops what Cursor was doing and runs in its place (2026-11-03: "stop and send").
+// stops what Cursor was doing and runs in its place.
 test("a message handed to a running turn stops what Cursor was doing and runs in its place, in the same turn, kept where it came", async (t) => {
   const state = await rig(t);
   const session = await createThread({}, state.phone);
@@ -2235,6 +2236,67 @@ test("a terminal chat Cursor cannot open is refused with what Cursor said, and l
   await assert.rejects(state.phone.call("session.adopt", { profile: "cursor", session_id: "c0ffee00-0000-4000-8000-000000000021", mode: "fork" }), (error: RpcFailure) => error.code === -32602 && /^Cursor could not open the chat: /.test(error.message));
   assert.deepEqual(inFolder(join(cursorHome, "acp-sessions")), []);
   assert.deepEqual(inFolder(join(state.stateDir, "threads")).filter((name) => name.endsWith(".json")), []);
+});
+
+// Cursor keeps a chat's store in SQLite's write-ahead log mode, and its terminal may write
+// it as it is forked. Copied file by file, the store and its log could come from different
+// moments: a store SQLite calls malformed, or one that lacks what was only in the log.
+test("a terminal chat forked while its terminal writes its store gets one moment of the store, with what was only in its write-ahead log", async (t) => {
+  const cursorHome = temporaryHome();
+  t.after(() => rmSync(cursorHome, { recursive: true, force: true }));
+  const chat = "c0ffee00-0000-4000-8000-000000000031";
+  const folder = terminalChat(cursorHome, chat);
+  // The terminal, with the chat open: one blob in the store itself, one only in its log.
+  const terminal = new DatabaseSync(join(folder, "store.db"));
+  t.after(() => terminal.close());
+  terminal.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
+  const put = terminal.prepare("INSERT INTO blobs (id, data) VALUES (?, ?)");
+  put.run("older", Buffer.alloc(32_000, 1));
+  terminal.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+  put.run("in the log", Buffer.from("latest"));
+  assert.ok(existsSync(join(folder, "store.db-wal")));
+  // It writes again and moves its log into the store as the copy is being made: when the
+  // second of the store's files is copied, else as soon as the copy is under way.
+  let wrote = false;
+  const write = () => {
+    if (wrote) return;
+    wrote = true;
+    terminal.exec("DELETE FROM blobs WHERE id = 'older';");
+    put.run("newer", Buffer.alloc(32_000, 2));
+    terminal.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+  };
+  const fs = createRequire(import.meta.url)("node:fs") as typeof import("node:fs");
+  const cpSync = fs.cpSync;
+  t.after(() => {
+    fs.cpSync = cpSync;
+    syncBuiltinESMExports();
+  });
+  fs.cpSync = (from, to, options) => {
+    let copied = 0;
+    cpSync(from, to, {
+      ...options,
+      filter: (source, destination) => {
+        const taken = options?.filter ? options.filter(source, destination) : true;
+        if (source === from && String(from).startsWith(folder)) setImmediate(write);
+        if (taken === true && /store\.db(-wal)?$/.test(String(source)) && ++copied === 2) write();
+        return taken;
+      },
+    });
+  };
+  syncBuiltinESMExports();
+
+  const state = await rig(t, { cursorHome });
+  const fork = (await state.phone.call("session.adopt", { profile: "cursor", session_id: chat, mode: "fork" })).session_id;
+  assert.ok(wrote);
+  const copy = new DatabaseSync(join(cursorHome, "acp-sessions", fork, "store.db"), { readOnly: true });
+  t.after(() => copy.close());
+  assert.equal(copy.prepare("PRAGMA integrity_check").get()?.integrity_check, "ok");
+  const ids = copy.prepare("SELECT id FROM blobs ORDER BY id").all().map((row) => row.id);
+  // The store as it was before the terminal wrote again, or after: never a mix, never without the log.
+  assert.ok(JSON.stringify(ids) === JSON.stringify(["in the log", "older"]) || JSON.stringify(ids) === JSON.stringify(["in the log", "newer"]), `the copy holds ${JSON.stringify(ids)}`);
+  // The terminal's store is its own still, and it goes on writing.
+  put.run("after the fork", Buffer.from("more"));
+  assert.deepEqual(terminal.prepare("SELECT id FROM blobs ORDER BY id").all().map((row) => row.id), ["after the fork", "in the log", "newer"]);
 });
 
 // MARK: Subagents

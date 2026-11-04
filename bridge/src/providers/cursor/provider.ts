@@ -15,7 +15,7 @@ import { reportVersion } from "../program.ts";
 import { DeskRefused, type AdoptMode, type AgentCommand, type AgentProfile, type DeskAdoption, type DeskSession, type ModelCatalog, type ModeOption, type Provider, type ProviderSession, type SessionOptions, type SessionSettings, type SessionSink, type StoredMessage, type UsageReport } from "../types.ts";
 import type { RecentFolder } from "../../folders.ts";
 import type { SearchFile } from "../../search/readers.ts";
-import { keepsRunEverything, replayed, terminalChat, terminalChats, type TerminalChat } from "./desk.ts";
+import { copyChat, keepsRunEverything, replayed, terminalChat, terminalChats, type TerminalChat } from "./desk.ts";
 import { cursorFolders } from "./folders.ts";
 import { ProcessNotes } from "./leftovers.ts";
 import { cursorCatalog, listedModels, sessionModels, type CursorModel } from "./models.ts";
@@ -473,7 +473,7 @@ export class CursorProvider implements Provider, CursorHost {
     const fork = randomUUID();
     const to = join(this.sessionsFolder, fork);
     try {
-      cpSync(chat.folder, to, { recursive: true });
+      await copyChat(chat.folder, to);
       writeFileSync(join(to, "meta.json"), JSON.stringify({ schemaVersion: 1, cwd: chat.cwd, title: chat.title ?? "Fork" }));
       // Read before Cursor opens the copy, which writes to its store.
       const everything = await keepsRunEverything(join(to, "store.db"));
