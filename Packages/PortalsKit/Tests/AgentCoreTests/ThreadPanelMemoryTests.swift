@@ -53,6 +53,16 @@ import Testing
         func openFolder(of thread: ThreadRef.ID, in app: HostApp.ID) async throws {}
     }
 
+    @Test func onlyBlockingUsageNotesSurviveWithoutWindows() {
+        for note in [nil, "No plan limits apply.", "Cursor has not said yet.", "Credits left: 100.", "This version of the host cannot read Factory's answer."] as [String?] {
+            #expect(UsageLimits(windows: [], note: note).blockingNote == nil)
+        }
+        for note in ["The workspace's credits are used up.", "The workspace's usage limit is reached.", "The Codex usage limit is reached.", "The model usage limit is reached."] {
+            let limits = UsageLimits(windows: [], note: note + "\nCredits left: 100.")
+            #expect(limits.blockingNote == note)
+        }
+    }
+
     private let hostID = HostID(rawValue: "mac")
     private var agent: Agent.ID { Agent.ID(host: hostID, name: "claude") }
     private var key: ThreadKey { ThreadKey(host: hostID, id: ThreadRef.ID(rawValue: "t")) }

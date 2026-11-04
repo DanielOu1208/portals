@@ -22,7 +22,7 @@ import { hashPassword } from "../../../bridge/src/http/auth.ts";
 import { FakeProvider } from "../../../bridge/src/providers/fake.ts";
 import { PlanLimitsError } from "../../../bridge/src/providers/planLimits.ts";
 
-const root = "/private/tmp/portals-panel";
+const root = process.env.PANEL_UITEST_ROOT ?? "/tmp/portals-panel";
 const modeFile = join(root, "states-mode.txt");
 mkdirSync(root, { recursive: true });
 writeFileSync(modeFile, "ok");
@@ -83,7 +83,7 @@ Object.assign(provider, {
 });
 
 writeFileSync(join(home, "config.json"), JSON.stringify({
-  host: "127.0.0.1", port: 9189,
+  host: "127.0.0.1", port: Number(process.env.PANEL_UITEST_PORT ?? 9189),
   auth: { username: "panel", passwordHash: await hashPassword("panel-test-pass") },
   allowedHosts: ["127.0.0.1", "localhost", "::1"], generalFolder: cwd,
   providers: { claude: false, codex: false, pi: false, cursor: false, droid: false, hermes: false, fake: false },
@@ -95,10 +95,29 @@ const asksFile = join(root, "states-asks.txt");
 writeFileSync(asksFile, "");
 for (const name of ["usage.read", "git.status"]) {
   const { handle } = methods[name];
-  methods[name].handle = (params, context) => {
+  methods[name].handle = async (params, context) => {
     appendFileSync(asksFile, `${name}\n`);
     if (name === "git.status" && readFileSync(modeFile, "utf8").trim() === "git-fail") {
       throw new RpcError(ErrorCode.internal, "git could not read this repository: fatal: detected dubious ownership in repository at /private/tmp/portals-panel/work");
+    }
+    if (name === "usage.read") {
+      let mode = readFileSync(modeFile, "utf8").trim();
+      // Hold the first answer to check the panel before anything is known.
+      while (mode === "usage-wait") {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        mode = readFileSync(modeFile, "utf8").trim();
+      }
+      if (mode.startsWith("usage-")) {
+        appendFileSync(asksFile, "usage.answered\n");
+        if (mode === "usage-fail") throw new RpcError(ErrorCode.internal, "Its sign-in has expired.");
+        if (mode === "usage-none") return { available: false };
+        return {
+          available: true, title: "Test plan",
+          limits: mode === "usage-window" ? [{ name: "weekly", percent: 25, resets_at: Math.floor(Date.now() / 1000) + 86400 }] : [],
+          ...(mode === "usage-note" ? { note: "No plan limits apply." } : {}),
+          ...(mode === "usage-blocked" ? { note: "The workspace's credits are used up.\nCredits left: 100." } : {}),
+        };
+      }
     }
     return handle(params, context);
   };
