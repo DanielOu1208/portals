@@ -12,16 +12,20 @@ struct FileUndoSheet: View {
 
     @State private var review = FileUndoReviewState()
     @State private var detailsHeight: CGFloat = 44
-    @State private var fittedHeight: CGFloat = 280
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @State private var headerHeight: CGFloat = 36
+    @State private var explanationHeight: CGFloat = 42
+    @State private var actionHeight: CGFloat = 50
     @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     private var detailsLimit: CGFloat {
-        if horizontalSizeClass == .compact { return verticalSizeClass == .compact ? 120 : 340 }
+        if UIDevice.current.userInterfaceIdiom == .phone { return verticalSizeClass == .compact ? 120 : 340 }
         return 380
     }
 
     private var canConfirm: Bool { canUndo && review.canConfirm() }
+    private var fittedHeight: CGFloat {
+        headerHeight + explanationHeight + min(detailsHeight, detailsLimit) + actionHeight + Theme.grid * 10
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.grid * 2) {
@@ -36,10 +40,13 @@ struct FileUndoSheet: View {
                     .disabled(review.isApplying)
                     .accessibilityIdentifier("file-undo-cancel")
             }
+            .fixedSize(horizontal: false, vertical: true)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
             Text("Puts these files back as they were before Claude’s last turn. The chat is kept.")
                 .font(.app.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { explanationHeight = $0 }
             ScrollView {
                 details
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -61,13 +68,14 @@ struct FileUndoSheet: View {
             .controlSize(.large)
             .disabled(!canConfirm)
             .accessibilityIdentifier("file-undo-confirm")
+            .fixedSize(horizontal: false, vertical: true)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { actionHeight = $0 }
         }
         .padding(Theme.grid * 2)
         .frame(idealWidth: 440, alignment: .topLeading)
-        // Measure the natural header, bounded list and action, independently of the
-        // sheet's current detent. Short previews never acquire an empty tall frame.
+        // Size from the individual rows: measuring the whole sheet feeds the native
+        // presentation's allocated height back into its next requested height.
         .fixedSize(horizontal: false, vertical: true)
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { fittedHeight = $0 }
         .background(Theme.pageBackground)
         .modifier(FileUndoPresentation(height: fittedHeight))
         .presentationBackground(Theme.pageBackground)
@@ -89,8 +97,7 @@ struct FileUndoSheet: View {
     private var details: some View {
         VStack(alignment: .leading, spacing: Theme.grid * 1.5) {
             if review.isLoading { ProgressView("Checking changes…") }
-            if let preview = review.shownPreview {
-                let list = FileUndoFileList(preview: preview, workingDirectory: workingDirectory, turnDiff: turnDiff)
+            if let list = review.fileList(workingDirectory: workingDirectory, turnDiff: turnDiff) {
                 if list.files.isEmpty {
                     Text("No file changes to undo.")
                         .foregroundStyle(.secondary)
@@ -160,16 +167,16 @@ struct FileUndoSheet: View {
 
 private struct FileUndoPresentation: ViewModifier {
     let height: CGFloat
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if horizontalSizeClass == .compact {
+        if UIDevice.current.userInterfaceIdiom == .phone {
             content
                 .presentationDetents([.height(height)])
-                .presentationSizing(.fitted)
         } else {
-            content.presentationSizing(.fitted)
+            content
+                .frame(width: 440, height: height, alignment: .topLeading)
+                .presentationSizing(.fitted)
         }
     }
 }

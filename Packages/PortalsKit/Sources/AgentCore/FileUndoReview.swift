@@ -1,7 +1,7 @@
 import Foundation
 
-/// Presentation of the native preview's exact file set. A turn diff supplies counts
-/// only when its full path identifies the same file; totals are never divided up.
+/// The native preview's exact files and counts. Native counts are totals, so only a
+/// single file has per-file counts; historical turn counts do not describe later edits.
 public struct FileUndoFileList: Hashable, Sendable {
     public struct Counts: Hashable, Sendable {
         public let added: Int?
@@ -15,16 +15,21 @@ public struct FileUndoFileList: Hashable, Sendable {
     public init(preview: TurnFileUndoPreview, workingDirectory: String?, turnDiff: TurnDiff?) {
         let root = workingDirectory.flatMap { $0.hasPrefix("/") ? Self.normalize($0) : nil }
         let known = Dictionary(grouping: turnDiff?.files ?? []) { Self.key($0.path, root: root) }
-        files = preview.files.map { path in
-            let key = Self.key(path, root: root)
-            let matches = known[key] ?? []
-            let match = matches.count == 1 ? matches.first : nil
-            let counted = match.flatMap { file in
-                !file.uncounted && file.added >= 0 && file.removed >= 0 ? file : nil
-            }
+        let matches = preview.files.map { path -> TurnDiff.File? in
+            let candidates = known[Self.key(path, root: root)] ?? []
+            return candidates.count == 1 ? candidates.first : nil
+        }
+        let nativeCounts: (added: Int, removed: Int)?
+        if let added = preview.insertions, let removed = preview.deletions, added >= 0, removed >= 0 {
+            nativeCounts = (added, removed)
+        } else { nativeCounts = nil }
+        files = zip(preview.files, matches).map { path, match in
+            let counts: Counts?
+            if preview.files.count == 1, let nativeCounts {
+                counts = Counts(added: nativeCounts.added, removed: nativeCounts.removed)
+            } else { counts = nil }
             return TurnDiff.File(path: Self.displayPath(path, root: root), status: match?.status ?? .modified,
-                                 added: counted?.added ?? 0, removed: counted?.removed ?? 0,
-                                 uncounted: counted == nil)
+                                 added: counts?.added ?? 0, removed: counts?.removed ?? 0, uncounted: counts == nil)
         }
         if files.allSatisfy(\.uncounted), preview.insertions != nil || preview.deletions != nil {
             aggregate = Counts(added: preview.insertions, removed: preview.deletions)
@@ -76,6 +81,13 @@ public struct FileUndoReviewState: Hashable, Sendable {
 
     public init() {}
 
+    public func fileList(workingDirectory: String?, turnDiff: TurnDiff?) -> FileUndoFileList? {
+        shownPreview.map {
+            FileUndoFileList(preview: $0, workingDirectory: workingDirectory,
+                             turnDiff: refreshedChangedFiles ? nil : turnDiff)
+        }
+    }
+
     public func canConfirm(at now: Date = .now) -> Bool {
         !isLoading && !isApplying && !blocksActions && preview?.canConfirm(at: now) == true
     }
@@ -103,7 +115,7 @@ public struct FileUndoReviewState: Hashable, Sendable {
 
     public mutating func invalidate(_ message: String) {
         preview = nil
-        self.message = message
+        if !requiresFolderReview { self.message = message }
         blocksActions = true
     }
 
@@ -127,8 +139,8 @@ public struct FileUndoReviewState: Hashable, Sendable {
             }
             invalidate("Files changed again. Close this sheet and check the folder before continuing.")
         } else {
-            requiresFolderReview = true
             invalidate("The undo could not be confirmed. Some files may have changed; check the folder before continuing.")
+            requiresFolderReview = true
         }
         return false
     }

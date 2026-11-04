@@ -562,6 +562,11 @@ overwritten while conversation history stays, and obtains explicit destructive
 confirmation. It then sends `session.files.undo` with
 `{session_id, preview_id, confirmed: true}` on the same connection within one minute.
 The preview is single-use, including when revalidation or native restoration fails.
+If files changed during revalidation before any restore was attempted, the host
+may return `-32602` with optional `data: {reason: "files_changed"}`. The client may
+fetch one updated preview, show that the files changed, and require confirmation
+again. This reason never permits an automatic restore; absent or other error data
+must not be treated as proof that files were untouched.
 
 The host checks the native preview again and compares file contents and identity
 with the reviewed state before restoring. Files outside the thread's folder,
