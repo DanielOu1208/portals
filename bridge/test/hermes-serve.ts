@@ -92,6 +92,8 @@ export class FakeHermes {
     summary: { headline: "Compressed: 10 → 3 messages", token_line: "Rough transcript estimate: ~24,063 → ~3,100 tokens", note: null, noop: false, aborted: false },
   };
   compressFails: { code: number; message: string } | null = null;
+  /** What `mcp.servers.status` answers with; null: a Hermes from before it, which has no such method. */
+  mcpServers: Frame[] | null = [];
   /** `session.list` fails with this when set. */
   listFails: { code: number; message: string } | null = null;
   /** What `commands.catalog` answers, as Hermes 0.22.5 shapes it. */
@@ -345,6 +347,9 @@ export class FakeHermes {
       }
       case "session.close":
         return this.reply(connection, id, { closed: true });
+      case "mcp.servers.status":
+        if (!this.mcpServers) return this.fail(connection, id, -32601, `unknown method: ${call.method}`);
+        return this.reply(connection, id, { servers: this.mcpServers, checked_at: 1791337800 });
       case "config.set":
         if (params.key === "yolo") {
           if (params.scope !== "session") return this.fail(connection, id, 4000, "the fake Hermes changes yolo for one session only");

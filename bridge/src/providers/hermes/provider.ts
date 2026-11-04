@@ -3,10 +3,13 @@ import { log } from "../../log.ts";
 import { machineWord } from "../../platform.ts";
 import { readJSON, writeJSON } from "../../store/jsonFile.ts";
 import { thinkingLevels, type AgentCommand, type AgentProfile, type ModelCatalog, type ModeOption, type OngoingThread, type Provider, type ProviderSession, type SessionOptions, type SessionSettings, type SessionSink, type UsageLimit, type UsageReport } from "../types.ts";
-import { HermesClient, serveConnector, type ClientListener, type Connector, type Frame } from "./client.ts";
+import { mcpCommand, mcpStatusText, type McpServer, type McpServerState } from "../mcpStatus.ts";
+import { HermesClient, HermesError, serveConnector, type ClientListener, type Connector, type Frame } from "./client.ts";
 import { ServeLocator } from "./serve.ts";
 import { HermesSession, type Loaded } from "./session.ts";
+import { hermesVersion } from "./setup.ts";
 import { TypedCommands } from "./typed.ts";
+import { VersionCheck } from "../program.ts";
 
 // Hermes as agents of the bridge: one per Hermes profile (its `default` is `hermes` in
 // profiles.list), all through one connection to the `hermes serve` this Mac runs
@@ -44,6 +47,8 @@ export interface HermesHostOptions {
   interruptGraceMs?: number;
   /** Each profile keeps one ongoing conversation, its Bot Chat (feature bot_chat). True unless said (tests). */
   oneThread?: boolean;
+  /** Ask the installed `hermes` its version at start; true unless said (tests). */
+  checkVersion?: boolean;
 }
 
 /** A Hermes profile, as the bridge offers it. */
@@ -58,6 +63,11 @@ export interface HermesProfile {
   provider: string;
 }
 
+/**
+ * The Hermes release the bridge was tested with. Hermes speaks the protocol the bridge
+ * speaks to the app, and changes it often: another release runs, with a warning at start.
+ */
+export const testedHermesVersion = "0.22.5";
 /** What a thread runs on when Hermes is left to choose: its own default, whatever that is. */
 export const hermesDefaultModel = "default";
 const catalogMaxAgeMs = 2 * 60_000;
@@ -95,6 +105,18 @@ const modeOptions: ModeOption[] = [
 /** The words for a Nous plan's gauges that Hermes's apps have their own words for. */
 const gaugeNames: Record<string, string> = { day: "daily", week: "weekly", month: "monthly", top_tier: "Large models" };
 
+/** What `mcp.servers.status` says of a server, in `/mcp`'s words. `lazy`: connects when first used. */
+const hermesMcpStates: Record<string, McpServerState> = { connected: "connected", connecting: "starting", failed: "failed", disabled: "off", configured: "notStarted" };
+
+/** `/mcp` from Hermes's `mcp.servers.status`: its serve's last word on each server, which asking does not change. */
+export function hermesMcpText(agent: string, servers: { name: string; status: string; tools?: number }[]): string {
+  return mcpStatusText(agent, servers.map((server): McpServer => {
+    const state = hermesMcpStates[server.status] ?? "unknown";
+    const detail = server.status === "lazy" ? "starts when first used" : state === "unknown" ? server.status : undefined;
+    return { name: server.name, state, ...(typeof server.tools === "number" ? { tools: server.tools } : {}), ...(detail ? { detail } : {}) };
+  }));
+}
+
 /** The bridge's name for a Hermes profile: `hermes` for the default, else the profile's own unless another agent has it. */
 export function agentName(profile: string, taken: ReadonlySet<string>): string {
   if (profile === "default") return "hermes";
@@ -128,6 +150,8 @@ export class HermesHost {
   /** Events for runtime ids no session has claimed yet (a resume answered after its first events). */
   private readonly unclaimed = new Map<string, { type: string; seq: number | undefined; payload: Frame; at: number }[]>();
   private started = false;
+  /** Which Hermes is installed, as `hermes --version` said at the bridge's start. */
+  readonly version: VersionCheck;
   private refreshing: Promise<void> | null = null;
   /** The profiles' ongoing conversations open in the bridge, told when Hermes's stored sessions change (`sessions.changed`). */
   private readonly watching = new Set<HermesSession>();
@@ -142,6 +166,7 @@ export class HermesHost {
     this.options = options;
     this.interruptGraceMs = options.interruptGraceMs ?? 15_000;
     this.oneThread = options.oneThread ?? true;
+    this.version = new VersionCheck({ name: "Hermes", tested: testedHermesVersion, path: options.settings.path, setting: "hermes.path" });
     this.typed = new TypedCommands(join(dirname(options.cachePath), "hermes-commands.json"));
     const locator = new ServeLocator({
       path: options.settings.path,
@@ -192,11 +217,12 @@ export class HermesHost {
     };
   }
 
-  /** Connects, then learns the profiles. Once, however many agents call it. */
+  /** Connects, then learns the profiles, and logs which Hermes is installed. Once, however many agents call it. */
   start(): void {
     if (this.started) return;
     this.started = true;
     void this.client.start();
+    if (this.options.checkVersion !== false) void hermesVersion(this.options.settings.path, this.options.env).then((version) => this.version.installedIs(version));
     void this.refreshProfiles();
   }
 
@@ -530,8 +556,8 @@ export class HermesProvider implements Provider {
   readonly supportsModes = true;
   readonly modeOptions = modeOptions;
   readonly modeMeanings = { full: "runs commands without asking" };
-  /** Its commands that show something, which the bridge runs (`commands`). */
-  readonly executes = hermesCommands.filter((command) => !command.turn).map((command) => command.name);
+  /** Its commands that show something, which the bridge runs (`commands`), and `/mcp` (`mcp.servers.status`). */
+  readonly executes = [...hermesCommands.filter((command) => !command.turn).map((command) => command.name), "mcp"];
 
   constructor(host: HermesHost, profile: HermesProfile) {
     this.host = host;
@@ -556,6 +582,11 @@ export class HermesProvider implements Provider {
 
   start(): void {
     this.host.start();
+  }
+
+  /** Every profile runs on the one Hermes. */
+  get version(): VersionCheck {
+    return this.host.version;
   }
 
   async close(): Promise<void> {
@@ -623,17 +654,19 @@ export class HermesProvider implements Provider {
 
   /**
    * Hermes's `/compress` (`/compact` too), which the session carries out (`session.compress`),
-   * Hermes's commands of `hermesCommands` that its catalog lists, and the profile's skills.
+   * `/mcp`, which the bridge answers, Hermes's commands of `hermesCommands` that its catalog
+   * lists, and the profile's skills.
    */
   async commands(thread?: { id: string; cwd: string }, name?: string): Promise<AgentCommand[]> {
+    const mcp = mcpCommand(() => this.mcpStatus());
     const shown = hermesCommands.filter((command) => !command.turn).map((command) => this.command(command, thread));
-    if (name !== undefined && (name === compressCommand.name || shown.some((command) => command.name === name))) return [compressCommand, ...shown];
+    if (name !== undefined && (name === compressCommand.name || name === mcp.name || shown.some((command) => command.name === name))) return [compressCommand, mcp, ...shown];
     let catalog: Frame;
     try {
       catalog = await this.host.commandCatalog(this.described.profile);
     } catch (error) {
       log.debug("Hermes did not list its commands", { error: (error as Error).message });
-      return [compressCommand];
+      return [compressCommand, mcp];
     }
     const described = new Map<string, string>();
     for (const pair of Array.isArray(catalog.pairs) ? catalog.pairs : []) {
@@ -641,9 +674,20 @@ export class HermesProvider implements Provider {
     }
     const own = hermesCommands.filter((command) => described.has(`/${command.name}`)).map((command) => this.command(command, thread));
     const skills = [...skillsOf(catalog)]
-      .filter((skill) => !own.some((command) => command.name === skill))
+      .filter((skill) => skill !== mcp.name && !own.some((command) => command.name === skill))
       .map((skill): AgentCommand => ({ name: skill, description: described.get(`/${skill}`) || "A skill of yours", usage: "[instructions]", skill: true }));
-    return [compressCommand, ...own, ...skills];
+    return [compressCommand, mcp, ...own, ...skills];
+  }
+
+  private async mcpStatus(): Promise<string> {
+    let answer: { servers?: { name: string; status: string; tools?: number }[] } | undefined;
+    try {
+      answer = await this.host.client.call("mcp.servers.status", { profile: this.described.profile });
+    } catch (error) {
+      if (error instanceof HermesError && error.code === -32601) throw new Error("This Hermes cannot say how its MCP servers are: a newer one can.");
+      throw new Error(`Hermes did not say how its MCP servers are: ${(error as Error).message}`);
+    }
+    return hermesMcpText(this.described.displayName, Array.isArray(answer?.servers) ? answer.servers : []);
   }
 
   /** One of `hermesCommands` as the app offers it: one that shows something runs in the thread's session. */

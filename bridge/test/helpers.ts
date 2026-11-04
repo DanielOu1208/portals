@@ -1,5 +1,6 @@
 import "./environment.ts";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import fs, { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import WebSocket from "ws";
@@ -43,6 +44,30 @@ export interface TestBridgeOptions {
   noticeRetries?: number[];
   /** For the check for a later version, when a test turns it on (`updates.check`; feature update_notice): its own registry. */
   updates?: BridgeOptions["updates"];
+  /** For the reading of the free space on the bridge's disk (feature disk_space): its own `statfs`. Else a disk with plenty of room, whatever the test machine's has. */
+  disk?: BridgeOptions["disk"];
+}
+
+/** A volume of 500 GB with 200 GB free, for the tests that do not look at the disk: a full one on the test machine does not tell their threads so. */
+export const roomyDisk: NonNullable<BridgeOptions["disk"]>["statfs"] = async () => ({ bsize: 1000, blocks: 500e6, bavail: 200e6 });
+
+/**
+ * Makes every write of a file whose path starts with `prefix` fail as on a full disk
+ * (`ENOSPC`), or with `code`, until what this returns is called or the test ends.
+ */
+export function failingWrites(t: { after(fn: () => void): void }, prefix: string, code = "ENOSPC"): () => void {
+  const real = fs.writeFileSync;
+  const restore = () => {
+    fs.writeFileSync = real;
+    syncBuiltinESMExports();
+  };
+  t.after(restore);
+  fs.writeFileSync = ((...args: Parameters<typeof real>) => {
+    if (String(args[0]).startsWith(prefix)) throw Object.assign(new Error(`${code}: no space left on device, write`), { code });
+    return real(...args);
+  }) as typeof real;
+  syncBuiltinESMExports();
+  return restore;
 }
 
 export function temporaryHome(): string {
@@ -75,7 +100,7 @@ export async function startTestBridge(options: TestBridgeOptions = {}): Promise<
     };
     writeFileSync(join(home, "config.json"), JSON.stringify(config));
   }
-  const bridge = await startBridge({ home, logCapacity: options.logCapacity, providers: options.providers, temporaryFolders: options.temporaryFolders, userHome: options.userHome, held: options.held, noticeRetries: options.noticeRetries, updates: options.updates });
+  const bridge = await startBridge({ home, logCapacity: options.logCapacity, providers: options.providers, temporaryFolders: options.temporaryFolders, userHome: options.userHome, held: options.held, noticeRetries: options.noticeRetries, updates: options.updates, disk: { statfs: roomyDisk, ...options.disk } });
   return {
     ...bridge,
     async dispose() {

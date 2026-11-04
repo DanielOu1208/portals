@@ -65,10 +65,14 @@ public struct ThreadActivityReport: Hashable, Sendable {
     /// A later version of the host's bridge that is out, when a host that says so
     /// (`HostUpdate`) has one; nil when it has none, and from any other host.
     public var update: String?
+    /// The free space on the host's disk, from a host that says it (`HostDisk`); nil from
+    /// any other host.
+    public var disk: HostDisk?
 
     public init(
         threads: [ThreadRef.ID: ThreadActivity] = [:], inherited: Set<ThreadRef.ID> = [], withoutTurn: Set<ThreadRef.ID> = [],
-        list: ThreadListRevision? = nil, looks: LookListRevision? = nil, order: SidebarOrderRevision? = nil, update: String? = nil
+        list: ThreadListRevision? = nil, looks: LookListRevision? = nil, order: SidebarOrderRevision? = nil, update: String? = nil,
+        disk: HostDisk? = nil
     ) {
         self.threads = threads
         self.inherited = inherited
@@ -77,6 +81,7 @@ public struct ThreadActivityReport: Hashable, Sendable {
         self.looks = looks
         self.order = order
         self.update = update
+        self.disk = disk
     }
 }
 
@@ -99,5 +104,55 @@ extension ThreadRecord {
         let words = title.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         guard !words.isEmpty else { return nil }
         return String(words.prefix(200))
+    }
+}
+
+/// A provider-native turn position, with the actions the host explicitly allows.
+public struct MessageCheckpoint: Codable, Hashable, Sendable {
+    public var id: String
+    public var canFork: Bool
+    public var canEdit: Bool
+    public var canUndoFiles: Bool
+
+    public init(id: String, canFork: Bool, canEdit: Bool, canUndoFiles: Bool = false) {
+        self.id = id
+        self.canFork = canFork
+        self.canEdit = canEdit
+        self.canUndoFiles = canUndoFiles
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        canFork = try values.decode(Bool.self, forKey: .canFork)
+        canEdit = try values.decode(Bool.self, forKey: .canEdit)
+        canUndoFiles = try values.decodeIfPresent(Bool.self, forKey: .canUndoFiles) ?? false
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case canFork = "can_fork"
+        case canEdit = "can_edit"
+        case canUndoFiles = "can_undo_files"
+    }
+}
+
+/// Creates a separate thread at a message's provider-native position.
+public protocol MessageForking: Sendable {
+    var offersMessageFork: Bool? { get async }
+    /// `before` leaves the selected turn out so its edited opener can be sent anew.
+    /// Otherwise the new thread includes the completed selected turn.
+    func fork(_ thread: ThreadRef, at checkpoint: MessageCheckpoint, before: Bool) async throws -> ThreadRef
+}
+
+public enum MessageForkError: LocalizedError, Hashable, Sendable {
+    case unavailable
+    case busy
+
+    public var errorDescription: String? {
+        switch self {
+        case .unavailable: "This host does not offer this message action."
+        case .busy: "Wait for this thread to finish before creating a new thread."
+        }
     }
 }

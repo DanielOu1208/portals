@@ -21,6 +21,9 @@ public enum BridgeWire {
         public static let pushHost = "push_host"
         /// `desk.list` and `session.adopt`: sessions started in a terminal on the host.
         public static let deskSessions = "desk_sessions"
+        /// Message-level forks with provider-native positions.
+        public static let messageFork = "message_fork"
+        public static let turnFileUndo = "turn_file_undo"
         /// `model.options` carries `model_names`.
         public static let modelNames = "model_names"
         /// The `session.compacted` event and the stored `compaction` message: where the
@@ -194,6 +197,25 @@ public enum BridgeWire {
         /// An empty list in `model_levels` says the model takes no thinking level (Cursor's
         /// Auto, a Droid model without reasoning), and none is offered for it.
         public static let modelLevelsNone = "model_levels_none"
+        /// A `status.update` may carry `withdrawn`, a message steered into the running turn
+        /// that a Stop took back before the agent read it: it leaves the turn, and goes back
+        /// to the composer of the device that sent it.
+        public static let steerWithdrawn = "steer_withdrawn"
+        /// `gateway.ready`'s `bridge` block and the `sessions.activity` answer carry `disk`,
+        /// the free space on the bridge's disk (`HostDisk`), for Settings.
+        public static let diskSpace = "disk_space"
+        /// `subagent.read` gives what one subagent did, its own messages, for one that says
+        /// it can be read (`can_read`, `Subagent.canRead`).
+        public static let subagentRead = "subagent_read"
+    }
+
+    /// The free space on a bridge's disk, as one with `disk_space` says it (`disk`): two
+    /// whole numbers of bytes, none below 0 and the free no more than the size; nil
+    /// otherwise. A level this app does not know is read as `ok`.
+    public static func hostDisk(_ value: JSONValue?) -> HostDisk? {
+        guard let free = value?["free"]?.intValue, let total = value?["total"]?.intValue, free >= 0, total > 0, free <= total else { return nil }
+        let level = value?["level"]?.stringValue.flatMap(HostDisk.Level.init(rawValue:)) ?? .ok
+        return HostDisk(free: Int64(free), total: Int64(total), level: level)
     }
 
     /// A later version of portals-host, as a bridge with `update_notice` says it
@@ -224,6 +246,9 @@ public enum BridgeWire {
         public static let foldersSearch = "folders.search"
         public static let deskList = "desk.list"
         public static let sessionAdopt = "session.adopt"
+        public static let sessionFork = "session.fork"
+        public static let sessionFilesPreview = "session.files.preview"
+        public static let sessionFilesUndo = "session.files.undo"
         public static let sessionRename = "session.rename"
         public static let sessionLeave = "session.leave"
         public static let sessionsActivity = "sessions.activity"
@@ -246,6 +271,8 @@ public enum BridgeWire {
         /// Feature `history_pages`: the turns of a thread before the first it holds.
         public static let sessionHistory = "session.history"
         public static let subagentStop = "subagent.stop"
+        /// Feature `subagent_read`: what one subagent did, its own messages.
+        public static let subagentRead = "subagent.read"
         public static let fileAttachBytes = "file.attach_bytes"
         public static let fileRead = "file.read"
         public static let filesSearch = "files.search"
@@ -434,6 +461,16 @@ public enum BridgeWire {
         public var status: String?
     }
 
+    /// `subagent.read` names the subagent as `subagent.stop` does.
+    public typealias SubagentReadParams = SubagentStopParams
+
+    /// What one subagent did: its own messages, as `session.resume` gives a thread's; not
+    /// `available` for one that cannot be read.
+    public struct SubagentReadResult: Decodable, Sendable {
+        public var available: Bool?
+        public var messages: [JSONValue]?
+    }
+
     public struct QueueRemoveResult: Decodable, Sendable {
         public var removed: Bool?
     }
@@ -593,9 +630,12 @@ public enum BridgeWire {
         /// Feature `update_notice`: a later version of portals-host that is out, only while
         /// there is one. Kept as raw JSON, so an odd one costs only itself.
         public var latest: JSONValue?
+        /// Feature `disk_space`: the free space on the bridge's disk. Kept as raw JSON, so
+        /// an odd one costs only itself.
+        public var disk: JSONValue?
 
         enum CodingKeys: String, CodingKey {
-            case sessions, looks, order, latest
+            case sessions, looks, order, latest, disk
             case threadList = "thread_list"
         }
 
@@ -639,6 +679,11 @@ public enum BridgeWire {
         /// The later version that is out, when the answer says one; nil otherwise.
         public var laterVersion: String? {
             BridgeWire.laterVersion(latest)
+        }
+
+        /// The free space on the bridge's disk, when the answer says it; nil otherwise.
+        public var hostDisk: HostDisk? {
+            BridgeWire.hostDisk(disk)
         }
     }
 
@@ -1312,14 +1357,17 @@ public enum BridgeWire {
         public var sessions: [JSONValue]?
 
         /// The sessions as the app lists them, for `agent`. A row without an id or a
-        /// folder is left out; a state the app does not know is taken as idle.
+        /// folder is left out; a state the app does not know is taken as idle. A row's
+        /// `adopt_modes`, when it names one the app knows, limits how it is taken up.
         public func deskSessions(for agent: Agent.ID) -> [DeskSession] {
             (sessions ?? []).compactMap { row in
                 guard let id = row["id"]?.stringValue, !id.isEmpty, let folder = row["folder"]?.stringValue, !folder.isEmpty else { return nil }
+                let modes = row["adopt_modes"]?.arrayValue?.compactMap { $0.stringValue.flatMap(AdoptMode.init(rawValue:)) }
                 return DeskSession(
                     id: id, agent: agent, title: row["title"]?.stringValue, folder: folder,
                     updated: row["updated"]?.doubleValue.map { Date(timeIntervalSince1970: $0) },
-                    state: row["state"]?.stringValue.flatMap(DeskSession.State.init(rawValue:)) ?? .idle
+                    state: row["state"]?.stringValue.flatMap(DeskSession.State.init(rawValue:)) ?? .idle,
+                    adoptModes: modes?.isEmpty == false ? modes : nil
                 )
             }
         }
@@ -1344,6 +1392,33 @@ public enum BridgeWire {
             case profile, mode
             case sessionID = "session_id"
         }
+    }
+
+    /// Forks a stored thread at a provider-native checkpoint, not a client message id.
+    public struct SessionForkParams: Encodable, Sendable {
+        public var sessionID: String
+        public var checkpointID: String
+        public var before: Bool
+
+        public init(sessionID: String, checkpointID: String, before: Bool) {
+            self.sessionID = sessionID
+            self.checkpointID = checkpointID
+            self.before = before
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case sessionID = "session_id"
+            case checkpointID = "checkpoint_id"
+            case before
+        }
+    }
+
+    static func messageCheckpoint(_ value: JSONValue?, features: Set<String> = []) -> MessageCheckpoint? {
+        guard let value, let id = value["id"]?.stringValue, !id.isEmpty,
+              let canFork = value["can_fork"]?.boolValue,
+              let canEdit = value["can_edit"]?.boolValue else { return nil }
+        return MessageCheckpoint(id: id, canFork: canFork, canEdit: canEdit,
+                                 canUndoFiles: features.contains(Feature.turnFileUndo) && value["can_undo_files"]?.boolValue == true)
     }
 
     // MARK: Compaction

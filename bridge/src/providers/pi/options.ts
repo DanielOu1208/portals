@@ -1,37 +1,37 @@
 import { statSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { onPath, type CommandAccess } from "../../portals/access.ts";
 import { codexEffort } from "../codex/options.ts";
 import { programVersion } from "../program.ts";
 import { knownLevels } from "../types.ts";
 import type { PiModel } from "./protocol.ts";
 
-// The Pi release the bridge was tested with, Pi's thinking levels and the app's, and what
+// The Pi releases the bridge was tested with, Pi's thinking levels and the app's, and what
 // a Pi process is started with. Pi's levels are `off`, `minimal`, `low`, `medium`, `high`,
 // `xhigh` and `max`; the app's `none` is Pi's `off`, the rest go by the same names, and
 // the app's `ultra` is the strongest a model has.
 
 /**
- * The Pi release the bridge was built and tested against. A
- * newer one runs, with a warning at start. An older one runs no turn: it lacks records a
- * turn ends by (`agent_settled` came in 0.80.4, a `prompt`'s `disposition` in 0.99.0,
- * `aborted` in 1.1.0).
+ * The Pi releases the bridge was built and tested against. Pi's RPC mode is the same
+ * from 1.1.0 to 1.5.0, its documentation and code byte for byte. Another release runs,
+ * with a warning at start.
  */
-export const testedPiVersion = "1.1.0";
+export const testedPiVersions = ["1.1.0", "1.5.0"] as const;
+
+/**
+ * The oldest Pi a turn runs on: an older one lacks records a turn ends by
+ * (`agent_settled` came in 0.80.4, a `prompt`'s `disposition` in 0.99.0, `aborted` in
+ * 1.1.0), so a turn on it could run for ever.
+ */
+export const minimumPiVersion = "1.1.0";
+
+/** The extension beside this module, both in the source tree and the built package. */
+const permissionExtension = fileURLToPath(new URL(import.meta.url.endsWith(".ts") ? "./permission-extension.ts" : "./permission-extension.js", import.meta.url));
 
 /** `pi --version`, as "1.1.0"; null when it cannot be run. */
 export function piVersion(piPath: string, env: NodeJS.ProcessEnv): Promise<string | null> {
   return programVersion(piPath, env);
-}
-
-/** Whether release `version` came before release `other`, by their three numbers. */
-export function olderThan(version: string, other: string): boolean {
-  const mine = version.split(".").map(Number);
-  const theirs = other.split(".").map(Number);
-  for (let part = 0; part < 3; part++) {
-    if (mine[part] !== theirs[part]) return mine[part] < theirs[part];
-  }
-  return false;
 }
 
 /** Pi's levels, weakest first. */
@@ -89,7 +89,7 @@ export function piLevel(level: string, supported: readonly string[]): string | n
  * project's file is not named: whether Pi trusts the project is Pi's to say.
  */
 export function threadArguments(thread: string, append: string | null, agentDir: string): string[] {
-  const args = ["--mode", "rpc", "--session-id", thread];
+  const args = ["--mode", "rpc", "--session-id", thread, "-e", permissionExtension];
   if (!append) return args;
   const own = join(agentDir, "APPEND_SYSTEM.md");
   if (isFile(own)) args.push("--append-system-prompt", own);

@@ -14,11 +14,11 @@
   "type": "turn.end",
   "status": "complete",
   "usage": {
-   "used": 25473,
+   "used": 24966,
    "max": 1000000
   },
   "spent": {
-   "tokens": 25473
+   "tokens": 24966
   }
  },
  {
@@ -32,12 +32,12 @@
  {
   "type": "compacted",
   "trigger": "manual",
-  "tokensBefore": 25473
+  "tokensBefore": 24966
  },
  {
   "type": "usage",
   "usage": {
-   "used": 2807,
+   "used": 8584,
    "max": 1000000
   }
  },
@@ -45,7 +45,7 @@
   "type": "turn.end",
   "status": "complete",
   "usage": {
-   "used": 2807,
+   "used": 8584,
    "max": 1000000
   }
  }

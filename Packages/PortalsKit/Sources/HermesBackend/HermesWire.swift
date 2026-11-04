@@ -73,6 +73,9 @@ public enum HermesWire {
             /// A later version of portals-host that is out (feature `update_notice`'s
             /// `latest`); nil when there is none, and from a bridge without the feature.
             public var latest: String? = nil
+            /// The free space on the bridge's disk (feature `disk_space`'s `disk`); nil
+            /// before the bridge has read it, and from a bridge without the feature.
+            public var disk: HostDisk? = nil
         }
 
         /// A bridge's `relay_problem` (docs/gateway-protocol.md, section 11, "The net").
@@ -111,7 +114,8 @@ public enum HermesWire {
                 let version = block["version"]?.stringValue.flatMap { $0.isEmpty ? nil : String($0.prefix(40)) }
                 let relayProblem = block["relay_problem"]?.stringValue.flatMap(RelayProblem.init(rawValue:))
                 let latest = features.contains(BridgeWire.Feature.updateNotice) ? BridgeWire.laterVersion(block["latest"]) : nil
-                bridge = Bridge(version: version, features: features, machine: machine, net: net, relayProblem: relayProblem, latest: latest)
+                let disk = features.contains(BridgeWire.Feature.diskSpace) ? BridgeWire.hostDisk(block["disk"]) : nil
+                bridge = Bridge(version: version, features: features, machine: machine, net: net, relayProblem: relayProblem, latest: latest, disk: disk)
             }
         }
 

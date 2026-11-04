@@ -153,6 +153,15 @@ To change it later, run setup again with `--claude=login`, `--claude=api-key` or
 `--claude=off`. Or edit `claude.apiKey` in `config.json` (a key, or `null` for your own
 login) and `providers.claude`, then restart the host ([Every day](#every-day)).
 
+A Claude login ends on a fixed date, which using it does not move. From ten days
+before, Claude Code threads say when; once it has ended they say so. Run `claude auth
+login` in a terminal on that computer to sign in again. To sign in less often, make a
+long-lived token with `claude setup-token` and put it in `claude.oauthToken` in
+`config.json`, then restart the host. Usage counts against your Claude plan, as with the
+login. The token is kept only there, readable by you, and given to Claude Code as
+`CLAUDE_CODE_OAUTH_TOKEN`; the host never takes one from its own environment. An API key
+in `claude.apiKey` is used instead when both are set.
+
 ## Every day
 
 | Command | What it does |
@@ -234,8 +243,8 @@ One setting in the app (the gear, under Messages) says what it does:
 
 - **Steer** (as it comes): the agent reads the message during the turn it is on. Claude
   Code, Codex and Pi can; Droid takes it at the next model step, and Hermes with its next
-  tool result (one that comes after its last is a turn of its own). Cursor cannot, and
-  queues it.
+  tool result (one that comes after its last is a turn of its own). Cursor cannot add a
+  message to what it is doing: it stops, and runs the message instead.
 - **Queue**: the message waits and starts a turn of its own when the agent is done.
 
 Messages that wait are listed above the message field on every device connected to the
@@ -255,12 +264,14 @@ in a terminal on that computer (Claude Code's, Codex's and Pi's), to **continue*
 **fork** (a new thread with its history so far) or to **view only**. A Claude Code session
 a terminal has open is not continued, nor a Pi session while a Pi runs in a terminal in
 its folder: quit it there first, or fork. A Codex thread can be worked on from both.
+Cursor's terminal chats are listed too, to fork only.
 
 ### Claude Code
 
 The host runs your installed `claude` with your own settings, CLAUDE.md files, plugins
 and MCP servers, as at the desk. `/status` shows the thread's folder, git branch, model
-and mode, and `/usage` your plan's limits. Claude Code's own commands (`/compact`,
+and mode, `/usage` your plan's limits, and `/mcp` your MCP servers and whether each is
+connected. Claude Code's own commands (`/compact`,
 `/context`, …) and your skills are offered too; the app's own `/model` and `/reasoning`
 change one thread. Background work Claude starts runs on after the turn, and Claude
 answers when it ends. Stop, and a restart of the host, end it.
@@ -270,15 +281,31 @@ answers when it ends. Stop, and a restart of the host, end it.
 The host joins the Codex daemon every Codex on your computer uses, so threads keep
 running while the host restarts, and a terminal can work on the same thread. A thread
 runs with your `config.toml`; the host never writes it, and what you change in the app
-is for that thread only. `/compact` and `/usage` are offered. A new thread is named by a
+is for that thread only. `/compact`, `/usage` and `/mcp` (your MCP servers, and whether
+each runs for the thread) are offered. A new thread is named by a
 short call to a cheap model (`codex.titleModel`; `null` for none).
 
 ### Pi
 
-**Pi does not ask before it acts.** It has no approvals and no permission modes: it runs
-every command and makes every edit its model decides on, at once, and there is no `/mode`
-for it. Give a Pi thread only work you would let Pi do unattended in your terminal. (If one
-of your Pi extensions asks something, the app shows it as a card.)
+Pi threads have a mode picker and `/mode`. Existing threads and new threads start in
+**Default**, which keeps Pi's usual behavior: it acts without asking. Your own
+extensions still apply in every mode.
+
+- **Ask** asks on a question card before each `bash`, `write` and `edit` call. Choose
+  **Allow once** or **Deny**; dismissing the card or pressing Stop denies the call.
+- **Accept edits** allows `write` and `edit`, and asks before `bash`.
+- **Plan** allows only the `read`, `grep`, `find` and `ls` tool calls and tells Pi to
+  describe a plan before acting. Change modes to carry it out.
+- **Full access** runs without asking, like Default.
+
+A mode change takes effect with the next turn. The chosen mode survives cooling and
+host restarts. A small extension shipped with the host supplies the gate through Pi's
+extension API, supported on Pi 1.1.0 and newer. Calls made by `codemode` also pass through
+it. Ask and Accept edits do not gate other tool names, including MCP tools.
+**This is not a security boundary:** other extensions can act outside tool calls, and
+Pi subagents run in separate processes outside the gate. Plan blocks this Pi's
+delegation tools, but cannot restrict a subagent another extension starts. Give Pi
+only work you would let it do unattended in your terminal.
 
 - **Sign in with Pi's own `/login`.** The host gets a PATH and nothing else of your
   shell's, so an API key you keep in a shell variable does not reach its Pi: models that
@@ -306,17 +333,33 @@ sign-in.
   `edits`, and no Auto-review of a thread's own: Cursor's ACP reads only its settings for
   that. Plan and Ask are not locks: the model can leave either by itself, and the thread
   shows "Switch Mode: agent" when it does.
+- **Full access leaves web searches unasked.** Once Cursor has run a thread in Full access,
+  it keeps Run Everything in that session's own store, and goes on searching the web and
+  fetching pages for it without asking: back in Agent, after a restart, and in forks of
+  the thread. The thread says so as it leaves Full access. Commands and edits should ask
+  again, since Cursor decides those by how its process was started (read from Cursor's
+  code, not tried). Start a new thread for one that asks before searching.
 - **Stop does not always end a command** Cursor started; its row then says it may still be
   running.
 - **Subagents** Cursor's Task tool starts are on the thread's subagents line, with what each
   is doing and its answer; one asks before a command on a card of its own. A subagent left
   in the background keeps the turn open until it ends (Cursor answers the turn then), and
   Stop ends it with the turn: Cursor cannot stop one alone.
+- `/mcp` shows your MCP servers for the thread's folder and whether each is connected,
+  as `cursor-agent mcp list` run there says.
 - **A turn Cursor could not finish** (no network, a plan that is used up) ends as failed,
   with what Cursor said.
-- A message sent while it works waits for the turn to end. There is no context meter or
-  `/compact`: Cursor tells of no tokens. Cursor keeps every session under
-  `~/.cursor/acp-sessions/`, and nothing deletes them.
+- **A message sent while it works** stops what Cursor was doing and runs in its place,
+  with the app set to Steer: Cursor has no way to add it to the work under way. With
+  Queue it waits for the turn to end.
+- **Chats from Cursor's terminal** are listed with the sessions from your terminal, and can
+  only be forked: Cursor opens a copy of the chat in the new thread, which shows the
+  conversation as Cursor sends it again. The chat in the terminal is left as it was. A
+  chat Cursor ran with Run Everything (`--force`, or Cursor's own setting) keeps it in the
+  copy too, so web searches there go on without asking; the thread says so with its first
+  message.
+- There is no context meter or `/compact`: Cursor tells of no tokens. Cursor keeps every
+  session under `~/.cursor/acp-sessions/`, and nothing deletes them.
 
 ### Droid
 
@@ -356,7 +399,8 @@ leave the agent off there.
 - `/compact`, `/usage` (the limits of the thread's model provider, as Hermes's model
   picker shows them), your skills, `/plan`, `/init`, `/learn`, `/review` and the commands
   that only show something (`/context`, `/agents`, `/diff`, `/insights`, …) are offered.
-  Commands that change Hermes's settings are not.
+  Commands that change Hermes's settings are not. `/mcp` shows the profile's MCP servers
+  as Hermes last found them.
 - Hermes's notices (credits, low disk) are shown in the thread.
 
 ## Agents working with each other
@@ -462,6 +506,7 @@ it, and keeps what you change when it runs again. Restart the host after editing
 | `providers.claude`, `providers.codex`, `providers.pi`, `providers.cursor`, `providers.droid`, `providers.hermes` | Offers that agent in the app (`true`) or not (`false`). Setup turns on what it finds |
 | `claude.path`, `codex.path`, `pi.path`, `cursor.path`, `droid.path`, `hermes.path` | Where each agent's program is. Setup writes the one it found; a bare name is looked up on the PATH the host runs with |
 | `claude.apiKey` | The Anthropic API key Claude Code runs with, or `null` for your own Claude login ([Claude Code's sign-in](#claude-codes-sign-in)) |
+| `claude.oauthToken` | A long-lived token from `claude setup-token` that Claude Code signs in with, or `null` for your own Claude login. Not used when `claude.apiKey` is set ([Claude Code's sign-in](#claude-codes-sign-in)) |
 | `generalFolder` | General: where a new thread runs when you pick no folder. `~/Portals` unless set |
 | `folders.hide` | Folders never offered for new threads, nor anything under them (`~` is your home folder) |
 | `pi.model` | The model a new Pi thread starts on, as `pi --list-models` names it: `"openai/gpt-6.1-sol"`. `null`: Pi's own default |

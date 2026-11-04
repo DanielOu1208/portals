@@ -2,6 +2,7 @@ import { basename } from "node:path";
 import { LiveOutput } from "../liveOutput.ts";
 import { piTokens } from "../spent.ts";
 import type { ContextUsage, ProviderEvent } from "../types.ts";
+import { Unknowns } from "../unknowns.ts";
 import type { PiEvent, PiMessage, PiMessageDelta, PiRecord, PiSessionStats, PiUiRequest } from "./protocol.ts";
 import { errorText, gatewayResult, gatewayTool, isAbortError, stoppedResult, type GatewayTool, type ToolOutcome } from "./tools.ts";
 
@@ -95,8 +96,7 @@ function withContext<T extends ProviderEvent & { context?: string }>(event: T, c
 
 export class PiStream {
   private readonly cwd: string;
-  private readonly reportUnknown: (type: string) => void;
-  private readonly seenUnknown = new Set<string>();
+  private readonly unknowns: Unknowns;
   private turnOpen = false;
   /** What the open turn's requests spent so far (each assistant message's `usage`). */
   private spentTokens = 0;
@@ -119,7 +119,7 @@ export class PiStream {
 
   constructor(options: StreamOptions) {
     this.cwd = options.cwd;
-    this.reportUnknown = options.unknown ?? (() => {});
+    this.unknowns = new Unknowns(options.unknown ?? (() => {}), quiet);
     this.live = new LiveOutput(options.progress ?? (() => {}));
   }
 
@@ -201,10 +201,7 @@ export class PiStream {
       case "extension_ui_request":
         return this.shown(line as PiUiRequest);
       default:
-        if (type !== undefined && !quiet.has(type) && !this.seenUnknown.has(type)) {
-          this.seenUnknown.add(type);
-          this.reportUnknown(type);
-        }
+        this.unknowns.note(type);
         return [];
     }
   }

@@ -50,6 +50,19 @@ private let t0 = Date(timeIntervalSince1970: 1_700_000_000)
         #expect(AdoptMode.allCases.map(\.rawValue) == ["continue", "fork", "read"])
     }
 
+    /// A chat of Cursor's terminal is only forked: a tap asks first, and offers the fork alone.
+    @Test func aSessionTheHostOnlyForksIsNeverContinuedAtATap() {
+        let chat = DeskSession(id: "c1", agent: claude, folder: general, state: .closed, adoptModes: [.fork])
+        #expect(chat.defaultMode == nil)
+        #expect(chat.isForkOnly)
+        #expect(chat.allows(.fork) && !chat.allows(.continue) && !chat.allows(.read))
+        let session = DeskSession(id: "s1", agent: claude, folder: general, state: .closed)
+        #expect(session.defaultMode == .continue)
+        #expect(!session.isForkOnly)
+        #expect(AdoptMode.allCases.allSatisfy(session.allows))
+        #expect(!DeskSession(id: "s2", agent: claude, folder: general, state: .open, adoptModes: [.fork, .read]).isForkOnly)
+    }
+
     @Test func aThreadOnlyReadIsTheSessionToFork() {
         let ref = ThreadRef(
             id: ThreadRef.ID(rawValue: "s1"), agent: claude, title: "Edit hello", workingDirectory: "/Users/dana/notes", readOnly: true

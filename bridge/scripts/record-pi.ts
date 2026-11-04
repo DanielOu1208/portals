@@ -542,8 +542,8 @@ const scenarios: Record<string, Scenario> = {
       await pi.next(dialog("notify"));
       await handled;
       answer(pi, timed, { confirmed: true });
-      // The model's two commands: the first allowed, the second not.
-      await pi.prompt("Run `echo first` with bash. Then run `echo second` with bash. Then say in one short sentence which of the two ran.");
+      // The model's two commands, asked for in one message so that they run at once: the first allowed, the second not.
+      await pi.prompt("Run `echo first` and `echo second` with bash, as two tool calls in the same message. Then say in one short sentence which of the two ran.");
       for (let asked = 0; ; asked += 1) {
         const record = await pi.next((candidate) => dialog("confirm")(candidate) || candidate.type === "agent_settled");
         if (record.type === "agent_settled") break;

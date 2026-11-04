@@ -19,7 +19,7 @@ import { setLogLevel } from "../src/log.ts";
 import { FakeProvider } from "../src/providers/fake.ts";
 import type { AgentProfile, Provider, ProviderSession, SessionOptions, SessionSink } from "../src/providers/types.ts";
 import { readJSON, writeJSON } from "../src/store/jsonFile.ts";
-import { createThread, isEvent, password, runTurn, sessionCookie, signIn, temporaryHome, TestClient, username, type Frame } from "./helpers.ts";
+import { createThread, isEvent, password, roomyDisk, runTurn, sessionCookie, signIn, temporaryHome, TestClient, username, type Frame } from "./helpers.ts";
 import { piProvider, standin } from "./pi-standin.ts";
 
 // The counters (src/counters.ts): what they write, that it holds no
@@ -82,6 +82,8 @@ async function start(t: TestContext, options: StartOptions = {}): Promise<Counte
     providers: options.providers,
     temporaryFolders: options.temporaryFolders,
     counters: { seconds: 0.03, ...options.counters },
+    // The same disk from one run to the next, whatever the test machine's does meanwhile.
+    disk: { statfs: roomyDisk },
   });
   const counted: Counted = {
     ...bridge,
