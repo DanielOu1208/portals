@@ -150,6 +150,12 @@ class Handle implements DroidHandle {
   /** Who answers Droid's pick lists on this process (`DroidHandle.onPickOptions`). */
   picker: Parameters<NonNullable<DroidHandle["onPickOptions"]>>[0] | undefined;
   onPickOptions(handler: Parameters<NonNullable<DroidHandle["onPickOptions"]>>[0]): void { this.picker = handler; }
+  /** Who is told Droid's list of background processes (`DroidHandle.onBackgroundProcesses`). */
+  lister: ((session: string, processes: unknown) => void) | undefined;
+  onBackgroundProcesses(listener: (session: string, processes: unknown) => void): void { this.lister = listener; }
+  /** The background processes stopped, by Droid's id (`DroidHandle.killBackgroundProcess`). */
+  readonly kills: string[] = [];
+  async killBackgroundProcess(processId: string): Promise<boolean> { this.kills.push(processId); return true; }
   die(): void { this.alive = false; this.exit?.(new Error("Droid process exited.")); }
 }
 
@@ -1388,6 +1394,40 @@ test("background work pins its process, while idle sessions can cool", async (t)
   await until(() => r.handle.closed === 1);
 });
 
+test("a command Droid runs in the background is a row of its own, which Stop ends through Droid's own call for that one, as Droid's footer does", async (t) => {
+  const r = await rig(t);
+  r.handle.script = async function* (handle) {
+    yield { type: "tool_call", name: "Execute", toolUseId: "loop", input: { command: "for i in 1 2 3; do echo tick $i; sleep 1; done", fireAndForget: true } };
+    yield { type: "tool_result", toolName: "Execute", toolUseId: "loop", content: "Background process started (PID: 4242)", isError: false };
+    yield result(handle.id);
+  };
+  await turn(r.session, r.sink, "start the loop");
+  const process = { id: "loop", pid: 4242, command: "for i in 1 2 3; do echo tick $i; sleep 1; done", startedAtMs: 1793781650937, toolUseId: "loop" };
+  // Another session's list (a subagent's) is not the thread's.
+  r.handle.lister!("child", [process]);
+  assert.equal(r.sink.events.filter((event) => event.type === "subagent").length, 0);
+  r.handle.lister!(r.handle.id, [process]);
+  const rows = () => r.sink.events.flatMap((event) => (event.type === "subagent" ? [event.subagent] : []));
+  assert.deepEqual(rows().map(({ id, kind, goal, status, stoppable, background }) => ({ id, kind, goal, status, stoppable, background })), [
+    { id: "loop#4242", kind: "command", goal: process.command, status: "running", stoppable: true, background: true },
+  ]);
+  assert.equal(await r.session.stopSubagent("loop#4242"), true);
+  assert.deepEqual(r.handle.kills, ["loop"]);
+  // Droid tells the end, then lists it no more (CLI 1.3).
+  tell(r.handle, { type: "create_message", message: { id: "execute-completion:loop", role: "user", visibility: "llm_only", content: [{ type: "text",
+    text: "Background Execute command finished.\ntool_use_id: loop\nexit_status: signal SIGTERM\nstopped_by: user\noutput: tick 1\n\n\nThis background process was intentionally stopped by the user, not by the command itself." }] } });
+  r.handle.lister!(r.handle.id, []);
+  assert.equal(rows().at(-1)!.status, "stopped");
+  assert.equal(await r.session.stopSubagent("loop#4242"), false, "ended: nothing to stop");
+  // Two under one id: Droid would stop whichever it finds first, so neither is offered.
+  r.handle.lister!(r.handle.id, [{ ...process, id: "call_0", pid: 1 }, { ...process, id: "call_0", pid: 2 }]);
+  assert.equal(await r.session.stopSubagent("call_0#1"), false);
+  assert.deepEqual(r.handle.kills, ["loop"]);
+  // Droid's process going away lets go of those still listed.
+  r.handle.die();
+  assert.deepEqual(rows().slice(-2).map(({ id, status }) => [id, status]), [["call_0#1", "stopped"], ["call_0#2", "stopped"]]);
+});
+
 test("a Script Droid runs on in the background pins its process until its completion, as a background command does: closing the process stops it and loses its result (Codex's review of n14/droid, P1)", async (t) => {
   const r = await rig(t);
   // CLI 0.250: a Script still running as its call returns answers {toolCallId, status: "running"}.
@@ -2206,7 +2246,7 @@ test("after a compaction, the person's or Droid's own, the meter reads what is l
   tell(r.handle, { type: "droid_working_state_changed", newState: "streaming_assistant_message" });
   lastCall(r.handle, { inputTokens: 908, cacheReadTokens: 137_309, outputTokens: 1004 });
   await turn(r.session, r.sink, "hello");
-  assert.deepEqual(usage(), { type: "usage", usage: { used: 139_221, max: 872_000 } });
+  assert.deepEqual(usage(), { type: "usage", usage: { used: 139_221, max: 800_000 } });
 
   // /compact: the compaction's own call, reported before Droid says it compacted and again after
   // (fixtures/droid/compact.jsonl), on the same session id, as CLI 0.245 keeps it.
@@ -2221,22 +2261,22 @@ test("after a compaction, the person's or Droid's own, the meter reads what is l
     return { session: next, removedCount: 40 };
   };
   assert.equal((await turn(r.session, r.sink, "/compact")).status, "complete");
-  assert.deepEqual(usage(), { type: "usage", usage: { used: 21_000, max: 872_000, estimated: true } }, "what is left, not 868,281");
+  assert.deepEqual(usage(), { type: "usage", usage: { used: 21_000, max: 800_000, estimated: true } }, "what is left, not 868,281");
   // The compaction's figure said again (Droid repeats its last call's whenever the session's totals change) is no new call.
   tell(next, { type: "droid_working_state_changed", newState: "thinking" });
   lastCall(next, { inputTokens: 139_000, cacheReadTokens: 0, outputTokens: 2000 });
-  assert.deepEqual(usage(), { type: "usage", usage: { used: 21_000, max: 872_000, estimated: true } });
+  assert.deepEqual(usage(), { type: "usage", usage: { used: 21_000, max: 800_000, estimated: true } });
   lastCall(next, { inputTokens: 900, cacheReadTokens: 21_000, outputTokens: 100 });
-  assert.deepEqual(usage(), { type: "usage", usage: { used: 22_000, max: 872_000 } });
+  assert.deepEqual(usage(), { type: "usage", usage: { used: 22_000, max: 800_000 } });
 
   // Droid compacting by itself, mid-turn: its compaction call, its word, the same figure again.
   lastCall(next, { inputTokens: 300_000, cacheReadTokens: 0, outputTokens: 3000 });
   tell(next, { type: "session_compacted", summaryId: "summary-2", removedCount: 50, visibleBoundaryMessageId: null });
   lastCall(next, { inputTokens: 300_000, cacheReadTokens: 0, outputTokens: 3000 });
   await until(() => (usage() as { usage?: { estimated?: boolean } } | undefined)?.usage?.estimated === true);
-  assert.deepEqual(usage(), { type: "usage", usage: { used: 21_000, max: 872_000, estimated: true } }, "what is left, not the figure from before");
+  assert.deepEqual(usage(), { type: "usage", usage: { used: 21_000, max: 800_000, estimated: true } }, "what is left, not the figure from before");
   lastCall(next, { inputTokens: 1000, cacheReadTokens: 20_000, outputTokens: 50 });
-  assert.deepEqual(usage(), { type: "usage", usage: { used: 21_050, max: 872_000 } });
+  assert.deepEqual(usage(), { type: "usage", usage: { used: 21_050, max: 800_000 } });
 });
 
 /** A thread on a long conversation (its last call 139,221), compacted with /compact, which leaves 21,000; the compaction's own call took 141,000. */
@@ -2261,7 +2301,7 @@ test("a thread compacted and reopened before Droid's next call reads what is lef
   const r = await compactedThread(t);
   r.handle.compactScript = r.compaction;
   await turn(r.session, r.sink, "/compact");
-  assert.deepEqual(r.provider.store.read("thread").contextUsage, { used: 21_000, max: 872_000, estimated: true });
+  assert.deepEqual(r.provider.store.read("thread").contextUsage, { used: 21_000, max: 800_000, estimated: true });
   await r.session.close();
   // Droid loads the session with the compaction's call as its last.
   r.sdk.loaded = { inputTokens: 139_000, cacheReadTokens: 0, outputTokens: 2000 };
@@ -2275,19 +2315,19 @@ test("a thread compacted and reopened before Droid's next call reads what is lef
   const sink = new Sink();
   const resumed = await r.provider.resumeSession(r.options(), sink);
   await turn(resumed, sink, "after a restart");
-  assert.deepEqual(sink.events.findLast((event) => event.type === "usage"), { type: "usage", usage: { used: 21_500, max: 872_000, estimated: true } });
+  assert.deepEqual(sink.events.findLast((event) => event.type === "usage"), { type: "usage", usage: { used: 21_500, max: 800_000, estimated: true } });
   // Droid's next call is taken, and from then on what Droid loads is trusted again.
   const h = r.sdk.handles.at(-1)!;
   tell(h, { type: "droid_working_state_changed", newState: "thinking" });
   lastCall(h, { inputTokens: 1000, cacheReadTokens: 21_000, outputTokens: 50 });
-  assert.deepEqual(sink.events.findLast((event) => event.type === "usage"), { type: "usage", usage: { used: 22_050, max: 872_000 } });
+  assert.deepEqual(sink.events.findLast((event) => event.type === "usage"), { type: "usage", usage: { used: 22_050, max: 800_000 } });
   assert.equal(r.provider.store.read("thread").staleCall, undefined);
   await resumed.close();
   r.sdk.loaded = { inputTokens: 1000, cacheReadTokens: 21_000, outputTokens: 50 };
   const again = new Sink();
   const reopened = await r.provider.resumeSession(r.options(), again);
   await turn(reopened, again, "again");
-  assert.deepEqual(again.events.findLast((event) => event.type === "usage"), { type: "usage", usage: { used: 22_050, max: 872_000 } });
+  assert.deepEqual(again.events.findLast((event) => event.type === "usage"), { type: "usage", usage: { used: 22_050, max: 800_000 } });
 });
 
 test("a thread compacted whose meter was not read again before it closed reopens to what is left, not the figure kept from before (Codex's re-check, P2)", async (t) => {
@@ -2310,7 +2350,7 @@ test("a thread compacted whose meter was not read again before it closed reopens
   };
   const sink = new Sink();
   await turn(await r.provider.resumeSession(r.options(), sink), sink, "after a restart");
-  assert.deepEqual(sink.events.findLast((event) => event.type === "usage"), { type: "usage", usage: { used: 21_500, max: 872_000, estimated: true } });
+  assert.deepEqual(sink.events.findLast((event) => event.type === "usage"), { type: "usage", usage: { used: 21_500, max: 800_000, estimated: true } });
 });
 
 test("a /compact that Droid finishes after a Stop still sets the meter to what is left (Codex's review of n14/droid, P2)", async (t) => {
@@ -2325,7 +2365,7 @@ test("a /compact that Droid finishes after a Stop still sets the meter to what i
   waiting.resolve();
   await until(() => r.provider.store.read("thread").session === r.next.id && r.sink.events.some((event) => event.type === "compacted"));
   await until(() => (r.sink.events.findLast((event) => event.type === "usage") as { usage?: { used?: number } } | undefined)?.usage?.used === 21_000);
-  assert.deepEqual(r.provider.store.read("thread").contextUsage, { used: 21_000, max: 872_000, estimated: true });
+  assert.deepEqual(r.provider.store.read("thread").contextUsage, { used: 21_000, max: 800_000, estimated: true });
 });
 
 /** A recording of Droid's (fixtures/droid), its session's id as the stand-in's: what Droid said, in the order it said it. */
@@ -2350,7 +2390,7 @@ function replayed(handle: Handle, records: Record<string, any>[], from: number, 
 }
 
 for (const name of ["task-stop-background", "task-stop-foreground", "task-stop-tool-id", "task-stop-idle"]) {
-  test(`Droid 1.0 stop probe (${name}): a worker-kill response is not a Task outcome, and no unsafe Stop is offered`, async (t) => {
+  test(`Droid stop probe (${name}): a worker-kill response is not a Task outcome, and no unsafe Stop is offered`, async (t) => {
     const r = await rig(t);
     const records = recording(name, r.handle.id);
     const firstResult = records.findIndex((record) => record.kind === "event" && record.event.type === "result");
@@ -2364,8 +2404,11 @@ for (const name of ["task-stop-background", "task-stop-foreground", "task-stop-t
       assert.deepEqual(records.find((record) => record.kind === "response" && record.call === "kill_background_process")!.result, { killed: false });
     } else {
       assert.deepEqual(response.result, {});
+      // It stops the parent: its turn as interrupted, or (Droid 1.3, the parent waiting on the
+      // Task's output) the parent's running tool as cancelled, its turn then ending as completed.
       assert.ok(records.some((record) => record.kind === "notification"
-        && record.notification.params?.notification?.message?.content?.some((block: { text?: string }) => block.text === "Request interrupted by user")));
+        && (record.notification.params?.notification?.message?.content?.some((block: { text?: string }) => block.text === "Request interrupted by user")
+          || record.notification.params?.notification?.content === "Error: Tool execution cancelled by user")));
     }
     r.sink.answer = async () => ({ kind: "approval", choice: "once" });
     r.handle.script = replayed(r.handle, records, records.findIndex((record) => record.kind === "send") + 1, firstResult + 1);
@@ -2373,7 +2416,9 @@ for (const name of ["task-stop-background", "task-stop-foreground", "task-stop-t
     assert.equal(r.session.hasBackgroundWork(), true, "the Task still runs after the parent turn ends");
     assert.equal(r.provider.store.read("thread").subagents![0].status, "running");
     assert.equal(r.provider.store.read("thread").subagents![0].stoppable, false);
-    assert.equal("stopSubagent" in r.session, false, "the mission worker RPC must not become an individual Task stop");
+    // Only a background command is stopped by itself (`droid.kill_background_process`), never a Task.
+    assert.equal(await r.session.stopSubagent(r.provider.store.read("thread").subagents![0].id), false, "the mission worker RPC must not become an individual Task stop");
+    assert.deepEqual(r.handle.kills, []);
     const mark = r.sink.events.length;
     for (const record of records.slice(firstResult + 1)) {
       if (record.kind === "notification") r.handle.notify(record.notification);
@@ -2390,7 +2435,7 @@ for (const name of ["task-stop-background", "task-stop-foreground", "task-stop-t
   });
 }
 
-test("the meter through a real Droid's turn, /compact and next turn (fixtures/droid/meter.jsonl, Droid 1.0.0 and SDK 0.10.0): the conversation's call; after /compact what is left; then the next call (D2, D3)", async (t) => {
+test("the meter through a real Droid's turn, /compact and next turn (fixtures/droid/meter.jsonl, Droid 1.0.0 and SDK 0.10.0): the conversation's call; after /compact what is left; then the next call; each against Droid's own budget (D2, D3)", async (t) => {
   const r = await rig(t);
   const records = recording("meter", r.handle.id);
   const usage = () => (r.sink.events.findLast((event) => event.type === "usage") as { usage?: unknown } | undefined)?.usage;
@@ -2402,10 +2447,13 @@ test("the meter through a real Droid's turn, /compact and next turn (fixtures/dr
   const breakdown = (step: string) => ContextBreakdownResultSchema.parse(records.find((record) => record.kind === "breakdown" && record.step === step)!.breakdown);
 
   r.handle.context = stats("after the first turn");
+  r.handle.breakdown = breakdown("after the first turn");
   r.handle.script = replayed(r.handle, records, sends[0] + 1, compacting);
   await turn(r.session, r.sink, records[sends[0]].prompt);
-  // The turn's call (19,137 in, 6 out), not the naming's (351 in, 4 out).
-  assert.deepEqual(usage(), { used: 19_143, max: 872_000 });
+  // The turn's call (19,137 in, 6 out), not the naming's (351 in, 4 out); out of what Droid's
+  // /context weighs it against (`contextBudget`), not get_context_stats's limit of 872,000.
+  assert.equal(stats("after the first turn").limit, 872_000);
+  assert.deepEqual(usage(), { used: 19_143, max: 200_000 });
 
   const next = new Handle(r.handle.id, r.handle.cwd, r.handle.options);
   next.settings = { ...r.handle.settings };
@@ -2417,13 +2465,13 @@ test("the meter through a real Droid's turn, /compact and next turn (fixtures/dr
   };
   assert.equal((await turn(r.session, r.sink, "/compact")).status, "complete");
   // What is left (Droid's /context), not get_context_stats's 12,678, unchanged by the compaction, nor its own call's 1,017.
-  assert.deepEqual(usage(), { used: 10_420, max: 872_000, estimated: true });
+  assert.deepEqual(usage(), { used: 10_420, max: 200_000, estimated: true });
 
   next.context = stats("after the turn after compacting");
   next.breakdown = breakdown("after the turn after compacting");
   next.script = replayed(next, records, sends[1] + 1, records.length);
   await turn(r.session, r.sink, records[sends[1]].prompt);
-  assert.deepEqual(usage(), { used: 19_419, max: 872_000 });
+  assert.deepEqual(usage(), { used: 19_419, max: 200_000 });
 });
 
 test("a Script Droid starts in the background, through a real Droid (fixtures/droid/script-background.jsonl, gpt-6.1-sol on Droid 1.0.0, SDK 0.10.0): its approval on the card, its process held while it runs, and Droid's turn for its completion told and ended (D1, D11)", async (t) => {
@@ -2574,13 +2622,19 @@ for (const sameID of [true, false]) {
     next.context = { ...next.context, used: 20 };
     r.sdk.contexts.set(next.id, next.cwd);
     let instructions: unknown;
+    let told = false;
     r.handle.compactScript = async (params) => {
       instructions = params;
-      r.handle.notify({ params: { notification: { type: "session_compacted", summaryId: "summary-one", removedCount: 6 } } });
+      // Droid answers first, and says it compacted after, to the session now the thread's (fixtures/droid/compact.jsonl).
+      setTimeout(() => {
+        next.notify({ params: { notification: { type: "session_compacted", summaryId: "summary-one", removedCount: 6 } } });
+        told = true;
+      }, 0);
       return { session: next, removedCount: 6 };
     };
     const compacted = await turn(r.session, r.sink, "/compact keep the decisions");
     assert.equal(compacted.status, "complete");
+    await until(() => told);
     assert.deepEqual(instructions, { customInstructions: "keep the decisions" });
     assert.equal(r.handle.prompts.length, 0);
     assert.equal(r.handle.closed, 0, "do not close the old wrapper sharing its successor's process");
@@ -2686,6 +2740,29 @@ for (const outcome of ["finished", "stopped"] as const) test(`Stop during Droid'
   assert.ok(kept.some((message) => message.role === "assistant" && message.text === "Reply: after the stop"));
   assert.deepEqual(kept.map((message) => message.role), outcome === "finished"
     ? ["user", "assistant", "user", "compaction", "assistant"] : ["user", "assistant", "user", "assistant"]);
+});
+
+for (const order of ["after", "before"] as const) test(`/compact whose word from Droid comes ${order} its answer records one marker, and Droid's own compaction after it is still recorded as automatic`, async (t) => {
+  const r = await rig(t);
+  const next = new Handle(r.handle.id, r.handle.cwd, r.handle.options);
+  next.settings = { ...r.handle.settings };
+  const compactedWord = (handle: Handle, summaryId: string) => handle.notify({ params: { notification: { type: "session_compacted", summaryId, removedCount: 6 } } });
+  r.handle.compactScript = async () => {
+    // After: as Droid 1.0 and 1.3 send it, some milliseconds after the answer. Before: one read in the same chunk as the answer.
+    if (order === "before") compactedWord(r.handle, "manual-summary");
+    return { session: next, removedCount: 6 };
+  };
+  assert.equal((await turn(r.session, r.sink, "/compact")).status, "complete");
+  if (order === "after") compactedWord(next, "manual-summary");
+  const triggers = () => r.sink.events.flatMap((event) => event.type === "compacted" ? [event.trigger] : []);
+  const markers = () => r.provider.store.read("thread").messages.flatMap((message) => message.role === "compaction" ? [message.trigger] : []);
+  assert.deepEqual(triggers(), ["manual"]);
+  assert.deepEqual(markers(), ["manual"]);
+  // Droid compacting by itself later is its own.
+  compactedWord(next, "auto-summary");
+  assert.deepEqual(triggers(), ["manual", "auto"]);
+  await until(() => markers().length === 2);
+  assert.deepEqual(markers(), ["manual", "auto"]);
 });
 
 test("automatic Droid compaction stores one marker and refreshes context without replacing the active handle", async (t) => {

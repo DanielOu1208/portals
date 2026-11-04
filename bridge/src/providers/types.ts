@@ -8,6 +8,7 @@ import type { TurnDiff } from "../sessions/turnDiff.ts";
 import type { MentionLimit } from "../sessions/mentions.ts";
 import type { From } from "../fleet/line.ts";
 import type { SearchFile } from "../search/readers.ts";
+import type { VersionCheck } from "./program.ts";
 
 /** An agent as the app's sidebar lists it (`profiles.list`). */
 export interface AgentProfile {
@@ -779,6 +780,8 @@ export interface Provider {
    * is asked first.
    */
   usage?(thread: string, options?: { fresh?: boolean }): Promise<UsageReport>;
+  /** The release of the agent's program the bridge knows of, and where it stands against the tested ones, for `/status`. */
+  readonly version?: VersionCheck;
   /**
    * The thread whose agent knows it now by `id`, when that is not the thread's own id:
    * a Cursor thread whose conversation was started afresh keeps its id, while the

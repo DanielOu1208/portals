@@ -4,6 +4,7 @@ import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import WebSocket, { WebSocketServer } from "ws";
+import { CodexError } from "../src/providers/codex/client.ts";
 import { fixture, fixtureCwd, recordedThread, rewrite } from "./codex-fixtures.ts";
 
 // A stand-in for Codex's shared app-server daemon: a WebSocket server on a unix socket
@@ -14,6 +15,9 @@ import { fixture, fixtureCwd, recordedThread, rewrite } from "./codex-fixtures.t
 // resumes the thread meanwhile.
 
 type Json = any;
+
+/** What Codex (0.166) says when asked for the turns of a thread it has loaded that has none yet. */
+const noTurnsYet = "list_turns is not supported yet";
 
 export class DaemonConnection {
   readonly socket: WebSocket;
@@ -89,6 +93,11 @@ export class FakeDaemon {
   readonly playing: Promise<void>[] = [];
   /** False: the socket refuses new connections (the daemon is down). */
   accepting = true;
+  /** The paged protocol; false stands in for an older app-server. */
+  pagedHistory = false;
+  historyPageSize = 2;
+  /** Runs after a turns page is captured, before it is returned. */
+  onTurnsRead: (params: Json) => void = () => {};
   /** While set, `turn/interrupt` is answered only once it resolves: Codex slow to take a Stop. */
   interruptHeld: Promise<void> | null = null;
   /** What `account/rateLimits/read` answers. */
@@ -439,7 +448,7 @@ export class FakeDaemon {
       const result = await this.handle(connection, call.method, call.params);
       connection.send({ id: message.id, result });
     } catch (error) {
-      connection.send({ id: message.id, error: { code: -32600, message: (error as Error).message } });
+      connection.send({ id: message.id, error: { code: error instanceof CodexError ? error.code : -32600, message: (error as Error).message } });
     }
   }
 
@@ -469,7 +478,7 @@ export class FakeDaemon {
       case "thread/resume": {
         await this.onResume(params);
         const thread = this.thread(params.threadId);
-        if (thread.turns.length === 0 && !thread.loaded) throw new Error(`no rollout found for thread id ${thread.id}`);
+        if (thread.turns.length === 0) throw new Error(thread.loaded ? noTurnsYet : `no rollout found for thread id ${thread.id}`);
         thread.loaded = true;
         if (thread.status.type === "notLoaded") thread.status = { type: "idle" };
         connection.subscribed.add(thread.id);
@@ -483,9 +492,22 @@ export class FakeDaemon {
         }
         return { thread: this.threadJSON(thread, params.excludeTurns !== true, true), ...this.settings(thread) };
       }
-      case "thread/read":
+      case "thread/turns/list": {
+        if (!this.pagedHistory) throw new CodexError(-32601, "Method not found: thread/turns/list");
+        const turns = this.threadJSON(this.thread(params.threadId), true).turns.reverse();
+        const start = Number(params.cursor ?? 0);
+        const limit = Math.min(params.limit ?? 50, this.historyPageSize);
+        const data = turns.slice(start, start + limit);
+        if (params.itemsView === "notLoaded") for (const turn of data) { turn.items = []; turn.itemsView = "notLoaded"; }
+        this.onTurnsRead(params);
+        return { data, nextCursor: start + limit < turns.length ? String(start + limit) : null, backwardsCursor: null };
+      }
+      case "thread/read": {
         await this.onRead(params);
-        return { thread: this.threadJSON(this.thread(params.threadId), params.includeTurns === true) };
+        const thread = this.thread(params.threadId);
+        if (params.includeTurns === true && thread.turns.length === 0 && thread.loaded) throw new Error(noTurnsYet);
+        return { thread: this.threadJSON(thread, params.includeTurns === true) };
+      }
       case "thread/fork": {
         const from = this.thread(params.threadId);
         if (from.turns.length === 0) throw new Error(`no rollout found for thread id ${from.id}`);

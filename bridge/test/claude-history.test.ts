@@ -26,14 +26,14 @@ test("a tool turn: the message, what Claude said and thought, one tool message p
   const messages = history("tools");
   assert.deepEqual(
     messages.map((message) => (message.role === "tool" ? `tool:${message.name}` : message.role)),
-    ["user", "assistant", "tool:read_file", "tool:patch", "tool:terminal", "assistant"],
+    ["user", "tool:read_file", "assistant", "tool:patch", "tool:terminal", "assistant"],
   );
-  assert.equal(textOf(messages[0]), "In hello.txt, use the Edit tool to change hi to hello. Then run `cat hello.txt` with the Bash tool. Finish with one short sentence.");
-  assert.equal(messages[0].timestamp, Date.parse("2026-10-14T11:14:59.412Z") / 1000);
-  const said = messages[1] as Extract<StoredMessage, { role: "assistant" }>;
-  // Haiku 5.5 thought before its first tool and said nothing.
+  assert.equal(textOf(messages[0]), "Read hello.txt with the Read tool. Then use the Edit tool to change hi to hello in it, and run `cat hello.txt` with the Bash tool. Finish with one short sentence.");
+  assert.equal(messages[0].timestamp, Date.parse("2026-11-04T09:26:17.278Z") / 1000);
+  const said = messages[2] as Extract<StoredMessage, { role: "assistant" }>;
+  // Haiku 5.5 read the file at once, then thought before its edit and said nothing.
   assert.equal(said.text, "");
-  assert.match(said.reasoning ?? "", /^I need to change "hi" to "hello"/);
+  assert.match(said.reasoning ?? "", /^I'm changing "hi" to "hello"/);
 
   const [read, edit, bash] = tools(messages);
   // History has Read's numbered text; the numbers are taken off.
@@ -42,7 +42,7 @@ test("a tool turn: the message, what Claude said and thought, one tool message p
   assert.deepEqual(JSON.parse(edit.content!), { success: true, diff: "--- a/hello.txt\n+++ b/hello.txt\n-hi\n+hello\n" });
   assert.deepEqual(edit.args, { path: "/tmp/aeriportal-cwd/hello.txt", old_string: "hi", new_string: "hello" });
   assert.deepEqual(JSON.parse(bash.content!), { output: "hello", exit_code: 0 });
-  assert.equal(bash.tool_call_id, "toolu_01QMWaenKeNAuHErqemcDu1u");
+  assert.equal(bash.tool_call_id, "toolu_011Qem8joxfsu6eARNcTcsi8");
   assert.equal(textOf(messages.at(-1)), 'I changed "hi" to "hello" in hello.txt, and `cat` confirms the file now reads "hello".');
 });
 
@@ -68,7 +68,7 @@ test("an interrupted reply is marked, and Claude's interruption note is not show
     ["user", "assistant"],
   );
   const reply = messages[1] as Extract<StoredMessage, { role: "assistant" }>;
-  assert.equal(reply.text, "1");
+  assert.equal(reply.text, "1\n2\n3\n4");
   assert.deepEqual(reply.display_metadata, { interrupted: true });
 });
 
@@ -121,10 +121,10 @@ test("what Claude Code wrote in the user's place when background work ended is t
     { ...ended, timestamp: 0 },
     {
       role: "user",
-      text: 'Background command "Sleep for 3 seconds in background" completed (exit code 0)',
+      text: 'Background command "Sleep 3 seconds in background" completed (exit code 0)',
       timestamp: 0,
       display_kind: "process_complete",
-      display_metadata: { display_text: 'Background command "Sleep for 3 seconds in background" completed (exit code 0)' },
+      display_metadata: { display_text: 'Background command "Sleep 3 seconds in background" completed (exit code 0)' },
     },
   );
   // After a restart: what did not finish, then the user's own message.
@@ -133,7 +133,7 @@ test("what Claude Code wrote in the user's place when background work ended is t
     [
       ["user", "", "Run `sleep 600` with the Bash tool in the background (run_in_background: true), then end your turn with one short sentence. Do not wait for it."],
       ["tool", "", ""],
-      ["assistant", "", "Started `sleep 600` in the background (task `bntpx7oa2`); I'll be notified when it finishes."],
+      ["assistant", "", "I started `sleep 600` in the background (task bq3l87u5p) and am not waiting on it."],
       ["user", "process_complete", "Background shell command didn't finish before the previous session ended"],
       ["user", "", "Is that command still running? Answer in one short sentence without using any tools."],
       ["assistant", "", textOf(history("resumed").at(-1)).split("\n")[0]],
@@ -149,8 +149,8 @@ test("what Claude Code wrote in the user's place when background work ended is t
 test("a /compact: the command, then the mark of where it compacted; the summary and the 'Compacted' after it are left out", () => {
   // getSessionMessages starts again at the compaction: the turn before it is gone.
   assert.deepEqual(history("compact"), [
-    { role: "user", text: "/compact", timestamp: Date.parse("2026-10-14T11:16:22.889Z") / 1000 },
-    { role: "compaction", trigger: "manual", timestamp: Date.parse("2026-10-14T11:16:27.156Z") / 1000 },
+    { role: "user", text: "/compact", timestamp: Date.parse("2026-11-04T09:19:14.037Z") / 1000 },
+    { role: "compaction", trigger: "manual", timestamp: Date.parse("2026-11-04T09:19:18.210Z") / 1000 },
   ]);
 });
 
@@ -185,12 +185,12 @@ test("each turn's last message says the tokens it spent, the same that its resul
   const live = (name: string) => (joined(replayStream(name)) as ProviderEvent[]).flatMap((event) => (event.type === "turn.end" && event.spent?.tokens ? [event.spent.tokens] : []));
   for (const name of ["plain", "tools", "approval", "background", "subagents", "interrupt"]) assert.deepEqual(spent(name), live(name), name);
   // The live turn had a message steered in; history shows it as a turn of its own, each with its own share.
-  assert.deepEqual(spent("steer"), [25_392, 27_293]);
-  assert.deepEqual(live("steer"), [25_392 + 27_293]);
+  assert.deepEqual(spent("steer"), [24_885, 28_254]);
+  assert.deepEqual(live("steer"), [24_885 + 28_254]);
   // It goes with the turn's last message: the reply.
   const tools = history("tools");
   assert.equal(tools.at(-1)?.role, "assistant");
-  assert.deepEqual(tools.at(-1)?.turn_usage, { tokens: 108_407 });
+  assert.deepEqual(tools.at(-1)?.turn_usage, { tokens: 82_277 });
 });
 
 // recovery-8: a turn the bridge recorded running that is over at the next load is told as

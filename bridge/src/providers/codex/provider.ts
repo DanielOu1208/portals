@@ -28,7 +28,7 @@ import {
   type ThreadMode,
   type UsageReport,
 } from "../types.ts";
-import { reportVersion } from "../program.ts";
+import { userAgentVersion, VersionCheck } from "../program.ts";
 import { titleFrom, titleSource } from "../titles.ts";
 import { CodexClient, processConnector, socketConnector, type ClientListener, type Connector } from "./client.ts";
 import { codexVersion, defaultSocketPath, desktopDefaults, testedCodexVersion, threadModeFor, type DesktopDefaults } from "./options.ts";
@@ -167,6 +167,8 @@ export class CodexProvider implements Provider, CodexHost {
   private readonly env: NodeJS.ProcessEnv;
   private readonly portals: CommandAccess | undefined;
   private readonly checking: boolean;
+  /** Which Codex runs: `codex --version` at start, then what the app server says of itself at each connect. */
+  readonly version: VersionCheck;
   private readonly ownProcess: ReturnType<typeof processConnector> | null;
   private readonly sessions = new Map<string, CodexSession>();
   /** Threads made by `newThread`, until their session is started. */
@@ -205,6 +207,7 @@ export class CodexProvider implements Provider, CodexHost {
     this.daemonStartMs = options.daemonStartMs ?? 30_000;
     this.readyMs = options.readyMs ?? 15_000;
     this.checking = options.checkVersion ?? true;
+    this.version = new VersionCheck({ name: "Codex", tested: testedCodexVersion, path: options.settings.path, setting: "codex.path" });
     this.configPath = options.configPath ?? join(homedir(), ".codex", "config.toml");
     this.folderRefreshMs = options.folderRefreshMs ?? folderRefreshMs;
     this.parentsKept = Math.max(1, options.parentsKept ?? parentsKeptDefault);
@@ -253,8 +256,7 @@ export class CodexProvider implements Provider, CodexHost {
   }
 
   private async checkVersion(): Promise<void> {
-    const version = await codexVersion(this.settings.path, this.env);
-    reportVersion({ name: "Codex", version, tested: testedCodexVersion, path: this.settings.path, setting: "codex.path" });
+    this.version.installedIs(await codexVersion(this.settings.path, this.env));
   }
 
   /**
@@ -342,6 +344,8 @@ export class CodexProvider implements Provider, CodexHost {
       if (typeof threadID === "string") void this.subAgentRequest(threadID, id, method, params ?? {});
     },
     connected: (again) => {
+      // The daemon joined may be another release than `codex --version` says, and one started again after an update a newer one.
+      this.version.runningIs(userAgentVersion(this.client.userAgent));
       if (!again) return;
       this.catalog = null;
       void this.catalogReady().catch(() => undefined);

@@ -31,6 +31,7 @@ import { InputQueue } from "./input.ts";
 import { claudeEffort, permissionModeFor, queryOptions, thinkingBudget, threadModeFor } from "./options.ts";
 import { permissionRequest, permissionResult } from "./permissions.ts";
 import type { CommandAccess } from "../../portals/access.ts";
+import type { VersionCheck } from "../program.ts";
 import type { Warmable, WarmPool } from "../pool.ts";
 import { ClaudeStream, type ContextWindows } from "./stream.ts";
 import type { PastSubagent } from "./tasks.ts";
@@ -141,6 +142,8 @@ export interface ClaudeHost {
   learn(query: QueryLike, reported: { permissionMode: string | null; effort: string | null }, overridden: boolean): void;
   /** Claude Code said how much of a usage limit is used (`rate_limit_event`), for `/usage`. */
   limitsHeard(info: Record<string, unknown>): void;
+  /** Which Claude Code runs, which each process says in its `system/init` (`claude_code_version`). */
+  readonly version: VersionCheck;
   /** A session closed: the provider keeps track of it no longer. */
   forget(session: ClaudeSession): void;
   /** The window each model's context fills, as its processes have said. */
@@ -555,6 +558,7 @@ export class ClaudeSession implements ProviderSession, Warmable {
   private receive(live: Live, message: SDKMessage): void {
     if (this.live !== live) return;
     if (message.type === "rate_limit_event") this.host.limitsHeard(message.rate_limit_info as Record<string, unknown>);
+    if (message.type === "system" && message.subtype === "init") this.host.version.runningIs(message.claude_code_version);
     // Claude Code also sends `api_retry` after a turn's result, as a heartbeat while a
     // background agent waits out a usage limit: at rest there is no turn to show it in,
     // and a line held from it would stand over the next run (2026-10-26: "Drop
