@@ -5,6 +5,7 @@ import { log } from "../../log.ts";
 import type { ChildExit } from "../child.ts";
 import { imageType, skippedImagesText } from "../images.ts";
 import type { Warmable, WarmPool } from "../pool.ts";
+import { notSignedIn } from "../signIn.ts";
 import { titleFrom } from "../titles.ts";
 import type { ModelChangeResult, Prompt, ProviderEvent, ProviderSession, SessionOptions, SessionSettings, SessionSink, StoredMessage } from "../types.ts";
 import { PiClient, PiGone, PiRefused } from "./client.ts";
@@ -213,6 +214,18 @@ function quoted(message: string): string {
 function unsentText(messages: string[]): string {
   const one = messages.length === 1;
   return `${one ? "A message was" : `${messages.length} messages were`} not sent, because Pi was stopped before it read ${one ? "it" : "them"}: ${messages.map(quoted).join(", ")}`;
+}
+
+/**
+ * Why Pi would not run a message, as the thread says it. For a model provider it has no
+ * sign-in or key for, what to run on the host, in place of Pi's own words: they name its
+ * /login as if typed here and the paths of its docs on the host (Pi 1.5.0, "No API key
+ * found for openai." and "Authentication failed for "openai". … Run '/login openai'").
+ */
+export function refusalText(message: string): string {
+  const provider = /^No API key found for (.+?)\.(?:\s|$)/.exec(message)?.[1] ?? /^Authentication failed for "([^"]+)"/.exec(message)?.[1];
+  if (provider === undefined) return message;
+  return notSignedIn("pi", provider === "the selected model" ? {} : { to: provider });
 }
 
 export class PiSession implements ProviderSession, Warmable {
@@ -494,7 +507,7 @@ export class PiSession implements ProviderSession, Warmable {
         return;
       }
       // No model, no key, a sign-in that ran out. A process that ended has ended the turn itself.
-      if (!(error instanceof PiGone)) this.finish(live, "error", (error as Error).message);
+      if (!(error instanceof PiGone)) this.finish(live, "error", refusalText((error as Error).message));
       return;
     }
     if (!this.mine(turn)) return;

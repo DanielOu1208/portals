@@ -1,6 +1,7 @@
 import "./environment.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { setLogLevel } from "../src/log.ts";
 import { HermesSession, type HermesHost, type Loaded } from "../src/providers/hermes/session.ts";
 import type { Frame } from "../src/providers/hermes/client.ts";
 import type { Registry, ThreadRecord } from "../src/sessions/registry.ts";
@@ -438,6 +439,49 @@ test("a message sent while Hermes still runs a stopped turn is not sent, and fai
     listing.resolve({ sessions: [] });
     for (let index = 0; index < 5; index++) await step();
     assert.equal(calls.filter((call) => call === "prompt.submit").length, 1);
+  } finally { await core.close(); }
+});
+
+test("a turn Hermes ends with a status the bridge does not know keeps what was said, and is not told as finished; one that says none still is", async () => {
+  const { core, adapter } = await fixture();
+  try {
+    adapter.event("message.complete", 2, { status: "budget_exhausted", text: "A" });
+    assert.equal(core.isRunning, false);
+    assert.deepEqual(core.messages.slice(-2).map((message) => [message.role, (message as { text?: string }).text, (message as { display_kind?: string }).display_kind]), [
+      ["assistant", "A", undefined],
+      ["assistant", 'Hermes ended the turn in a way Portals does not know ("budget_exhausted").', "failed_turn"],
+    ]);
+    core.submit("again").begin?.();
+    adapter.event("message.start", 3, {});
+    adapter.event("message.complete", 4, { text: "Done again." });
+    assert.equal(core.isRunning, false);
+    assert.deepEqual(core.messages.slice(-1).map((message) => [message.role, (message as { text?: string }).text, (message as { display_kind?: string }).display_kind]), [["assistant", "Done again.", undefined]]);
+  } finally { await core.close(); }
+});
+
+test("an event Hermes sends that the bridge does not know is said once in the log for its kind; one it lets pass on purpose is not", async (t) => {
+  const lines: string[] = [];
+  const write = process.stderr.write;
+  process.stderr.write = ((chunk: unknown) => {
+    lines.push(String(chunk));
+    return true;
+  }) as typeof process.stderr.write;
+  setLogLevel("info");
+  t.after(() => {
+    process.stderr.write = write;
+    setLogLevel("silent");
+  });
+  const { core, adapter } = await fixture();
+  try {
+    adapter.event("something.new", 2, { detail: 1 });
+    adapter.event("something.new", 3, { detail: 2 });
+    adapter.event("tool.generating", 4, { name: "terminal" });
+    adapter.event("subagent.progress", 5, {});
+    const unknown = lines.filter((line) => line.includes("Hermes sent an event the bridge does not know"));
+    assert.equal(unknown.length, 1);
+    assert.match(unknown[0], /"type":"something\.new"/);
+    // Nothing of it reaches the thread: the turn runs on.
+    assert.equal(core.isRunning, true);
   } finally { await core.close(); }
 });
 

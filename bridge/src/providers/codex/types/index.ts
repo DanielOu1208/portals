@@ -1,4 +1,4 @@
-// The Codex app-server protocol types the bridge uses, from codex-cli 0.162.1
+// The Codex app-server protocol types the bridge uses, from codex-cli 0.166.0
 // (`codex app-server generate-ts --experimental`, copied by scripts/codex-types.ts).
 // Generated: do not edit by hand.
 

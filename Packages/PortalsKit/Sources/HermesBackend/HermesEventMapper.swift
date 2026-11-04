@@ -141,6 +141,14 @@ enum HermesEventMapper {
 
         case "status.update":
             let text = plain(payload["text"]?.stringValue ?? "")
+            // A bridge's: a message steered in that a Stop took back before the agent read
+            // it. This app's own goes back to its composer, in place of the notice.
+            if features.contains(BridgeWire.Feature.steerWithdrawn), let withdrawn = payload["withdrawn"], let stored = withdrawn["text"]?.stringValue {
+                let id = withdrawn["message_id"]?.stringValue
+                if let id, isOwn(id), let own = UUID(uuidString: id) { return [.ownMessageWithdrawn(own, text: stored)] }
+                let gone = ThreadEvent.messageWithdrawn(stored, messageID: id.flatMap(UUID.init(uuidString:)))
+                return text.isEmpty ? [gone] : [gone, .notice(Notice(.warning, text))]
+            }
             switch payload["kind"]?.stringValue {
             case "info": return text.isEmpty ? [] : [.notice(Notice(.info, text))]
             case "warn": return text.isEmpty ? [] : [.notice(Notice(.warning, text))]

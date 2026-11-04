@@ -410,6 +410,8 @@ export class Session {
    * and no message of its own for it.
    */
   private readonly cardAnswerOf = new WeakMap<Prompt, string>();
+  /** The id its device gave each message handed to the running turn, which a Stop may take back from the agent (`steer.withdrawn`). */
+  private readonly steeredIDs = new WeakMap<Prompt, string>();
   /**
    * The notes given with a no that go to the agent a step later (`ask`), until they have:
    * a close in between says them at once (to disk, `sayNote` while closing), since the
@@ -1168,6 +1170,7 @@ export class Session {
     this.withdrawAsked("replied");
     // The answers given on a card (feature async_questions): their row shows them.
     const cardAnswer = this.cardAnswerOf.get(prompt);
+    if (messageID !== undefined) this.steeredIDs.set(prompt, messageID);
     this.transcript.steer(storedUserText(prompt), messageID, cardAnswer);
     if (told) this.emit("message.steered", messageFields(storedUserText(prompt), told.sender, told.messageID, this.fromOf(storedUserText(prompt)), cardAnswer));
     const cleared = this.endedToClear(prompt);
@@ -2484,6 +2487,20 @@ export class Session {
         if (!this.running) this.startNext();
         return;
       }
+      case "steer.withdrawn": {
+        // Stopped before the agent read it: it leaves the turn it was shown in, and goes
+        // back to the composer of the device that sent it (feature steer_withdrawn). An app
+        // without the feature shows the notice, with the whole message, so that it is not
+        // lost unseen.
+        const text = storedUserText(event.prompt);
+        const messageID = this.steeredIDs.get(event.prompt);
+        this.transcript.withdraw(text, messageID);
+        this.emit("status.update", {
+          kind: "warn", text: `Stop took back a message before the agent read it, so it was not sent: “${text}”`,
+          withdrawn: { text, ...(messageID !== undefined ? { message_id: messageID } : {}) },
+        });
+        return;
+      }
       case "queue.failed": {
         const queued = this.queue.find((entry) => entry.requestId === event.requestId);
         if (!queued) return;
@@ -2967,7 +2984,8 @@ export function isCommand(prompt: Prompt): boolean {
 /**
  * How the last turn of a stored conversation ended, for one that ended while the bridge
  * was off, from what the agent kept of it: failed (a failed turn's line), stopped (the
- * interrupted mark), or else finished, with its last reply as a turn's end is told.
+ * interrupted mark, or a record that ends where the turn was cut off), or else finished,
+ * with its last reply as a turn's end is told.
  */
 function endedWhileAway(messages: readonly StoredMessage[]): { status: TurnStatus; text: string } {
   let reply = "";
@@ -2978,6 +2996,11 @@ function endedWhileAway(messages: readonly StoredMessage[]): { status: TurnStatu
     // ended it. One before a reply is a boundary, as any user row: Pi keeps a failed try,
     // a steer and the reply that ended the turn well.
     if (last && message.role === "user" && message.display_kind === "steer") continue;
+    // A crash that took the agent's process with the bridge leaves a record that ends
+    // where the turn was cut off, with no mark of it (Pi's file: the message, and the row
+    // of a command it ran): the turn was stopped when the bridge stopped, as a restart
+    // stops one (recovery-7), not finished. Claude Code's says so itself (`lastTurnCutOff`).
+    if (last && cutOffAt(message)) return { status: "interrupted", text: "" };
     if (message.role === "user") break;
     const text = typeof message.text === "string" ? message.text : "";
     if (message.display_kind === "failed_turn") return { status: "error", text };
@@ -2986,4 +3009,16 @@ function endedWhileAway(messages: readonly StoredMessage[]): { status: TurnStatu
     if (reply === "" && message.role === "assistant" && text.trim() !== "") reply = text;
   }
   return { status: "complete", text: reply };
+}
+
+/**
+ * Whether a stored conversation that ends on `message` ends mid-turn: on the person's
+ * message, which nothing answered, or on a tool's row with no reply after it. Not on a
+ * command, which may end its turn with no answer (a `/compact` that failed), nor on a plan
+ * or questions, which can be how a turn ends (Codex's plan mode, its questions asked
+ * without waiting).
+ */
+function cutOffAt(message: StoredMessage): boolean {
+  if (message.role === "user") return !isCommand({ text: message.text, images: [] });
+  return message.role === "tool" && message.name !== "plan" && message.name !== "clarify";
 }
