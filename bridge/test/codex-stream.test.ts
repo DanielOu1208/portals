@@ -396,7 +396,8 @@ test("a plan streams into its row as Codex writes it (the recorded plan's deltas
   }
   const shown = progress.filter((event) => event.type === "tool.progress" && event.id === plan.id).map((event) => (event as { output: string }).output);
   assert.ok(shown.length > 10, "the plan comes a piece at a time");
-  assert.equal(shown[0], "1");
+  // The first piece as the recording has it (a recording on another release may start differently).
+  assert.equal(shown[0], entries.find((entry) => entry.method === "item/plan/delta")!.params.delta);
   assert.ok(shown.every((output, index) => index === 0 || output.startsWith(shown[index - 1])), "each piece follows on from the last");
   // All that was written (Codex says the pieces need not add up to the plan it ends with)…
   assert.equal(shown.at(-1), entries.filter((entry) => entry.method === "item/plan/delta").map((entry) => entry.params.delta).join(""));
