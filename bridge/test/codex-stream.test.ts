@@ -2,7 +2,9 @@ import "./environment.ts";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { test } from "node:test";
+import { machineWord } from "../src/platform.ts";
 import { CodexStream, rateLimitNotices, windowName } from "../src/providers/codex/stream.ts";
+import { notSignedIn } from "../src/providers/signIn.ts";
 import type { ProviderEvent } from "../src/providers/types.ts";
 import { fixture, fixtureCwd, joined, recordedHistory, recordedThread, replayStream } from "./codex-fixtures.ts";
 
@@ -178,6 +180,24 @@ test("a failed turn ends with Codex's error; one Codex retries is a passing stat
     { type: "tool.end", id: "c1", name: "terminal", args: { command: "sleep 100" }, result: { status: "error", error: "Stopped before it finished." } },
     { type: "turn.end", status: "error", error: "stream disconnected", retryable: true },
   ]);
+});
+
+test("a turn Codex could not sign in for ends with what to run on the host, not the HTTP error, and can be tried again", () => {
+  const signedOut = notSignedIn("codex");
+  assert.equal(signedOut, `Codex is not signed in on this ${machineWord()}. Run \`codex login\` in a terminal there, then try again.`);
+  // As Codex 0.166.0 ends a turn with no sign-in.
+  const stream = new CodexStream({ cwd: "/w" });
+  stream.beginTurn("t1");
+  const error = { message: "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses", codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 401 } }, additionalDetails: null };
+  assert.deepEqual(stream.map("turn/completed", { turn: { id: "t1", status: "failed", error, items: [] } }), [{ type: "turn.end", status: "error", error: signedOut, retryable: true }]);
+  // Said by the error before a turn that names none, and as `unauthorized`.
+  stream.beginTurn("t2");
+  stream.map("error", { turnId: "t2", willRetry: false, error: { message: "401 Unauthorized", codexErrorInfo: "unauthorized" } });
+  assert.deepEqual(stream.map("turn/completed", { turn: { id: "t2", status: "failed", error: null, items: [] } }), [{ type: "turn.end", status: "error", error: signedOut, retryable: true }]);
+  // Another status is Codex's own error.
+  stream.beginTurn("t3");
+  const busy = { message: "unexpected status 503", codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 503 } }, additionalDetails: null };
+  assert.deepEqual(stream.map("turn/completed", { turn: { id: "t3", status: "failed", error: busy, items: [] } }), [{ type: "turn.end", status: "error", error: "unexpected status 503", retryable: true }]);
 });
 
 test("plan updates are to-do rows; a thread name is the title", () => {

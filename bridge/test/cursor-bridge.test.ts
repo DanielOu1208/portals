@@ -1756,7 +1756,7 @@ test("a Cursor that is not signed in says so with what to do, and its process is
   writeFileSync(join(state.agentDir, "signed-out"), "");
   let before = calls(state.agentDir).length;
   await assert.rejects(createThread({}, state.phone), (error: RpcFailure) => error.message === notSignedInText);
-  assert.equal(notSignedInText, `Cursor is not signed in on this ${machineWord()}. Run \`cursor-agent login\` in a terminal there.`);
+  assert.equal(notSignedInText, `Cursor is not signed in on this ${machineWord()}. Run \`cursor-agent login\` in a terminal there, then try again.`);
   const refused = calls(state.agentDir).slice(before);
   assert.deepEqual(methods(refused), ["initialize", "cursor/list_available_models", "session/new"]);
   await until(() => !alive(refused[0].pid), "the signed-out process has gone");
@@ -1784,6 +1784,17 @@ test("a reply that ends with Cursor's request to sign in fails the turn with the
   assert.equal(failed.status, "error");
   assert.equal(failed.text, notSignedInText);
   // That process lost its sign-in for good: the next message starts another.
+  await until(() => !alive(pid), "the process has gone");
+  assert.notEqual(Number(/pid=(\d+)/.exec(await reply(session, "where", state.phone))?.[1]), pid);
+});
+
+test("a sign-in Cursor's backend refuses fails the turn with the same sentence, and the process is stopped as for one that has gone", async (t) => {
+  const state = await rig(t);
+  const session = await createThread({}, state.phone);
+  const pid = Number(/pid=(\d+)/.exec(await reply(session, "where", state.phone))?.[1]);
+  const events = await runTurn(state.phone, session, "refused");
+  assert.deepEqual([events.at(-1).payload.status, events.at(-1).payload.text, events.at(-1).payload.error_surface?.retryable], ["error", notSignedInText, true]);
+  assert.equal(events.some((event: any) => event.type === "message.delta" && /unauthenticated/.test(event.payload.text)), false);
   await until(() => !alive(pid), "the process has gone");
   assert.notEqual(Number(/pid=(\d+)/.exec(await reply(session, "where", state.phone))?.[1]), pid);
 });

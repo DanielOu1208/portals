@@ -134,6 +134,14 @@ test("the child's environment leaves out Claude Code's own variables and any inh
   assert.equal(childEnvironment({}, { clientApp: "a", apiKey: null, toolSummaries: true }).CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES, "1");
 });
 
+test("a token from claude setup-token reaches the child only from config.json, and an API key there is used over it", () => {
+  // One in the bridge's own environment is dropped, as before.
+  assert.equal(childEnvironment({ CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-env" }, { clientApp: "a", apiKey: null }).CLAUDE_CODE_OAUTH_TOKEN, undefined);
+  assert.equal(childEnvironment({ CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-env" }, { clientApp: "a", apiKey: null, oauthToken: "sk-ant-oat01-config" }).CLAUDE_CODE_OAUTH_TOKEN, "sk-ant-oat01-config");
+  const both = childEnvironment({}, { clientApp: "a", apiKey: "sk-config", oauthToken: "sk-ant-oat01-config" });
+  assert.deepEqual([both.ANTHROPIC_API_KEY, both.CLAUDE_CODE_OAUTH_TOKEN], ["sk-config", undefined]);
+});
+
 test("query options: Dana's settings, partial messages, summarized thinking, and resume or a chosen id", () => {
   const canUseTool = async () => ({ behavior: "deny" as const, message: "no" });
   const fresh = queryOptions({ claudePath: "/c", cwd, env: {}, sessionId: "id-1", model: "default", permissionMode: null, effort: null, adaptiveThinking: true, title: "T", canUseTool });

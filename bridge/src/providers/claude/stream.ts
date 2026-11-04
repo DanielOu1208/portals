@@ -1,8 +1,10 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { basename, dirname, isAbsolute } from "node:path";
 import { BackgroundCommands } from "../backgroundCommands.ts";
+import { notSignedIn } from "../signIn.ts";
 import type { ContextUsage, ProviderEvent, SubagentStatus } from "../types.ts";
 import { ended, noteFor, type Ended, type TaskInfo } from "./background.ts";
+import type { ThreadSignIn } from "./signIn.ts";
 import { TaskBoard } from "./tasks.ts";
 import { ClaudeTodos } from "./todos.ts";
 import { gatewayResult, gatewayTool, historyLosesDiff } from "./tools.ts";
@@ -45,7 +47,9 @@ import { windowNames } from "./usage.ts";
 //   Either failure, or Claude's own (the API's), on a message with another sent in
 //   behind it is said in passing, as the turn goes on to answer that one. Claude Code
 //   says the API's in a message of its own as well (`<synthetic>`, with an `error`),
-//   which is left out: the result says it once.
+//   which is left out: the result says it once. One for the sign-in
+//   (`authentication_failed`) ends the turn with what to run on the host instead
+//   (signIn.ts), as Claude Code's words name its /login.
 
 export interface StreamOptions {
   /** The thread's folder, for paths in diffs. */
@@ -60,6 +64,8 @@ export interface StreamOptions {
   todos?: ClaudeTodos;
   /** The window each model's context fills, as the provider's processes have said, which outlasts a query. */
   windows?: ContextWindows;
+  /** When the sign-in ends, and what the thread says of it, which outlasts a query. */
+  signIn?: ThreadSignIn;
 }
 
 /**
@@ -137,6 +143,9 @@ export class ClaudeStream {
   private commandFailure: string | null = null;
   /** Why a compaction failed on the way, until the result says whether a command asked for it. */
   private compactFailure: string | null = null;
+  /** Claude Code said the sign-in was refused, until the result that ends that part of the turn. */
+  private signInRefused = false;
+  private readonly signIn: ThreadSignIn | undefined;
   /** Tokens in the context at the last request, and the window they fill. */
   private contextTokens = 0;
   private contextWindow = 0;
@@ -162,6 +171,7 @@ export class ClaudeStream {
     this.board = new TaskBoard(this.now);
     this.todos = options.todos ?? new ClaudeTodos();
     this.windows = options.windows;
+    this.signIn = options.signIn;
     this.commands = new BackgroundCommands(options.background ?? (() => {}), { now: this.now });
   }
 
@@ -304,7 +314,10 @@ export class ClaudeStream {
     }
     // Not Claude speaking either: Claude Code saying the API failed on the message (a model
     // it has no access to, say), as the result that follows says too.
-    if (typeof m.error === "string" && m.message?.model === "<synthetic>") return [];
+    if (typeof m.error === "string" && m.message?.model === "<synthetic>") {
+      if (m.error === "authentication_failed") this.signInRefused = true;
+      return [];
+    }
     const events: ProviderEvent[] = [];
     for (const block of Array.isArray(m.message?.content) ? m.message.content : []) {
       if (block.type === "text" && typeof block.text === "string" && block.text !== "" && !this.streamedText.has(id)) {
@@ -590,6 +603,12 @@ export class ClaudeStream {
     this.streamedThinking.clear();
 
     const { failure, notices } = this.failures(m);
+    this.signIn?.heard(m.credential_expires_at);
+    const ending = this.signIn?.notice();
+    if (ending) notices.push({ type: "notice", level: "warn", text: ending });
+    // Claude Code's words name its /login; the sentence names what to run on the host.
+    const failed = this.signInRefused ? (this.signIn?.refused() ?? notSignedIn("claude")) : failureText(m);
+    this.signInRefused = false;
     if (this.unanswered.size > 0) {
       // Another of Claude's turns follows for a message sent meanwhile: what it said so
       // far stays above what comes next.
@@ -601,7 +620,7 @@ export class ClaudeStream {
       // A command that did not work, or Claude failing on the message (the API, say), is
       // not the end of the turn: it is said in passing.
       if (failure) events.push({ type: "notice", level: "warn", text: failure.error });
-      else if (m.subtype !== "success" || m.is_error === true) events.push({ type: "notice", level: "error", text: failureText(m) });
+      else if (m.subtype !== "success" || m.is_error === true) events.push({ type: "notice", level: "error", text: failed });
       return [...events, ...notices];
     }
 
@@ -626,7 +645,7 @@ export class ClaudeStream {
     } else if (m.subtype === "success" && m.is_error !== true) {
       events.push({ type: "turn.end", status: "complete", usage, ...spent });
     } else {
-      events.push({ type: "turn.end", status: "error", error: failureText(m), retryable: true, usage, ...spent });
+      events.push({ type: "turn.end", status: "error", error: failed, retryable: true, usage, ...spent });
     }
     return events;
   }

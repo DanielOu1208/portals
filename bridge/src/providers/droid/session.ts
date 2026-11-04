@@ -8,6 +8,7 @@ import { log } from "../../log.ts";
 import { noteFor, type Ended } from "../claude/background.ts";
 import { imageType, skippedImagesText } from "../images.ts";
 import type { WarmPool } from "../pool.ts";
+import { notSignedIn } from "../signIn.ts";
 import { titleFrom } from "../titles.ts";
 import {
   SettingRefused, type CompactionTrigger, type ModeState, type ModelChangeResult, type Prompt, type ProviderEvent,
@@ -1014,7 +1015,7 @@ export class DroidSession implements ProviderSession {
     const result = turn.own!.tracker.completeTurn(completed as Parameters<StreamStateTracker["completeTurn"]>[0]);
     turn.stream.accept(result);
     const interrupted = turn.interrupted || result.interrupted;
-    const failure = result.success || interrupted ? undefined : result.error?.message ?? "Droid could not complete this turn.";
+    const failure = result.success || interrupted ? undefined : failureText(result.error?.message ?? "Droid could not complete this turn.");
     const spent = this.spentBy(result);
     this.end(turn, { type: "turn.end", status: interrupted ? "interrupted" : failure ? "error" : "complete",
       ...(failure ? { error: failure } : {}), ...(spent ? { spent } : {}) });
@@ -1107,11 +1108,11 @@ export class DroidSession implements ProviderSession {
       }
       if (!turn.stream.result) failure = "Droid stopped without reporting the end of the turn.";
       else if (!turn.stream.result.success && !turn.stream.result.interrupted) {
-        failure = turn.stream.result.error?.message ?? turn.stream.error ?? "Droid could not complete this turn.";
+        failure = failureText(turn.stream.result.error?.message ?? turn.stream.error ?? "Droid could not complete this turn.");
       }
       if (!turn.ended) await this.refreshContext();
     } catch (error) {
-      failure = error instanceof Error ? error.message : String(error);
+      failure = failureText(error instanceof Error ? error.message : String(error));
       // A setting Droid cannot take says so; the process is fine and stays.
       if (error instanceof SettingRefused) failure = `${failure} Choose another model or reasoning level for this thread.`;
       else if (!(error instanceof DroidBusy) && !turn.ended) await this.release();
@@ -1453,4 +1454,13 @@ export class DroidSession implements ProviderSession {
     await this.release();
     this.host.forget(this);
   }
+}
+
+/**
+ * Why a turn failed, as the thread says it: Droid's words, but for a sign-in it does not
+ * have ("No access token available", Droid 1.3.0 signed out, or a turn ended as
+ * `model_authentication_failed`), what to run on the host instead.
+ */
+function failureText(message: string): string {
+  return /^No access token available\b|\bmodel_authentication_failed\b/.test(message) ? notSignedIn("droid") : message;
 }
