@@ -450,6 +450,8 @@ async function chooseClaude(raw: RawConfig, claude: FoundAgent, wanted: ClaudeMo
   raw.providers.claude = true;
   if (mode === "login") {
     raw.claude.apiKey = null;
+    // A token from `claude setup-token` would be used over the login, so it goes too.
+    raw.claude.oauthToken = null;
     if (claude.signedIn === false) ui.warn("Claude Code is not signed in. Run claude once and sign in.");
     else ui.ok("Claude Code uses your own login, as in your terminal.");
     ui.say(termsNote);

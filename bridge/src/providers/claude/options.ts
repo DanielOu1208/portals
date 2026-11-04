@@ -10,7 +10,7 @@ import type { ThreadMode } from "../types.ts";
 // `claude` signs in with its own login (in the Keychain on a Mac, in
 // ~/.claude/.credentials.json on Linux). Only `claude.apiKey` in config.json, off by
 // default, gives the child an API key instead, or `claude.oauthToken` a long-lived token
-// from `claude setup-token` (2026-11-03: "yes sure u can add the claude token").
+// from `claude setup-token`.
 
 /** The Claude Code release the bridge was built and tested against (docs/bridge-spikes.md). */
 export const testedClaudeVersion = "2.1.299";
