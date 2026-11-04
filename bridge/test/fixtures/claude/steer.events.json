@@ -12,29 +12,24 @@
  {
   "type": "usage",
   "usage": {
-   "used": 27213,
+   "used": 28254,
    "max": 1000000
   }
  },
  {
-  "type": "reasoning",
-  "text": "Those system messages are just tool notices, not an actual request. I already did the counting, so now I just need to say banana as asked.\n\n",
-  "pieces": 13
- },
- {
   "type": "text",
   "text": "banana",
-  "pieces": 2
+  "pieces": 1
  },
  {
   "type": "turn.end",
   "status": "complete",
   "usage": {
-   "used": 27293,
+   "used": 28254,
    "max": 1000000
   },
   "spent": {
-   "tokens": 52685
+   "tokens": 53139
   }
  }
 ]

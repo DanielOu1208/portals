@@ -191,7 +191,10 @@ node scripts/record-claude.ts            # or name scenarios: plain tools approv
 
 It runs Haiku with harmless prompts in scratch folders under
 `/private/tmp/portals-claude-record/`, on your login and quota, then deletes the
-sessions and folders it made and replaces paths in what it writes.
+sessions and folders it made and replaces paths in what it writes, also where Claude
+Code streamed a path in pieces (`scripts/record-claude-clean.ts`, which can clean a
+recording again: `node scripts/record-claude-clean.ts <file> <scratch folder>`). A plan
+the `plan` scenario writes stays in `~/.claude/plans/`; delete it by hand.
 
 The Codex tests replay real Codex streams recorded in `test/fixtures/codex/` the same
 way (golden `*.events.json` files, `UPDATE_GOLDEN=1 node --test test/codex-stream.test.ts`),
@@ -755,7 +758,7 @@ the app gets it as a turn opened by a line saying what ended (`status.update` ki
 How it runs `claude`:
 
 - **The installed `claude`**, at `claude.path`, not a copy of its own. The bridge was
-  tested with Claude Code 2.1.318 and `@anthropic-ai/claude-agent-sdk` 0.3.292; it logs
+  tested with Claude Code 2.1.318 and `@anthropic-ai/claude-agent-sdk` 0.3.318; it logs
   a warning for another release, at startup and when a process says it runs one.
 - **Its sign-in.** With `claude.apiKey` set, `claude` gets the key as
   `ANTHROPIC_API_KEY`. Without, it signs in with its own Keychain login
