@@ -738,6 +738,112 @@ test("/review runs review/start: one row from the review's start to its end, its
   );
 });
 
+test("/review after a Full access turn and a switch to Ask, or to a default that is stricter, is refused until a message has taken the access chosen", async () => {
+  const session = await createThread();
+  daemon.folderConfigs.set(cwd, { sandbox_mode: "read-only", approval_policy: "on-request" });
+  try {
+    await client.call("session.set_mode", { session_id: session, mode: "full" });
+    let start = client.frames.length;
+    await send(session, "First under Full.");
+    daemon.finishTurn(session, await daemon.activeTurn(session));
+    await completed(session, start);
+    assert.equal(daemon.threads.get(session)!.approvalPolicy, "never");
+
+    const refused = async (): Promise<void> => {
+      start = client.frames.length;
+      const from = daemon.calls.length;
+      assert.equal((await client.call("prompt.submit", { session_id: session, text: "/review" })).status, "streaming");
+      const done = await completed(session, start);
+      assert.equal(done.payload.status, "error");
+      assert.match(done.payload.text, /Send a message first/);
+      assert.equal(daemon.calls.slice(from).some((call) => call.method === "review/start"), false);
+    };
+    for (const mode of ["ask", "default"]) {
+      await client.call("session.set_mode", { session_id: session, mode });
+      await refused();
+    }
+
+    // Once a message has carried the default's access to Codex, the review runs with it.
+    await client.call("session.set_mode", { session_id: session, mode: "ask" });
+    start = client.frames.length;
+    const turn = await send(session, "Under Ask.");
+    assert.equal(turn.params.approvalPolicy, "untrusted");
+    daemon.finishTurn(session, await daemon.activeTurn(session));
+    await completed(session, start);
+    start = client.frames.length;
+    const from = daemon.calls.length;
+    await client.call("prompt.submit", { session_id: session, text: "/review" });
+    await daemon.waitForCall((call) => call.method === "review/start", from);
+    daemon.finishReview(session, await daemon.activeTurn(session), "Nothing to fix.");
+    assert.equal((await completed(session, start)).payload.text, "Nothing to fix.");
+  } finally {
+    daemon.folderConfigs.delete(cwd);
+  }
+});
+
+/** The review's command, as `finishReview` keeps it in the review's own turn. */
+function reviewCommandItem(turnId: string, session: string): void {
+  const command = { type: "commandExecution", id: `exec-${turnId}`, command: "/bin/zsh -lc 'git diff'", cwd, processId: null, status: "inProgress", commandActions: [], aggregatedOutput: null, exitCode: null, durationMs: null };
+  daemon.broadcast("item/started", { threadId: session, turnId, item: command, startedAtMs: 1 });
+  daemon.broadcast("item/completed", { threadId: session, turnId, item: { ...command, status: "completed", aggregatedOutput: "+helo\n", exitCode: 0, durationMs: 5 }, completedAtMs: 2 });
+}
+
+/** A turn's rows and messages, as the app was told them. */
+function reviewTold(session: string, start: number): unknown[] {
+  return turnEvents(session, start)
+    .filter((event) => ["message.start", "tool.start", "tool.complete", "message.complete"].includes(event.type))
+    .map((event) => (event.type.startsWith("tool.") ? [event.type, event.payload.name] : [event.type, event.payload.text]));
+}
+
+test("a review run at the desk while the connection to Codex is down is told at the reconnect as one /review, with its commands inside it", async () => {
+  const session = await createThread();
+  let start = client.frames.length;
+  await send(session, "First.");
+  daemon.finishTurn(session, await daemon.activeTurn(session));
+  await completed(session, start);
+  start = client.frames.length;
+  daemon.accepting = false;
+  daemon.dropAll();
+  const turn = daemon.startReview(session);
+  reviewCommandItem(turn.id, session);
+  daemon.finishReview(session, turn.id, "hello.txt says helo: a typo.");
+  daemon.accepting = true;
+  assert.equal((await completed(session, start)).payload.text, "hello.txt says helo: a typo.");
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.deepEqual(reviewTold(session, start), [
+    ["message.start", "/review"],
+    ["tool.start", "review"],
+    ["tool.start", "terminal"],
+    ["tool.complete", "terminal"],
+    ["tool.complete", "review"],
+    ["message.complete", "hello.txt says helo: a typo."],
+  ]);
+});
+
+test("a /review that ends while the connection to Codex is down ends at the reconnect with the commands it ran meanwhile", async () => {
+  const session = await createThread();
+  const start = client.frames.length;
+  const from = daemon.calls.length;
+  await client.call("prompt.submit", { session_id: session, text: "/review" });
+  await daemon.waitForCall((call) => call.method === "review/start", from);
+  const turnId = await daemon.activeTurn(session);
+  await client.from(start, (frame) => isEvent(frame, "tool.start", session) && frame.params.payload.name === "review");
+  daemon.accepting = false;
+  daemon.dropAll();
+  reviewCommandItem(turnId, session);
+  daemon.finishReview(session, turnId, "Nothing to fix.");
+  daemon.accepting = true;
+  assert.equal((await completed(session, start)).payload.text, "Nothing to fix.");
+  assert.deepEqual(reviewTold(session, start), [
+    ["message.start", "/review"],
+    ["tool.start", "review"],
+    ["tool.start", "terminal"],
+    ["tool.complete", "terminal"],
+    ["tool.complete", "review"],
+    ["message.complete", "Nothing to fix."],
+  ]);
+});
+
 test("/review with words after it reviews what they say", async () => {
   const session = await createThread();
   const start = client.frames.length;

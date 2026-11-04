@@ -205,23 +205,33 @@ export function historyFromThread(thread: Pick<Thread, "turns">, cwd: string, ac
 /**
  * The turns with the review's own work (a turn whose root, `rootTurnId`, is a review's
  * turn of the thread) told inside the review's, after its start, without the prompt Codex
- * gave its reviewer.
+ * gave its reviewer. As a thread is read back, and as a reconnect tells what it missed.
  */
-function withReviews(turns: Turn[]): Turn[] {
-  const reviews = new Set(turns.filter((turn) => (turn.items as Item[]).some((item) => item.type === "enteredReviewMode")).map((turn) => turn.id));
+export function withReviews(turns: Turn[]): Turn[] {
+  const within = reviewsOwn(turns);
   const work = new Map<string, Item[]>();
-  const ofReview = (turn: Turn) => typeof turn.rootTurnId === "string" && turn.rootTurnId !== turn.id && reviews.has(turn.rootTurnId);
   for (const turn of turns) {
-    if (!ofReview(turn)) continue;
-    work.set(turn.rootTurnId!, [...(work.get(turn.rootTurnId!) ?? []), ...(turn.items as Item[]).filter((item) => item.type !== "userMessage")]);
+    const root = within.get(turn.id);
+    if (root === undefined) continue;
+    work.set(root, [...(work.get(root) ?? []), ...(turn.items as Item[]).filter((item) => item.type !== "userMessage")]);
   }
   if (work.size === 0) return turns;
-  return turns.filter((turn) => !ofReview(turn)).map((turn) => {
+  return turns.filter((turn) => !within.has(turn.id)).map((turn) => {
     const items = work.get(turn.id);
     if (!items) return turn;
     const after = (turn.items as Item[]).findIndex((item) => item.type === "enteredReviewMode") + 1;
     return { ...turn, items: [...turn.items.slice(0, after), ...items, ...turn.items.slice(after)] as Turn["items"] };
   });
+}
+
+/** Each review's own turn (`withReviews`) by its id, with the id of the review's turn it is told in. */
+export function reviewsOwn(turns: readonly Turn[]): Map<string, string> {
+  const reviews = new Set(turns.filter((turn) => (turn.items as Item[]).some((item) => item.type === "enteredReviewMode")).map((turn) => turn.id));
+  const within = new Map<string, string>();
+  for (const turn of turns) {
+    if (typeof turn.rootTurnId === "string" && turn.rootTurnId !== turn.id && reviews.has(turn.rootTurnId)) within.set(turn.id, turn.rootTurnId);
+  }
+  return within;
 }
 
 /**

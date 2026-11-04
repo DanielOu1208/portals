@@ -22,7 +22,7 @@ import type {
   TurnUsage,
 } from "../types.ts";
 import { CodexError } from "./client.ts";
-import { commandOf, compactCommand, historyFromThread, reviewCommand, subagentsCalledIn, userInputText } from "./history.ts";
+import { commandOf, compactCommand, historyFromThread, reviewCommand, reviewsOwn, subagentsCalledIn, userInputText, withReviews } from "./history.ts";
 import { codexEffort, collaborationMode, policyFor, settledDefaults, threadModeFor, type DesktopDefaults, type WorkMode } from "./options.ts";
 import {
   approvalRequest,
@@ -807,7 +807,9 @@ export class CodexSession implements ProviderSession {
 
   /**
    * `/review`. Codex answers with the review's turn, which runs on the thread with the
-   * settings Codex has for it (`review/start` takes no others).
+   * settings Codex has for it (`review/start` takes no others): with the sandbox of the
+   * thread's last turn, and never asking. While the mode chosen since would run with
+   * another sandbox, which only a turn's start gives Codex, the review is refused.
    */
   private async review(prompt: Prompt): Promise<void> {
     if (this.closed) return;
@@ -815,6 +817,15 @@ export class CodexSession implements ProviderSession {
     try {
       await this.subscribe();
       if (this.beginning !== beginning) return;
+      // What the next turn would run with, as `begin` works it out.
+      const folder = this.pendingReset && this.workMode() === "default" ? await this.host.defaultsFor(this.cwd) : null;
+      if (this.beginning !== beginning) return;
+      const overrides = this.overrides(folder ?? this.host.defaults(), folder !== null);
+      if (overrides.sandboxPolicy !== undefined && !same(overrides.sandboxPolicy, this.applied?.sandboxPolicy)) {
+        this.starting = false;
+        this.endTurn({ type: "turn.end", status: "error", error: "Codex would review with the access of this thread's last turn, not the mode chosen since. Send a message first, then /review again.", retryable: false });
+        return;
+      }
       const result = await this.host.client.call("review/start", { threadId: this.id, target: reviewTarget(prompt.text), delivery: "inline" });
       if (this.beginning !== beginning) return;
       if (this.turnOpen && this.turnID === null && this.starting && typeof result?.turn?.id === "string") this.adopt(result.turn.id);
@@ -1786,14 +1797,18 @@ export class CodexSession implements ProviderSession {
     this.reading = held;
     // Turns known already, or told whole from the read: what Codex sent of them meanwhile is told.
     const told = new Set<string>();
+    // A review's own turn, told inside the review's: what Codex sent under its id goes with it.
+    let within = new Map<string, string>();
     try {
       const thread = await this.read();
+      within = reviewsOwn((thread.turns ?? []) as Turn[]);
       this.terminalsEnded(thread);
       // A wait among what was missed names the sub-agents it waited for as live: their
       // nicknames, which only their own threads say, as their starts were missed too.
       await this.learnNicknames(thread);
       await this.tellMissed(thread, told);
     } finally {
+      for (const [own, review] of within) if (told.has(review)) told.add(own);
       if (this.reading === held) this.reading = null;
       this.release(held, told);
     }
@@ -1832,8 +1847,12 @@ export class CodexSession implements ProviderSession {
    */
   private async tellMissed(thread: Thread, told: Set<string>): Promise<void> {
     if (this.turnOpen) return;
-    const turns = (thread.turns ?? []) as Turn[];
-    const cursor = this.gap ? this.gap.after : this.lastKnownTurn;
+    // A review as one turn, with its own turn's work inside it, as the live one showed.
+    const raw = (thread.turns ?? []) as Turn[];
+    const within = reviewsOwn(raw);
+    const turns = withReviews(raw);
+    const last = this.gap ? this.gap.after : this.lastKnownTurn;
+    const cursor = last === null ? null : (within.get(last) ?? last);
     let known = cursor === null ? -1 : turns.findIndex((turn) => turn.id === cursor);
     if (this.external !== null) {
       // Begun at the desk just before the connection dropped, its message missed with it:
@@ -1889,7 +1908,7 @@ export class CodexSession implements ProviderSession {
         // cannot say, it is still to be told, at the next reconnect.
         let ended: Turn | undefined;
         try {
-          ended = ((await this.read()).turns as Turn[] | undefined)?.find((entry) => entry.id === turn.id);
+          ended = withReviews(((await this.read()).turns ?? []) as Turn[]).find((entry) => entry.id === turn.id);
         } catch (error) {
           if (this.lastKnownTurn === turn.id) this.lastKnownTurn = before;
           this.gap?.shown.delete(turn.id);
@@ -1968,7 +1987,9 @@ export class CodexSession implements ProviderSession {
     this.terminalsEnded(thread);
     // Its waits among what was missed name the sub-agents as live (`joinMissed`).
     await this.learnNicknames(thread);
-    const turn = ((thread.turns ?? []) as Turn[]).find((entry) => entry.id === turnID);
+    // A review's own work, inside it (`tellMissed`).
+    const turns = withReviews((thread.turns ?? []) as Turn[]);
+    const turn = turns.find((entry) => entry.id === turnID);
     if (!turn) {
       if (thread.status?.type !== "active") this.endTurn({ type: "turn.end", status: "error", error: "Codex lost track of this turn while Portals was away.", retryable: true });
       return;
@@ -1976,7 +1997,7 @@ export class CodexSession implements ProviderSession {
     if (this.turnOpen && this.turnID === turnID) {
       // A plan proposed while the bridge was away is put to the person all the same,
       // unless a turn begun at the desk since has left it behind.
-      const overtaken = (thread.turns as Turn[]).at(-1)?.id !== turnID;
+      const overtaken = turns.at(-1)?.id !== turnID;
       const plan = this.planning && !overtaken ? (turn.items as Params[]).findLast((item) => item.type === "plan" && typeof item.text === "string") : undefined;
       if (plan) this.proposed = plan.text;
       if (overtaken) this.proposed = null;
