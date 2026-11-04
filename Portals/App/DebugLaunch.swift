@@ -388,6 +388,13 @@ enum DebugLaunch {
         return (files, parts.dropFirst().first == "file")
     }
 
+    /// `PORTALS_DEBUG_SUBAGENT`: open the detail of the first subagent on the line whose
+    /// messages can be read, once; `messages`, on its messages. For screenshots.
+    enum SubagentOpening { case detail, messages }
+    static var opensSubagent: SubagentOpening? {
+        value("PORTALS_DEBUG_SUBAGENT").map { $0 == "messages" ? .messages : .detail }
+    }
+
     /// `PORTALS_DEBUG_OPEN_LATEST`: open the most recent saved thread, of any host, once
     /// connected. With `PORTALS_DEBUG_PROMPT`, the prompt is sent into that thread.
     static var opensLatestThread: Bool { value("PORTALS_DEBUG_OPEN_LATEST") != nil }

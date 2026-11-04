@@ -350,6 +350,12 @@
 // - `open_on_host`: `host.apps` lists the apps on the host a thread's folder opens in (the
 //   Finder, the editors and terminals installed), and `folder.open` opens the thread's
 //   folder in one, on the host's own screen (src/openers.ts).
+// - `subagent_read`: `subagent.read` gives what one subagent did, read only: its own
+//   messages, as `session.resume` gives a thread's, so far for one still at work. A
+//   subagent that can be read says so (`can_read` in `subagent.*` events and
+//   `subagent.list`): Claude Code's subagents (the file it keeps for each,
+//   `getSubagentMessages`) and Codex's sub-agents (each its own thread, `thread/read`), not
+//   workflows or commands.
 
 export const bridgeFeatures = [
   "mcp_auth",
@@ -422,6 +428,7 @@ export const bridgeFeatures = [
   "git_status",
   "usage_read",
   "open_on_host",
+  "subagent_read",
 ] as const;
 
 export const bridgeProtocol = 1;

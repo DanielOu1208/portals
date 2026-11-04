@@ -7,6 +7,7 @@ import {
   forkSession,
   getSessionInfo,
   getSessionMessages,
+  getSubagentMessages,
   listSessions,
   query as sdkQuery,
   renameSession,
@@ -128,6 +129,7 @@ export const sdkSessionFiles: SessionFiles = {
     return info.summary && info.summary !== info.firstPrompt ? info.summary : null;
   },
   messages: (id, cwd) => getSessionMessages(id, { dir: cwd }),
+  subagentMessages: (id, agent, cwd) => getSubagentMessages(id, agent, { dir: cwd }),
   // Claude's own index of every project's sessions: quick (about 50 ms for 80 sessions).
   async folders() {
     return (await listSessions()).flatMap((session) => (session.cwd ? [{ path: session.cwd, lastUsed: session.lastModified }] : []));

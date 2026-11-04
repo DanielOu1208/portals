@@ -51,6 +51,8 @@ public struct Subagent: Identifiable, Hashable, Sendable {
     public var outputTruncated: Bool
     /// It can be stopped by itself now, apart from the turn.
     public var canStop: Bool
+    /// What it did, its own messages, can be read (`SubagentReading`).
+    public var canRead: Bool
     public var model: String?
     public var tokens: Int?
     public var toolUses: Int?
@@ -61,7 +63,7 @@ public struct Subagent: Identifiable, Hashable, Sendable {
     public init(
         id: String, goal: String, tool: String? = nil, toolDetail: String? = nil, state: State = .working, kind: Kind = .agent,
         name: String? = nil, nickname: String? = nil, role: String? = nil, parentID: String? = nil, turn: Int? = nil, startedAt: Date? = nil, endedAt: Date? = nil, summary: String? = nil, result: String? = nil,
-        output: String? = nil, outputTruncated: Bool = false, canStop: Bool = false, model: String? = nil, tokens: Int? = nil, toolUses: Int? = nil, phases: [WorkflowPhase] = [],
+        output: String? = nil, outputTruncated: Bool = false, canStop: Bool = false, canRead: Bool = false, model: String? = nil, tokens: Int? = nil, toolUses: Int? = nil, phases: [WorkflowPhase] = [],
         agents: [WorkflowAgent] = []
     ) {
         self.id = id
@@ -82,6 +84,7 @@ public struct Subagent: Identifiable, Hashable, Sendable {
         self.output = output
         self.outputTruncated = outputTruncated
         self.canStop = canStop
+        self.canRead = canRead
         self.model = model
         self.tokens = tokens
         self.toolUses = toolUses
@@ -174,6 +177,14 @@ public protocol SubagentStopping: Sendable {
     var stopsSubagents: Bool? { get async }
     /// False when it was no longer one that could be stopped (it had ended).
     func stopSubagent(_ id: String, in thread: ThreadRef.ID) async throws -> Bool
+}
+
+/// A host that gives what one subagent did, its own messages, read only (a Portals
+/// bridge's `subagent_read`): what it was asked, its tool calls and what it said.
+public protocol SubagentReading: Sendable {
+    /// Its messages so far, as turns; nil when it cannot be read (the host cannot, or it
+    /// is not one that can be).
+    func subagentTranscript(_ id: String, in thread: ThreadRef.ID) async throws -> Transcript?
 }
 
 extension [Subagent] {

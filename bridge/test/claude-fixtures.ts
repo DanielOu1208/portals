@@ -345,6 +345,11 @@ export class FakeFiles implements SessionFiles {
   async messages(id: string): Promise<unknown[]> {
     return this.stored.get(id)?.messages ?? [];
   }
+  /** Subagents' own messages, by session and agent id (`session/agent`). */
+  readonly subagents = new Map<string, unknown[]>();
+  async subagentMessages(id: string, agent: string): Promise<unknown[]> {
+    return this.subagents.get(`${id}/${agent}`) ?? [];
+  }
   /** Workflows' journals, by path. */
   readonly journals = new Map<string, unknown>();
   async journal(path: string): Promise<unknown> {

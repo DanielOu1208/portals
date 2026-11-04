@@ -1344,6 +1344,22 @@ export class CodexSession implements ProviderSession {
     return true;
   }
 
+  /**
+   * A sub-agent's own thread (`thread/read` with its turns) as its messages, as this
+   * thread's history is read: a v2 sub-agent's opens with what it did, its thread keeping
+   * no message of what it was asked. A turn it runs now is not cut off: it shows the items
+   * Codex has completed so far, with no mark of an end. None for a thread that is not one
+   * of its sub-agents.
+   */
+  async subagentMessages(id: string): Promise<StoredMessage[]> {
+    if (!this.agents.has(id)) return [];
+    const thread = (await this.host.client.call("thread/read", { threadId: id, includeTurns: true })).thread;
+    const turns = (thread.turns ?? []) as Turn[];
+    const running = thread.status?.type === "active" && turns.at(-1)?.status === "inProgress";
+    const shown = running ? [...turns.slice(0, -1), { ...turns.at(-1)!, status: "completed" as const }] : turns;
+    return historyFromThread({ turns: shown }, this.cwd, false, this.nicknames).messages;
+  }
+
   private report(events: ProviderEvent[]): void {
     for (const event of events) {
       if (event.type === "turn.end") {

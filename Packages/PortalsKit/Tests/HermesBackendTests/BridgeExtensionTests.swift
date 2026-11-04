@@ -1105,6 +1105,63 @@ import Testing
         await hermes.disconnect()
     }
 
+    /// A bridge with `subagent_read` says which subagents can be read, and gives what one
+    /// did as its own messages, which come as turns as a thread's history does.
+    @Test func aBridgeGivesWhatASubagentDidAsTurns() async throws {
+        let ready: JSONValue = ["replay_epoch": "e1", "heartbeat": false, "bridge": ["protocol": 1, "features": ["subagents", "subagent_read"]]]
+        let (backend, transport) = try await connect(ready: ready)
+        let ref = ThreadRef(id: ThreadRef.ID(rawValue: "s1"), agent: claude)
+        let opening = Task { try await backend.openThread(ref) }
+        let resume = try #require(await transport.nextSentRequest(includingRoster: true))
+        transport.deliver(["jsonrpc": "2.0", "id": try #require(resume["id"]), "result": ["session_id": "s1", "messages": []]])
+        _ = try await opening.value
+        let roster = try #require(await transport.nextSentRequest(includingRoster: true))
+        transport.deliver(["jsonrpc": "2.0", "id": try #require(roster["id"]), "result": [
+            "subagents": [
+                ["subagent_id": "a1", "kind": "agent", "goal": "Count the files", "status": "completed", "turn": 1, "started_at": 200, "ended_at": 211, "can_read": true],
+                ["subagent_id": "w1", "kind": "workflow", "goal": "Two agents", "status": "completed", "turn": 1, "started_at": 212, "ended_at": 220],
+            ],
+        ]])
+        var events = await backend.events(for: ref.id).makeAsyncIterator()
+        guard case let .subagentsListed(listed)? = await events.next() else {
+            Issue.record("no list")
+            return
+        }
+        #expect(listed.map(\.canRead) == [true, false])
+
+        let reading = Task { try await backend.subagentTranscript("a1", in: ref.id) }
+        let read = try #require(await transport.nextSentRequest())
+        #expect(read["method"] == "subagent.read")
+        #expect(read["params"] == ["session_id": "s1", "subagent_id": "a1", "profile": "claude"])
+        transport.deliver(["jsonrpc": "2.0", "id": try #require(read["id"]), "result": ["available": true, "messages": [
+            ["role": "user", "text": "Count the files in this folder.", "timestamp": 201],
+            ["role": "tool", "name": "terminal", "args": ["command": "ls | wc -l"], "content": "{\"output\":\"0\"}", "tool_call_id": "t1", "timestamp": 203],
+            ["role": "assistant", "text": "0 entries.", "timestamp": 205],
+        ]]])
+        let transcript = try #require(try await reading.value)
+        #expect(transcript.turns.count == 1)
+        let items = try #require(transcript.turns.first?.items)
+        guard items.count == 3, case let .user(asked) = items[0].content, case let .tool(call) = items[1].content, case let .text(answer) = items[2].content else {
+            Issue.record("not its messages: \(items)")
+            return
+        }
+        #expect(asked.text == "Count the files in this folder.")
+        #expect(call.name == "terminal")
+        #expect(answer == "0 entries.")
+
+        // One that cannot be read is nil.
+        let refusing = Task { try await backend.subagentTranscript("w1", in: ref.id) }
+        let refused = try #require(await transport.nextSentRequest())
+        transport.deliver(["jsonrpc": "2.0", "id": try #require(refused["id"]), "result": ["available": false]])
+        #expect(try await refusing.value == nil)
+        await backend.disconnect()
+
+        // A host without the feature is not asked.
+        let (older, _) = try await connect(ready: Self.subagentsReady)
+        #expect(try await older.subagentTranscript("a1", in: ref.id) == nil)
+        await older.disconnect()
+    }
+
     /// The list of who is at work, answered just before the bridge cleared an ended one
     /// from the line (`subagent.cleared` comes after the answer on the socket), does not
     /// bring that one back however the two reach the thread (recent-20). The answer and

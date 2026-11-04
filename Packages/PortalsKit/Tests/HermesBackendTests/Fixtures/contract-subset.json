@@ -162,7 +162,8 @@
    "model_levels_none",
    "git_status",
    "usage_read",
-   "open_on_host"
+   "open_on_host",
+   "subagent_read"
   ],
   "events": {
    "mcp.auth": {
@@ -400,6 +401,14 @@
    },
    "subagent.stop": {
     "feature": "subagents",
+    "params": [
+     "session_id",
+     "subagent_id",
+     "profile"
+    ]
+   },
+   "subagent.read": {
+    "feature": "subagent_read",
     "params": [
      "session_id",
      "subagent_id",

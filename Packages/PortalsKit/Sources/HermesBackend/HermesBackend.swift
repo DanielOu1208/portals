@@ -2080,6 +2080,20 @@ extension HermesBackend: SubagentStopping {
     }
 }
 
+extension HermesBackend: SubagentReading {
+    public func subagentTranscript(_ id: String, in thread: ThreadRef.ID) async throws -> Transcript? {
+        guard offers(BridgeWire.Feature.subagentRead) else { return nil }
+        let result: BridgeWire.SubagentReadResult = try await onSession(thread) { peer, binding in
+            try await peer.call(
+                BridgeWire.Method.subagentRead,
+                BridgeWire.SubagentReadParams(sessionID: binding.runtimeID, subagentID: id, profile: binding.profile)
+            )
+        }
+        guard result.available == true else { return nil }
+        return HermesHistoryMapper.transcript(from: result.messages ?? [], features: hostFeatures)
+    }
+}
+
 extension HermesBackend: FileAttaching {
     public var attachesFiles: Bool? {
         gatewayReady.map { _ in offers(BridgeWire.Feature.files) }

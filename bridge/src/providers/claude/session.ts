@@ -102,6 +102,8 @@ export interface SessionFiles {
   /** The title Claude gave the session, or null. */
   title(id: string, cwd: string): Promise<string | null>;
   messages(id: string, cwd: string): Promise<unknown[]>;
+  /** One subagent's messages, by its agent id (its task id), in the session's subagents folder; none when it has no file there. */
+  subagentMessages?(id: string, agent: string, cwd: string): Promise<unknown[]>;
   /** The folder of every session, with when it last changed (milliseconds since 1970). */
   folders(): Promise<{ path: string; lastUsed: number }[]>;
   /** The sessions started at a terminal (not through the SDK), newest first, at most `limit`. */
@@ -371,6 +373,17 @@ export class ClaudeSession implements ProviderSession, Warmable {
     if (!live || !(live.stream.board.isStoppable(id) || live.stream.commands.running(id))) return false;
     await live.query.stopTask(id);
     return true;
+  }
+
+  /**
+   * A subagent's own conversation, from the file Claude Code keeps for it beside the
+   * session's (`getSubagentMessages`). Each of its messages names the Agent call that
+   * started it (`parent_tool_use_id`), which in the session's own messages marks one of a
+   * subagent's, to leave out: here they are the whole of it.
+   */
+  async subagentMessages(id: string): Promise<StoredMessage[]> {
+    const messages = (await this.host.files.subagentMessages?.(this.id, id, this.cwd)) ?? [];
+    return historyFromSession(messages.map((entry) => ({ ...(entry as object), parent_tool_use_id: null })), this.cwd);
   }
 
   // MARK: Settings

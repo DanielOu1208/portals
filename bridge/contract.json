@@ -1131,6 +1131,33 @@
       ]
     },
     {
+      "name": "subagent.read",
+      "summary": "What one subagent did, read only (feature subagent_read): available false for one that cannot be read (a workflow, a command, an agent that keeps none, a thread not loaded); else its own messages, oldest first, in the shape of session.resume's, so far for one still at work.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "session_id": {
+                "type": "string"
+              },
+              "subagent_id": {
+                "type": "string"
+              },
+              "profile": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_id",
+              "subagent_id"
+            ]
+          }
+        }
+      ]
+    },
+    {
       "name": "threads.list",
       "summary": "Every thread the bridge knows and what it is doing now, newest first, with those of the Macs it is linked to unless local (feature fleet).",
       "params": [
@@ -2034,7 +2061,8 @@
     "model_levels_none",
     "git_status",
     "usage_read",
-    "open_on_host"
+    "open_on_host",
+    "subagent_read"
   ],
   "x-lean-deltas": {
     "capability": "lean_deltas",

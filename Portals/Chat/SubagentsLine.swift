@@ -44,12 +44,15 @@ struct SubagentsLine: View {
     /// them.
     @ViewBuilder
     static func detail(
-        of id: Subagent.ID, in subagents: [Subagent], onStop: @escaping (Subagent.ID) -> Void, onDone: @escaping () -> Void
+        of id: Subagent.ID, in subagents: [Subagent], read: ((Subagent.ID) async throws -> Transcript?)? = nil,
+        onStop: @escaping (Subagent.ID) -> Void, onDone: @escaping () -> Void
     ) -> some View {
         if let agent = subagents.first(where: { $0.id == id }) {
             // The one on the line that started it, for a subagent's own subagent.
             let parent = agent.parentID.flatMap { parent in subagents.first { $0.id == parent } }
-            SubagentDetail(agent: agent, startedBy: parent.map(SubagentLook.title(of:)), onStop: onStop, onDone: onDone)
+            SubagentDetail(
+                agent: agent, startedBy: parent.map(SubagentLook.title(of:)), read: agent.canRead ? read : nil, onStop: onStop, onDone: onDone
+            )
         }
     }
 }
@@ -272,79 +275,116 @@ enum SubagentLook {
 }
 
 /// All that is known of one subagent or workflow: how it stands, for how long, what it
-/// used and answered; for a workflow, each phase with its agents.
+/// used and answered; for a workflow, each phase with its agents. From a host that can
+/// read it, a subagent's own messages, on a page of their own.
 private struct SubagentDetail: View {
     let agent: Subagent
     /// The subagent that started it, by its title, for a subagent's own subagent.
     var startedBy: String?
+    /// Reads its messages; nil where they cannot be read.
+    var read: ((Subagent.ID) async throws -> Transcript?)?
     let onStop: (Subagent.ID) -> Void
     let onDone: () -> Void
 
+    @State private var showsMessages = DebugLaunch.opensSubagent == .messages
+    /// Its messages take the whole height of an iPhone's sheet.
+    @State private var detent: PresentationDetent = DebugLaunch.opensSubagent == .messages ? .large : .medium
+
     var body: some View {
-        PanelChrome(title: SubagentLook.title(of: agent), doneIdentifier: "subagent-detail-done", onDone: onDone) {
-            List {
+        PanelChrome(
+            title: SubagentLook.title(of: agent), doneIdentifier: "subagent-detail-done", cancels: showsMessages,
+            doneTitle: showsMessages ? "Back" : nil, onDone: { if showsMessages { showsMessages = false } else { onDone() } }
+        ) {
+            if showsMessages, let read {
+                SubagentMessages(agent: agent, read: read)
+            } else {
+                facts
+            }
+        }
+        .presentationDetents([.medium, .large], selection: $detent)
+        .onChange(of: showsMessages) { if showsMessages { detent = .large } }
+    }
+
+    private var facts: some View {
+        List {
+            Section {
+                LabeledContent("Status") {
+                    HStack(spacing: Theme.grid * 0.75) {
+                        Image(systemName: SubagentLook.symbol(for: agent.state))
+                        Text(SubagentLook.stateText(agent.state))
+                    }
+                    .foregroundStyle(SubagentLook.tint(for: agent.state))
+                }
+                if agent.startedAt != nil {
+                    LabeledContent("Time") { ElapsedTime(agent: agent, font: .app.body) }
+                }
+                if let startedBy { LabeledContent("Started by", value: startedBy) }
+                // Its role, where the title does not say it already.
+                if let role = agent.role, agent.nickname == nil, agent.kind == .agent { LabeledContent("Role", value: role) }
+                if let model = agent.model { LabeledContent("Model", value: model) }
+                if let tokens = agent.tokens { LabeledContent("Tokens", value: tokens.formatted()) }
+                if let uses = agent.toolUses, agent.kind == .agent { LabeledContent("Tool calls", value: uses.formatted()) }
+            } header: {
+                if !agent.goal.isEmpty, agent.kind == .workflow || agent.goal != SubagentLook.title(of: agent) {
+                    Text(agent.goal)
+                }
+            }
+            // Under how it stands, above its answer, which can run long.
+            if read != nil {
                 Section {
-                    LabeledContent("Status") {
-                        HStack(spacing: Theme.grid * 0.75) {
-                            Image(systemName: SubagentLook.symbol(for: agent.state))
-                            Text(SubagentLook.stateText(agent.state))
+                    Button { showsMessages = true } label: {
+                        HStack {
+                            Text("Messages")
+                            Spacer(minLength: Theme.grid)
+                            Image(systemName: "chevron.right")
+                                .font(.app.caption.weight(.semibold))
+                                .foregroundStyle(.tertiary)
                         }
-                        .foregroundStyle(SubagentLook.tint(for: agent.state))
+                        .contentShape(.rect)
                     }
-                    if agent.startedAt != nil {
-                        LabeledContent("Time") { ElapsedTime(agent: agent, font: .app.body) }
-                    }
-                    if let startedBy { LabeledContent("Started by", value: startedBy) }
-                    // Its role, where the title does not say it already.
-                    if let role = agent.role, agent.nickname == nil, agent.kind == .agent { LabeledContent("Role", value: role) }
-                    if let model = agent.model { LabeledContent("Model", value: model) }
-                    if let tokens = agent.tokens { LabeledContent("Tokens", value: tokens.formatted()) }
-                    if let uses = agent.toolUses, agent.kind == .agent { LabeledContent("Tool calls", value: uses.formatted()) }
-                } header: {
-                    if !agent.goal.isEmpty, agent.kind == .workflow || agent.goal != SubagentLook.title(of: agent) {
-                        Text(agent.goal)
-                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Shows what this agent did")
+                    .accessibilityIdentifier("subagent-detail-messages")
                 }
-                if agent.kind == .agent, agent.isWorking, let doing = SubagentLook.detail(of: agent) {
-                    Section("Doing") { Text(doing) }
+            }
+            if agent.kind == .agent, agent.isWorking, let doing = SubagentLook.detail(of: agent) {
+                Section("Doing") { Text(doing) }
+            }
+            if agent.kind == .command, let output = agent.output, !output.isEmpty {
+                Section(agent.isWorking ? "Output so far" : "Output") {
+                    CommandOutputTail(output: output, truncated: agent.outputTruncated)
                 }
-                if agent.kind == .command, let output = agent.output, !output.isEmpty {
-                    Section(agent.isWorking ? "Output so far" : "Output") {
-                        CommandOutputTail(output: output, truncated: agent.outputTruncated)
-                    }
+            }
+            if let result = agent.result, agent.kind == .agent || agent.state == .failed {
+                Section(agent.state == .failed ? "Why it did not finish" : "Answer") {
+                    Text(result)
+                        .textSelection(.enabled)
                 }
-                if let result = agent.result, agent.kind == .agent || agent.state == .failed {
-                    Section(agent.state == .failed ? "Why it did not finish" : "Answer") {
-                        Text(result)
-                            .textSelection(.enabled)
-                    }
-                }
-                if agent.kind == .workflow {
-                    ForEach(groups, id: \.id) { group in
-                        Section(group.title) {
-                            if group.agents.isEmpty {
-                                Text("No agents yet")
-                                    .foregroundStyle(.secondary)
-                            }
-                            ForEach(group.agents) { member in
-                                WorkflowAgentRow(agent: member)
-                            }
+            }
+            if agent.kind == .workflow {
+                ForEach(groups, id: \.id) { group in
+                    Section(group.title) {
+                        if group.agents.isEmpty {
+                            Text("No agents yet")
+                                .foregroundStyle(.secondary)
                         }
-                    }
-                }
-                if agent.canStop {
-                    Section {
-                        Button("Stop", systemImage: "stop.circle", role: .destructive) {
-                            onStop(agent.id)
+                        ForEach(group.agents) { member in
+                            WorkflowAgentRow(agent: member)
                         }
-                        .accessibilityIdentifier("subagent-detail-stop")
-                    } footer: {
-                        Text(stopFooter)
                     }
                 }
             }
+            if agent.canStop {
+                Section {
+                    Button("Stop", systemImage: "stop.circle", role: .destructive) {
+                        onStop(agent.id)
+                    }
+                    .accessibilityIdentifier("subagent-detail-stop")
+                } footer: {
+                    Text(stopFooter)
+                }
+            }
         }
-        .presentationDetents([.medium, .large])
     }
 
     private var stopFooter: String {
@@ -364,6 +404,64 @@ private struct SubagentDetail: View {
         let others = agent.agents.filter { $0.phase.map { !placed.contains($0) } ?? true }
         if !others.isEmpty || groups.isEmpty { groups.append((id: Int.min, title: "Agents", agents: others)) }
         return groups
+    }
+}
+
+/// A subagent's own messages, read only, as the chat shows a thread's: what it was asked,
+/// its tool calls and what it said, in the chat's own rows. Read as the page opens, and
+/// again as the line hears more of one at work.
+private struct SubagentMessages: View {
+    let agent: Subagent
+    let read: (Subagent.ID) async throws -> Transcript?
+
+    @State private var turns: [Turn]?
+    @State private var failure: String?
+    @State private var width: CGFloat = 0
+
+    var body: some View {
+        ScrollView {
+            if let turns, !turns.isEmpty {
+                LazyVStack(alignment: .leading, spacing: Theme.grid * 3) {
+                    ForEach(turns) { turn in
+                        TurnView(turn: turn, canRetry: false, onRetry: {})
+                    }
+                }
+                .padding(.horizontal, ChatFeature.margin)
+                .padding(.vertical, Theme.grid * 2)
+                .onGeometryChange(for: CGFloat.self) { max(0, $0.size.width - ChatFeature.margin * 2) } action: { width = $0 }
+                .environment(\.widgetLayoutWidth, width)
+            } else if let failure {
+                QuietNote(text: failure, systemImage: "exclamationmark.triangle")
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, Theme.grid * 6)
+            } else if turns != nil {
+                QuietNote(text: agent.isWorking ? "Nothing yet" : "No messages", systemImage: "text.bubble")
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, Theme.grid * 6)
+            } else {
+                ProgressView()
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, Theme.grid * 6)
+            }
+        }
+        .background(Theme.pageBackground)
+        .task(id: news) {
+            do {
+                let transcript = try await read(agent.id)
+                turns = transcript?.turns ?? []
+                failure = nil
+            } catch is CancellationError {
+            } catch {
+                // What was read before stays.
+                if turns == nil { failure = "Its messages could not be read." }
+            }
+        }
+        .accessibilityIdentifier("subagent-messages")
+    }
+
+    /// What the line has heard of it: read again when that changes.
+    private var news: [String?] {
+        [SubagentLook.stateText(agent.state), agent.summary, agent.tool, agent.toolUses.map(String.init), agent.result]
     }
 }
 
