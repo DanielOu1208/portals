@@ -1,6 +1,7 @@
 import "./environment.ts";
 import assert from "node:assert/strict";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import fs from "node:fs";
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { createServer as createSocketServer } from "node:net";
 import type { AddressInfo } from "node:net";
@@ -624,7 +625,9 @@ for (const os of ["macos", "linux"] as const) {
   });
 
   test(`F1: update on ${os} succeeds without restarting when the manager state is unknown`, async () => {
-    const { system, ui, paths, ctx } = await uninstallFixture(os, `update-unknown-${os}`);
+    const { system, ui, paths, ctx, file } = await uninstallFixture(os, `update-unknown-${os}`);
+    const definition = readFileSync(file, "utf8").replace(os === "macos" ? "<key>KeepAlive</key><true/>" : "TimeoutStopSec=20", os === "macos" ? "<key>KeepAlive</key><false/>" : "TimeoutStopSec=10");
+    writeFileSync(file, definition);
     const run = system.run.bind(system);
     system.run = async (program, args, options) => {
       if ((program === "/fake/launchctl" && args[0] === "print") || (program === "/fake/systemctl" && args[1] === "show")) {
@@ -635,6 +638,7 @@ for (const os of ["macos", "linux"] as const) {
     };
     assert.equal(await update(ctx), 0, ui.text);
     assert.equal(readSetupState(paths.setup)!.version, "9.9.9");
+    assert.equal(readFileSync(file, "utf8"), definition);
     assert.match(ui.text, /couldn't be checked.*nothing was restarted/);
     assert.ok(!system.calls.some((call) => call.args[0] === "kickstart" || call.args[1] === "restart"));
   });
@@ -712,6 +716,57 @@ for (const os of ["macos", "linux"] as const) {
       }
     });
   }
+}
+
+for (const custom of ["quoting", "specifier", "linux logs", "macos logs", "linux directive", "macos directive", "linux indented directive", "linux spaced directive", "linux unit directive", "linux environment reset", "macos colliding directive", "macos nested directive", "macos duplicate field", "macos symlink", "linux symlink", "macos missing", "linux missing"] as const) {
+  test(`update skips an unsupported service definition (${custom}), explains how to refresh it, and still restarts`, async () => {
+    const os = custom.startsWith("macos") ? "macos" : "linux";
+    const { system, ui, paths, ctx, file } = await uninstallFixture(os, `refresh-custom-${custom.replaceAll(" ", "-")}`);
+    const bridge = await healthCheck();
+    writeFileSync(paths.config, JSON.stringify({ ...JSON.parse(readFileSync(paths.config, "utf8")), port: bridge.port }));
+    let text = readFileSync(file, "utf8");
+    if (custom === "quoting") text = text.replace("[Service]", "[Service]\nEnvironment='CUSTOM=value'");
+    if (custom === "specifier") text = text.replace("WorkingDirectory=", "WorkingDirectory=%h");
+    if (custom === "linux logs") text = text.replace("StandardError=append:", "StandardError=append:/other");
+    if (custom === "macos logs") text = text.replace("<key>StandardErrorPath</key><string>", "<key>StandardErrorPath</key><string>/other");
+    if (custom === "linux directive") text = text.replace("[Service]", "[Service]\nEnvironmentFile=/custom.env");
+    if (custom === "macos directive") text = text.replace("<key>RunAtLoad</key>", "<key>Umask</key><integer>63</integer>\n<key>RunAtLoad</key>");
+    if (custom === "linux indented directive") text = text.replace("[Service]", "[Service]\n  EnvironmentFile=/custom.env");
+    if (custom === "linux spaced directive") text = text.replace("[Service]", "[Service]\nEnvironmentFile = /custom.env");
+    if (custom === "linux unit directive") text = text.replace("[Unit]", "[Unit]\n  ConditionPathExists=/custom/required");
+    if (custom === "linux environment reset") text = text.replace("[Service]", '[Service]\nEnvironment="CUSTOM=old"\nEnvironment=');
+    if (custom === "macos colliding directive") {
+      text = text.replace("<key>PATH</key>", "<key>Umask</key><string>custom</string>\n<key>PATH</key>");
+      text = text.replace("<key>RunAtLoad</key>", "<key>Umask</key><integer>63</integer>\n<key>RunAtLoad</key>");
+    }
+    if (custom === "macos nested directive") text = text.replace("<key>KeepAlive</key><true/>", "<key>KeepAlive</key><dict><key>PATH</key><false/></dict>");
+    if (custom === "macos duplicate field") text = text.replace("<key>KeepAlive</key><true/>", "<key>KeepAlive</key><true/><key>KeepAlive</key><false/>");
+    writeFileSync(file, text);
+    const target = `${file}.custom`;
+    if (custom.endsWith("symlink")) {
+      writeFileSync(target, text);
+      rmSync(file);
+      symlinkSync(target, file);
+    }
+    if (custom.endsWith("missing")) rmSync(file);
+    system.calls.length = 0;
+    try {
+      assert.equal(await update(ctx), 0, ui.text);
+      if (custom.endsWith("missing")) assert.ok(!existsSync(file));
+      else assert.equal(readFileSync(file, "utf8"), text);
+      if (custom.endsWith("symlink")) {
+        assert.ok(lstatSync(file).isSymbolicLink());
+        assert.equal(readFileSync(target, "utf8"), text);
+      }
+      assert.match(ui.text, /Installed version 9\.9\.9/);
+      assert.equal(ui.lines.filter((line) => /Service settings left unchanged.*portals-host setup.*refresh/.test(line)).length, 1);
+      assert.match(ui.text, /Restarted.*answers/);
+      assert.ok(system.calls.some((call) => call.args[0] === "kickstart" || call.args[1] === "restart"));
+      assert.ok(!system.calls.some((call) => ["bootout", "bootstrap"].includes(call.args[0]) || call.args[1] === "daemon-reload"));
+    } finally {
+      bridge.close();
+    }
+  });
 }
 
 test("R2: Linux uninstall skips an unreachable manager only without a unit, socket or listener", async () => {
@@ -2182,6 +2237,117 @@ test("update installs the new version and restarts the LaunchAgent", async () =>
   } finally {
     bridge.close();
   }
+});
+
+for (const os of ["macos", "linux"] as const) {
+  test(`update on ${os} leaves an unloaded service definition untouched`, async () => {
+    const { system, ui, ctx, file, label } = await uninstallFixture(os, `update-unloaded-${os}`);
+    const definition = readFileSync(file, "utf8").replace(os === "macos" ? "<key>KeepAlive</key><true/>" : "TimeoutStopSec=20", os === "macos" ? "<key>KeepAlive</key><false/>" : "TimeoutStopSec=10");
+    writeFileSync(file, definition);
+    if (os === "macos") system.loaded.delete(label);
+    else system.active.delete(unitName(label));
+    system.calls.length = 0;
+    assert.equal(await update(ctx), 0, ui.text);
+    assert.equal(readFileSync(file, "utf8"), definition);
+    assert.match(ui.text, /isn't loaded.*nothing was restarted/);
+    assert.ok(!system.calls.some((call) => call.args[0] === "kickstart" || ["restart", "daemon-reload"].includes(call.args[1])));
+  });
+
+  for (const failRestart of [false, true]) {
+    test(`update on ${os} refreshes its definition before restarting${failRestart ? ", rolling back a failed restart" : ""}`, async () => {
+      const { system, ui, paths, ctx, file, label } = await uninstallFixture(os, `refresh-${os}-${failRestart}`);
+      const bridge = await healthCheck();
+      const config = readFileSync(paths.config, "utf8");
+      writeFileSync(paths.config, JSON.stringify({ ...JSON.parse(config), port: bridge.port }));
+      const settings = readFileSync(paths.config, "utf8");
+      const current = readFileSync(file, "utf8");
+      const previous = current.replace(os === "macos" ? "<key>KeepAlive</key><true/>" : "TimeoutStopSec=20", os === "macos" ? "<key>KeepAlive</key><false/>" : "TimeoutStopSec=10");
+      writeFileSync(file, previous);
+      const run = system.run.bind(system);
+      let failed = false;
+      system.calls.length = 0;
+      system.run = async (program, args, options) => {
+        if (failRestart && !failed && (args[0] === "kickstart" || args[1] === "restart")) {
+          failed = true;
+          system.calls.push({ program, args, options: options ?? {} });
+          if (os === "linux") system.active.delete(unitName(label));
+          return { code: 1, stdout: "", stderr: "restart failed" };
+        }
+        return run(program, args, options);
+      };
+      try {
+        if (failRestart) await assert.rejects(update(ctx), /restart failed/);
+        else assert.equal(await update(ctx), 0, ui.text);
+        assert.equal(readFileSync(file, "utf8"), failRestart ? previous : current);
+        assert.equal(readFileSync(paths.config, "utf8"), settings, "config.json is untouched");
+        assert.ok(os === "macos" ? system.loaded.has(label) : system.active.has(unitName(label)), "the service is still running, including after recovery");
+        assert.ok(!system.calls.some((call) => call.args[0] === "bootout" || call.args[0] === "bootstrap"));
+        if (os === "macos" && !failRestart) assert.match(ui.text, /Service settings updated;.*next login/);
+        if (os === "linux") {
+          const reload = system.calls.findIndex((call) => call.args[1] === "daemon-reload");
+          const restart = system.calls.findIndex((call) => call.args[1] === "restart");
+          assert.ok(reload >= 0 && reload < restart, "daemon-reload precedes restart");
+          if (failRestart) assert.equal(system.calls.filter((call) => call.args[1] === "daemon-reload").length, 2);
+        }
+      } finally {
+        bridge.close();
+      }
+    });
+  }
+}
+
+test("update reports a failed recovery reload with the backup location and leaves the previous definition recoverable", async () => {
+  const { system, ui, ctx, file } = await uninstallFixture("linux", "refresh-recovery-failure");
+  const previous = readFileSync(file, "utf8").replace("TimeoutStopSec=20", "TimeoutStopSec=10");
+  writeFileSync(file, previous);
+  const run = system.run.bind(system);
+  let reloads = 0;
+  system.run = async (program, args, options) => {
+    if (args[1] === "restart") return { code: 1, stdout: "", stderr: "restart failed" };
+    if (args[1] === "daemon-reload" && ++reloads === 2) return { code: 1, stdout: "", stderr: "recovery reload failed" };
+    return run(program, args, options);
+  };
+  await assert.rejects(update(ctx), (error) => {
+    assert.ok(error instanceof AggregateError);
+    assert.match(error.message, /could not be recovered:.*backup is .*previous.*recovery reload failed/);
+    assert.match(error.errors[0].message, /restart failed/);
+    return true;
+  });
+  assert.equal(readFileSync(file, "utf8"), previous);
+  const folder = readdirSync(dirname(file)).find((name) => name.startsWith(".portals-service-update-"))!;
+  assert.equal(readFileSync(join(dirname(file), folder, "previous"), "utf8"), previous);
+});
+
+test("update recovers the stopped service from its prepared backup when payload writes fail with ENOSPC", async (t) => {
+  const { system, ui, ctx, file, label } = await uninstallFixture("linux", "refresh-disk-full");
+  const previous = readFileSync(file, "utf8").replace("TimeoutStopSec=20", "TimeoutStopSec=10");
+  writeFileSync(file, previous);
+  const run = system.run.bind(system);
+  let writesFail = false;
+  let restarts = 0;
+  let reloads = 0;
+  system.run = async (program, args, options) => {
+    if (args[1] === "daemon-reload") reloads++;
+    if (args[1] === "restart" && ++restarts === 1) {
+      writesFail = true;
+      system.active.delete(unitName(label));
+      return { code: 1, stdout: "", stderr: "restart failed" };
+    }
+    return run(program, args, options);
+  };
+  const write = fs.writeFileSync;
+  t.mock.method(fs, "writeFileSync", (...args: Parameters<typeof write>) => {
+    if (writesFail) throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
+    return Reflect.apply(write, fs, args);
+  });
+  let failure: unknown;
+  try { await update(ctx); } catch (error) { failure = error; }
+  assert.ok(system.active.has(unitName(label)), "the recovery restart starts the service despite unavailable payload writes");
+  assert.equal(readFileSync(file, "utf8"), previous);
+  assert.equal(reloads, 2);
+  assert.equal(restarts, 2);
+  assert.ok(failure instanceof Error);
+  assert.match(failure.message, /restart failed/);
 });
 
 test("relay reset takes the relay id out of net-own.json and its .bak, keeping the token and key, and restarts a bridge its LaunchAgent runs around it (net-19)", async () => {

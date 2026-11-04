@@ -2,6 +2,7 @@ import { hostOS, type HostOS } from "../platform.ts";
 import { LaunchAgent } from "./launchAgent.ts";
 import { SystemdService } from "./systemd.ts";
 import type { System } from "./system.ts";
+import type { DefinitionUpdate } from "./serviceDefinition.ts";
 
 // What keeps the bridge running, started again when it stops: a LaunchAgent on a Mac
 // (launchAgent.ts), a systemd user service on Linux (systemd.ts), each in the person's own
@@ -50,6 +51,8 @@ export interface Service {
   state(): Promise<ServiceState>;
   /** Writes its file and loads it, replacing a loaded one: the bridge (re)starts. */
   install(spec: ServiceSpec): Promise<void>;
+  /** Re-render its current settings with this version's template, reloading safely where supported. */
+  refreshDefinition(): Promise<DefinitionUpdate>;
   /** Loads the file that is there, which starts the bridge. */
   start(): Promise<void>;
   /** Stops the bridge and starts it again (after an update). */
