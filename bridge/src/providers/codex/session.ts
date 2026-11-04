@@ -28,8 +28,10 @@ import {
   approvalRequest,
   clarifyRequest,
   commandApproval,
+  elicitation,
   fileChangeApproval,
   idKey,
+  isToolApproval,
   clarifyResult,
   clarifyRow,
   implementPlanText,
@@ -112,7 +114,10 @@ export interface CodexHost {
 }
 
 interface Pending {
+  /** Its own key in `pending`. */
   key: string;
+  /** What it is asked again by (`requestKey`). */
+  match: string;
   /** The id to answer by; after a reconnect, the one Codex asked again with. */
   codexID: RequestId;
   method: string;
@@ -148,6 +153,14 @@ type Held =
  */
 function isCompact(prompt: Prompt): boolean {
   return prompt.images.length === 0 && (prompt.files?.length ?? 0) === 0 && new RegExp(`^/${compactCommand}(\\s|$)`).test(prompt.text.trim());
+}
+
+/**
+ * Codex refused to list a thread's turns as it has none yet (0.166, on `thread/read` with
+ * its turns and on `thread/resume`, while it has the thread loaded).
+ */
+function noTurnsYet(error: unknown): boolean {
+  return /list_turns is not supported/i.test((error as Error)?.message ?? "");
 }
 
 /** Why a message waiting for the bridge to catch up with a thread fails (`unreachable`). */
@@ -333,6 +346,8 @@ export class CodexSession implements ProviderSession {
   /** Stop was given in the app's running turn: a plan it ends with is not put to the person. */
   private stopAsked = false;
   private readonly pending = new Map<string, Pending>();
+  /** Requests asked so far, which keeps each one's key in `pending` its own. */
+  private asked = 0;
   /** How many times the connection to Codex has dropped: a reconnect's cleanup is of its own connection. */
   private drops = 0;
   /** Each message to steer in, waiting for the answers given while Codex was away to go (`answersSent`). */
@@ -469,7 +484,14 @@ export class CodexSession implements ProviderSession {
 
   private async read(): Promise<Thread> {
     try {
-      return (await this.host.client.call("thread/read", { threadId: this.id, includeTurns: true })).thread;
+      try {
+        return (await this.host.client.call("thread/read", { threadId: this.id, includeTurns: true })).thread;
+      } catch (error) {
+        // A thread with no turn yet that Codex still has loaded has none to list (0.166):
+        // read without them, it is empty.
+        if (!noTurnsYet(error)) throw error;
+        return { ...(await this.host.client.call("thread/read", { threadId: this.id, includeTurns: false })).thread, turns: [] };
+      }
     } catch (error) {
       throw new Error(`Codex could not read this thread: ${(error as Error).message}`);
     }
@@ -493,8 +515,9 @@ export class CodexSession implements ProviderSession {
         this.subscribed = true;
         this.following = true;
       } catch (error) {
-        // A thread with no turn yet has nothing stored to resume; Codex still has it.
-        if (!/rollout/i.test((error as Error).message)) throw error;
+        // A thread with no turn yet has nothing stored to resume; Codex still has it, and
+        // the next turn/start follows it.
+        if (!/rollout/i.test((error as Error).message) && !noTurnsYet(error)) throw error;
         log.debug("Codex has nothing to resume for a thread without turns", { session: this.id });
         this.following = true;
       } finally {
@@ -1407,7 +1430,12 @@ export class CodexSession implements ProviderSession {
         this.host.client.respond(id, { permissions: {}, scope: "turn" });
         this.sink.emit({ type: "notice", level: "warn", text: `Codex asked for more access${params.reason ? ` (${params.reason})` : ""}. Portals cannot grant that, so it goes on without it.` });
         return;
-      case "mcpServer/elicitation/request":
+      case elicitation:
+        // Whether an MCP tool may run: a card like a command's.
+        if (isToolApproval(method, params)) {
+          void this.ask(id, method, params);
+          return;
+        }
         this.host.client.respond(id, { action: "decline", content: null, _meta: null });
         this.sink.emit({ type: "notice", level: "warn", text: `${params.serverName ? `The ${params.serverName} tool` : "A tool"} asked for input Portals cannot give, so it was declined.` });
         return;
@@ -1420,21 +1448,27 @@ export class CodexSession implements ProviderSession {
   }
 
   private async ask(id: RequestId, method: string, params: Params): Promise<void> {
-    const key = requestKey(method, params);
-    const known = this.pending.get(key);
+    const match = requestKey(method, params);
+    // A tool approval has no id of its own: two calls of one tool with the same arguments
+    // ask alike, so one asked while the other is open on this connection is another
+    // request, and only a card from before a drop (or one asked with this very id) stands
+    // for it. Any other request names its item, and is the same one however it comes.
+    const named = method !== elicitation;
+    const known = [...this.pending.values()].find((entry) => entry.match === match && (named || !entry.live || idKey(entry.codexID) === idKey(id)));
     if (known) {
       // Asked again (after a reconnect): the card that is open already stands for it.
       known.codexID = id;
       known.live = true;
       if (known.answer !== undefined) {
-        this.pending.delete(key);
+        this.pending.delete(known.key);
         this.host.client.respond(id, known.answer);
         this.answersGone();
       }
       return;
     }
+    const key = `${match}#${++this.asked}`;
     // Registered at once, so an answer from elsewhere meanwhile is noticed.
-    const entry: Pending = { key, codexID: id, method, controller: new AbortController(), live: true };
+    const entry: Pending = { key, match, codexID: id, method, controller: new AbortController(), live: true };
     this.pending.set(key, entry);
     let request: AgentRequest;
     if (method === userInput) {
