@@ -299,3 +299,80 @@ test("an Error: note Droid writes for a message it already took makes no refused
   notify("main", { type: "agent_turn_completed", turnId: "sdk-message", reason: "completed", tokenUsage: {} });
   assert.equal(ends().length, 1);
 });
+
+/** A real SDK session on a scripted transport, and one message's stream on it: what it yielded, and the message's id once sent. */
+async function streamed(t: { after(fn: () => void): void }) {
+  const script = scripted(t, (frame) => frame.method === "droid.load_session"
+    ? { session: { messages: [] }, settings: { modelId: "small", reasoningEffort: "low" } } : {});
+  const client = new DroidClient({ transport: script.transport });
+  await client.loadSession({ sessionId: "thread-session" });
+  const session = new DroidSession(client, "thread-session", { settings: SessionSettingsSchema.parse({ modelId: "small", reasoningEffort: "low" }), cwd: "/tmp" }, { loadParams: {} });
+  t.after(() => { void session.close().catch(() => undefined); });
+  const results: { success: boolean; error: { message: string } | null }[] = [];
+  let finished = false;
+  void (async () => {
+    for await (const event of script.transport.stream(session, "hello", { includePartialMessages: true })) {
+      if (event.type === "result") results.push(event);
+    }
+    finished = true;
+  })();
+  await until(() => script.sent.some((frame) => frame.method === "droid.add_user_message"));
+  const messageId = (script.sent.find((frame) => frame.method === "droid.add_user_message")!.params as { messageId: string }).messageId;
+  // Droid took the message: its user row was made, and it is at work.
+  script.notify("thread-session", { type: "droid_working_state_changed", newState: "streaming_assistant_message" });
+  script.notify("thread-session", { type: "create_message", message: { id: messageId, role: "user", content: [{ type: "text", text: "hello" }], createdAt: 1, updatedAt: 1 } });
+  return { ...script, messageId, results, finished: () => finished };
+}
+
+const usage = { inputTokens: 1, outputTokens: 2, cacheCreationTokens: 0, cacheReadTokens: 3, thinkingTokens: 0 };
+
+test("a turn's end the SDK cannot read as Droid sent it (a reason it does not know, usage counts left out) still ends the turn, the unknown reason as a failure that names it", async (t) => {
+  for (const [end, success] of [
+    [{ reason: "some_future_reason", tokenUsage: usage }, false],
+    [{ reason: "completed", tokenUsage: { inputTokens: 1 } }, true],
+    [{ reason: "completed", tokenUsage: usage, cumulativeTokenUsage: { inputTokens: 4, outputTokens: 2 } }, true],
+  ] as const) {
+    const run = await streamed(t);
+    run.notify("thread-session", { type: "agent_turn_completed", turnId: run.messageId, ...end });
+    run.notify("thread-session", { type: "droid_working_state_changed", newState: "idle" });
+    await until(run.finished);
+    assert.equal(run.results.length, 1, JSON.stringify(end));
+    assert.equal(run.results[0].success, success);
+    if (!success) assert.equal(run.results[0].error?.message, `Droid ended the turn with a reason Portals does not know ("some_future_reason").`);
+    await run.transport.close();
+  }
+});
+
+test("a turn's end the SDK can read is passed on as Droid sent it", async (t) => {
+  const { transport, notify } = scripted(t);
+  const delivered: Record<string, unknown>[] = [];
+  transport.onMessage((message) => delivered.push(message as Record<string, unknown>));
+  notify("main", { type: "agent_turn_completed", turnId: "turn", reason: "completed", tokenUsage: usage, durationMs: 5 });
+  assert.deepEqual((delivered[0].params as { notification: unknown }).notification, { type: "agent_turn_completed", turnId: "turn", reason: "completed", tokenUsage: usage, durationMs: 5 });
+});
+
+test("Droid idle with a message's turn not ended, its end lost, ends that turn as failed once Droid stays idle; at work again in time, it does not", async (t) => {
+  const run = await streamed(t);
+  run.transport.idleEndMs = 30;
+  // Idle, then at work again before the time is up: the turn goes on, and ends with its own end.
+  run.notify("thread-session", { type: "droid_working_state_changed", newState: "idle" });
+  run.notify("thread-session", { type: "droid_working_state_changed", newState: "thinking" });
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.equal(run.finished(), false);
+  // Its end, which the SDK cannot read in any way, then idle: Droid's word for the turn is lost.
+  run.notify("thread-session", { type: "agent_turn_completed", turnId: 42, reason: "completed", tokenUsage: usage });
+  // A process's idle as it starts names no session, and another session's is not this turn's.
+  run.notify("", { type: "droid_working_state_changed", newState: "idle" });
+  run.notify("child", { type: "droid_working_state_changed", newState: "idle" });
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.equal(run.finished(), false);
+  run.notify("thread-session", { type: "droid_working_state_changed", newState: "idle" });
+  // Nor is another session at work.
+  run.notify("child", { type: "droid_working_state_changed", newState: "thinking" });
+  await until(run.finished);
+  assert.equal(run.results.length, 1);
+  assert.equal(run.results[0].success, false);
+  assert.match(run.results[0].error?.message ?? "", /stopped working without saying the turn had ended/);
+  assert.equal(run.transport.refusedEnd({ type: "agent_turn_completed", turnId: run.messageId }), true, "the made end reaches no provider's own turn");
+  await run.transport.close();
+});
