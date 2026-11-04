@@ -5,12 +5,13 @@ import { expandHome } from "./config.ts";
 import { temporaryRoots } from "./folders.ts";
 import { cutWhole } from "./json.ts";
 import { log } from "./log.ts";
-import type { DeskSession, DeskState, Provider } from "./providers/types.ts";
+import type { AdoptMode, DeskSession, DeskState, Provider } from "./providers/types.ts";
 import type { Registry } from "./sessions/registry.ts";
 
 // Sessions started in a terminal at the desk (`desk.list`, docs/gateway-protocol.md,
-// section 11): Claude Code's sessions, Codex's threads and Pi's sessions that are not the
-// bridge's own, newest first, for the app to take up (`session.adopt`).
+// section 11): Claude Code's sessions, Codex's threads, Pi's sessions and Cursor's
+// terminal chats that are not the bridge's own, newest first, for the app to take up
+// (`session.adopt`). Cursor's are forked only, which each says (`adopt_modes`).
 //
 // Each agent reports its own (providers/*/provider.ts); here the bridge's threads are
 // left out, and so are sessions in a folder that is gone, temporary, the bridge's own or
@@ -36,6 +37,8 @@ export interface ListedDeskSession {
   /** Unix seconds. */
   updated: number;
   state: DeskState;
+  /** The ways it can be taken up, when not all those its agent lists in `profiles.list`. */
+  adopt_modes?: AdoptMode[];
 }
 
 export interface DeskOptions {
@@ -96,7 +99,7 @@ export class DeskSessions {
       if (!folder) continue;
       // Taken up meanwhile, by another device, it is a thread again.
       if (removed.has(session.id) && (!(await kept(provider, session.id)) || this.options.registry.has(session.id))) continue;
-      sessions.push({ id: session.id, title: oneLine(session.title), folder, updated: Math.floor(session.updated / 1000), state: session.state });
+      sessions.push({ id: session.id, title: oneLine(session.title), folder, updated: Math.floor(session.updated / 1000), state: session.state, ...(session.modes ? { adopt_modes: session.modes } : {}) });
       if (sessions.length >= wanted) break;
     }
     return sessions;

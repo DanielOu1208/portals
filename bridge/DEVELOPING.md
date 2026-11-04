@@ -191,7 +191,10 @@ node scripts/record-claude.ts            # or name scenarios: plain tools approv
 
 It runs Haiku with harmless prompts in scratch folders under
 `/private/tmp/portals-claude-record/`, on your login and quota, then deletes the
-sessions and folders it made and replaces paths in what it writes.
+sessions and folders it made and replaces paths in what it writes, also where Claude
+Code streamed a path in pieces (`scripts/record-claude-clean.ts`, which can clean a
+recording again: `node scripts/record-claude-clean.ts <file> <scratch folder>`). A plan
+the `plan` scenario writes stays in `~/.claude/plans/`; delete it by hand.
 
 The Codex tests replay real Codex streams recorded in `test/fixtures/codex/` the same
 way (golden `*.events.json` files, `UPDATE_GOLDEN=1 node --test test/codex-stream.test.ts`),
@@ -229,8 +232,8 @@ one would hide a bug in the bridge (its header lists how), and it will not run w
 off. The tests of Pi's sessions from the desk (`test/pi-desk.test.ts`) write their own
 session files into the stand-in's folder and say themselves in which folders a Pi "runs
 in a terminal"; the provider a test builds with `piProvider` never asks the Mac for its
-processes. To record again (Pi changes its records often; the bridge was tested with
-1.1.0):
+processes. To record again (Pi changes its records often; these were recorded on
+1.5.0):
 
 ```sh
 node scripts/record-pi.ts                # or name scenarios: plain tools stop steer …
@@ -435,6 +438,7 @@ be changed while it runs, on a bridge that was started with them on ([Counters](
 | `claude.idleMinutes` | A thread's Claude process stops after this long with no turn running, no question open and no background work running. The next message resumes it. |
 | `claude.maxWarm` | At most this many Claude processes at once; the least recently used idle one stops first. |
 | `claude.apiKey` | The Anthropic API key Claude Code runs with, or `null` for your own Claude login. See [Claude Code's sign-in](README.md#claude-codes-sign-in). |
+| `claude.oauthToken` | A long-lived token from `claude setup-token`, given to Claude Code as `CLAUDE_CODE_OAUTH_TOKEN`, or `null` for your own Claude login. Not used when `claude.apiKey` is set. See [Claude Code's sign-in](README.md#claude-codes-sign-in). |
 | `claude.toolSummaries` | Claude Code says in a few words what each run of its tool calls did ("Read a.txt and b.txt"), which the app shows on the status line as what the agent is working on. Each summary costs Claude Code one small extra model call of its own. On unless set to `false`. |
 | `codex.mode` | `shared` (the default) or `own`; see [Codex](#codex). |
 | `codex.path` | The installed `codex`. A bare name is looked up on the PATH the bridge runs with. |
@@ -526,6 +530,9 @@ lately, newest first, at most 30. The list comes from:
   when the bridge starts and every 3 minutes, so a reply never waits for Codex;
 - the projects `~/.codex/config.toml` trusts (its `[projects."<path>"]` headers only;
   no time, so they come after the rest);
+- Droid's sessions (`~/.factory/sessions`) and Pi's (its session folder): the folder
+  each session file's first line names, and when the file last changed; only that
+  line is read, and again only once the file has changed;
 - the bridge's own threads.
 
 Only folders that exist are offered, each once by its real path. Never offered: `/`,
@@ -724,6 +731,19 @@ How the app draws them is in `docs/visuals.md`.
 What the bridge does with each agent, what the app sees of it, and the commands it offers.
 The README keeps a short part of each for the person using it.
 
+**Versions.** Each agent names the releases the bridge was tested with, and a minimum
+only where an older release is known not to work (`src/providers/program.ts`). The
+bridge learns the release from `--version` at startup, and from the running process
+where it says so itself: Claude Code's `system/init` (`claude_code_version`) and the
+Codex app server's `initialize` (`userAgent`), which is the release a thread really runs
+on when the program was updated after the bridge started, or the shared Codex daemon was
+not restarted. Each release is logged once: an error when the program does not run or is
+older than the minimum, a warning when it is newer than the tested ones or another, a
+line for a tested one. Only a release below the minimum runs no turn; today that is Pi
+older than 1.1.0. `/status` shows the release last known, and what is off about it, on
+a `Version:` line after the agent (`Version: Codex 0.168.0, newer than the 0.166.0
+Portals was tested with`).
+
 ### Claude Code
 
 Each thread is one Claude Code session, and the thread id is its session id. The bridge
@@ -742,11 +762,16 @@ the app gets it as a turn opened by a line saying what ended (`status.update` ki
 How it runs `claude`:
 
 - **The installed `claude`**, at `claude.path`, not a copy of its own. The bridge was
-  tested with Claude Code 2.1.292 and `@anthropic-ai/claude-agent-sdk` 0.3.292; at
-  startup it logs a warning when the installed `claude` is another version.
+  tested with Claude Code 2.1.318 and `@anthropic-ai/claude-agent-sdk` 0.3.318; it logs
+  a warning for another release, at startup and when a process says it runs one.
 - **Its sign-in.** With `claude.apiKey` set, `claude` gets the key as
-  `ANTHROPIC_API_KEY`. Without, it signs in with its own Keychain login
-  (`apiKeySource: none`); the bridge never reads, stores or passes on Claude credentials.
+  `ANTHROPIC_API_KEY`; with `claude.oauthToken`, the token as `CLAUDE_CODE_OAUTH_TOKEN`.
+  Without, it signs in with its own Keychain login (`apiKeySource: none`); the bridge
+  never reads, stores or passes on Claude credentials. A login ends on a fixed date,
+  which `claude auth status` (`loginExpiresAt`, asked at startup) and each result
+  (`credential_expires_at`) say from 2.1.318: from ten days before, each thread says
+  so once a day. A turn refused for the sign-in (`authentication_failed`) ends with
+  what to run on the host instead of Claude Code's words, which name its `/login`.
 - **Your own settings.** It loads your user, project and local settings, CLAUDE.md
   files, plugins and MCP servers, as at the desk, with Claude Code's own system prompt,
   and starts in the permission mode they give. Change it per thread with `/mode` (below).
@@ -828,8 +853,8 @@ compact") ends its turn with that reason.
 ### Codex
 
 Each thread is one Codex thread, and the thread id is Codex's own (`thread/start`). The
-bridge was tested with codex-cli 0.160.1; at startup it logs a warning for another
-version.
+bridge was tested with codex-cli 0.166.0; it logs a warning for another release, at
+startup and when the app server it connects to names one.
 
 **Shared or own.** With `codex.mode` `shared` (the default) the bridge joins the
 app-server daemon every Codex on this Mac uses (`codex app-server daemon version` shows
@@ -895,8 +920,12 @@ What the app sees:
 | `commandExecution` | Terminal row: the command (without Codex's `zsh -lc` wrapper), its output, its exit code |
 | `fileChange` | Edit row with a unified diff; a new file is a Write row |
 | `mcpToolCall` · `webSearch` · sub-agents · plan updates | The tool's own name · Web search · Delegate · To-do rows |
+| A plan of plan mode (`plan`) | Plan row, filled in as Codex writes it (`item/plan/delta`, as live output) |
+| `sleep` (Codex waiting) | Wait row, saying for how long |
+| A review (`enteredReviewMode` to `exitedReviewMode`) | One Review row from its start to its end, saying what it reviews; the review's commands are rows of their own, and its findings are Codex's reply |
 | A command approval | once (`accept`), for this thread (`acceptForSession`, when Codex offers it), always (the rule Codex proposes, when it offers one), deny (`decline`: the turn goes on; what to do instead, when the app gives it, follows as your message steered into the turn) |
 | A file-change approval | "Edit <path>" and the diff: once, for this thread, deny |
+| A command's approval to reach a host (`networkApprovalContext`) | The host (or the command reaching it) and "Codex wants to reach <host>"; always allows the host from then on (the network amendment Codex offers) |
 | `request_user_input` | A question card |
 | A turn started in a terminal on a thread the bridge follows | A turn of its own |
 | Codex's name for the thread | The thread's title; until the bridge has named a new thread, the first line of its first message |
@@ -906,8 +935,15 @@ What the app sees:
 Models are the ones `model/list` offers (hidden ones left out), from provider `openai`;
 the default is `config.toml`'s. The app's slider offers each model its
 `supportedReasoningEfforts` (`model_levels`); a level a model lacks goes to the next one
-up it has, else its strongest. Of Codex's own slash commands only `/compact` is offered:
-it runs `thread/compact/start`, a turn of its own. `/usage` shows your plan and how much of
+up it has, else its strongest. Of Codex's own slash commands the bridge offers those it
+can carry out through the app-server: `/compact` runs `thread/compact/start`, a turn of
+its own, and `/review` runs `review/start` on the thread (the uncommitted changes, or what
+follows the command), a turn of its own too, with the thread's settings as Codex has them.
+Neither takes a message in while it runs: one sent meanwhile waits for it. The rest of
+Codex's commands are its terminal's own. Codex's skills for the thread's folder
+(`skills/list`, those turned off left out) are offered as skills: `/name what to do` goes
+to Codex as it is, with the skill beside it (a `skill` input), as Codex's own apps send a
+skill picked from their menus. `/usage` shows your plan and how much of
 each of its limits is used now (`account/rateLimits/read`), a workspace's spending limit,
 what turns work away where no limit shows it (a workspace's credits used up), and the
 credits left.
@@ -935,9 +971,9 @@ one process per thread. The process stays up for the next message and stops afte
 `pi.idleMinutes` idle, never while a turn runs or a question is open; the message after
 that starts a new one, and Pi goes on from its own session file. A thread opened after a
 restart of the bridge is read from that file without starting anything. The bridge was
-tested with Pi 1.1.0; at startup it logs a warning for a newer version. An older Pi runs
-no turn (it lacks what the bridge ends a turn by): the thread says so, and works once Pi
-is updated (`pi update`).
+tested with Pi 1.1.0 and 1.5.0, whose RPC mode is the same; at startup it logs a warning
+for another release. A Pi older than 1.1.0 runs no turn (it lacks what the bridge ends a
+turn by): the thread says so, and works once Pi is updated (`pi update`).
 
 **Pi does not ask before it acts.** Pi has no approvals and no permission modes: it runs
 every command and makes every edit its model decides on, at once, and through the bridge
@@ -1043,7 +1079,7 @@ once.
 Cursor here is Cursor's command-line agent, `cursor-agent`, run through its Agent Client
 Protocol mode (`cursor-agent acp`) with your own Cursor settings and sign-in. Each
 thread is one Cursor session, and the thread id is that session's id. The bridge was
-tested with cursor-agent 2026.10.01; it logs a warning for another version at startup,
+tested with cursor-agent 2026.10.22; it logs a warning for another version at startup,
 and again when a process starts on a release it has not seen yet (Cursor's command
 updates itself when you use it in a terminal).
 
@@ -1209,7 +1245,7 @@ Left out by choice:
 Droid uses the installed CLI through the official `@factory/droid-sdk` (pinned to
 0.10.0, protocol 1.269.0; 0.9.1 refused newer Droid's Script approvals and pick lists
 before the bridge saw them), with your existing Factory login and settings. The bridge
-was tested with CLI 1.0.0. Setup only discovers the executable and probes its version;
+was tested with CLI 1.0.0 and 1.3.0. Setup only discovers the executable and probes its version;
 it neither installs/upgrades Droid nor signs in or
 copies credentials. Bridge-launched processes disable automatic updates with
 `FACTORY_DROID_AUTO_UPDATE_ENABLED=false`. Startup does not change global Droid settings.
@@ -1349,6 +1385,9 @@ runs, the bridge starts `hermes serve` in a process group of its own (output in
 bridge restarts. Hermes stops a turn whose client has been gone for 20 seconds; the
 bridge is back well before. The profiles Hermes listed last are kept in
 `state/hermes.json`, so after a restart the agents are there before Hermes answers.
+The bridge was tested with Hermes 0.22.5; at startup it logs a warning for another
+release (`hermes --version`), and counts a build past a release (`v0.22.5+12.g1a2b3c4`)
+as newer.
 
 Setup finds Hermes and, when it is running, asks it whether it can run a turn (Hermes
 needs an AI provider and model: `hermes setup model` sets them). When Hermes is missing,
@@ -1450,8 +1489,6 @@ See [the protocol](../docs/gateway-protocol.md#lean-deltas) for the format and o
 - A message sent mid-turn and then interrupted may still be answered by Claude after
   the interrupt; that answer is not shown live.
 - Pi threads never ask before a command or an edit ([Pi](#pi)), and have no `/mode`.
-- The folders Pi worked in are not offered for new threads. A Pi thread starts in
-  General, in a folder another agent worked in, or in one you added.
 - Whether a terminal has a Pi session open is judged by folder, since Pi does not say.
   A Pi left open in a project keeps every Pi session of that project from being
   continued (fork one instead). Not seen: a Pi started in another folder that opened
@@ -1501,9 +1538,12 @@ See [the protocol](../docs/gateway-protocol.md#lean-deltas) for the format and o
   Leave Pi off on a bridge with such a profile. A profile called `cursor` loses its name
   to Cursor the same way, on a Mac that has `cursor-agent`: turn Cursor off there
   (`providers.cursor`).
-- Hermes threads through the bridge show no subagents line, offer none of Hermes's own
-  slash commands or skills, list no Hermes sessions from the desk (Discord, a terminal),
-  and queue a message sent mid-turn rather than steering it in.
+- Hermes threads through the bridge list no Hermes sessions from the desk (Discord, a
+  terminal), and offer only those of Hermes's own commands that change none of its
+  settings and work outside its own windows (`hermesCommands` in
+  `src/providers/hermes/provider.ts`). A skill local to a project is not offered, and
+  goes as words when typed: the catalog is asked for the profile. A subagent's own
+  transcript (`subagent.tail`) is not shown.
 - While a `hermes serve` the bridge started runs, `hermes dashboard` refuses to start
   beside it (one backend per user): stop it with `hermes serve --stop`, or run the
   dashboard with `--isolated`.

@@ -1,4 +1,5 @@
 import { cursorUsage, type PlanLimitsOptions } from "../planLimits.ts";
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { cpSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -9,18 +10,20 @@ import { machineWord } from "../../platform.ts";
 import { onPath, type CommandAccess } from "../../portals/access.ts";
 import { readBackedUp, readJSON, writeJSON } from "../../store/jsonFile.ts";
 import { version } from "../../version.ts";
-import { AcpClient, AgentStopped, refuse } from "../acp/client.ts";
-import type { AvailableCommand, ConfigOption, InitializeResult, RpcId } from "../acp/protocol.ts";
-import { reportVersion } from "../program.ts";
-import { DeskRefused, type AdoptMode, type AgentCommand, type AgentProfile, type DeskAdoption, type ModelCatalog, type ModeOption, type Provider, type ProviderSession, type SessionOptions, type SessionSettings, type SessionSink, type StoredMessage, type UsageReport } from "../types.ts";
+import { AcpClient, AcpError, AgentStopped, refuse } from "../acp/client.ts";
+import { authRequiredCode, type AvailableCommand, type ConfigOption, type InitializeResult, type RpcId, type SessionState, type SessionUpdate } from "../acp/protocol.ts";
+import { VersionCheck } from "../program.ts";
+import { mcpCommand, mcpFolderGone, mcpStatusText, type McpServer, type McpServerState } from "../mcpStatus.ts";
+import { DeskRefused, type AdoptMode, type AgentCommand, type AgentProfile, type DeskAdoption, type DeskSession, type ModelCatalog, type ModeOption, type Provider, type ProviderSession, type SessionOptions, type SessionSettings, type SessionSink, type StoredMessage, type UsageReport } from "../types.ts";
 import type { RecentFolder } from "../../folders.ts";
 import type { SearchFile } from "../../search/readers.ts";
+import { copyChat, keepsRunEverything, replayed, terminalChat, terminalChats, type TerminalChat } from "./desk.ts";
 import { cursorFolders } from "./folders.ts";
 import { ProcessNotes } from "./leftovers.ts";
 import { cursorCatalog, listedModels, sessionModels, type CursorModel } from "./models.ts";
-import { cursorArgs, cursorCapabilities, cursorForceArgs, cursorModeMeanings, cursorName, cursorVersion, hiddenCommands, testedCursorVersion } from "./options.ts";
+import { chatForkedOnlyText, cursorArgs, cursorCapabilities, cursorForceArgs, cursorModeMeanings, cursorName, cursorVersion, hiddenCommands, notSignedInText, testedCursorVersion } from "./options.ts";
 import { isCursorRequest, keptTodos, permissionRequest, unplacedAnswer } from "./requests.ts";
-import { CursorSession, errorText, newSession, NotSignedIn, type CursorHost, type CursorProcess, type KeptThread } from "./session.ts";
+import { CursorSession, errorText, loadTimeoutMs, newSession, NotSignedIn, type CursorHost, type CursorProcess, type KeptThread } from "./session.ts";
 
 // Cursor as an agent of the bridge: `cursor-agent acp`, which speaks the Agent Client
 // Protocol (../acp), with the user's own Cursor settings and sign-in.
@@ -161,13 +164,42 @@ class Process implements CursorProcess {
 
 type Params = Record<string, any>;
 
+/** An id that is a name alone, never a path: no separator, no `.` or `..`. */
+function isBareName(id: string): boolean {
+  return id !== "" && !/[/\\\0]/.test(id) && !/^\.+$/.test(id);
+}
+
 /** A process's place among those that run: one for each folder, and one more there for threads in Full access. */
 function processKey(cwd: string, forced: boolean): string {
   return forced ? `${cwd}\0force` : cwd;
 }
 
+/** What `cursor-agent mcp list` says of a server, in `/mcp`'s words; an error is `Error: …`. */
+const cursorMcpStates: Record<string, McpServerState> = {
+  ready: "connected", loading: "starting", requires_authentication: "signIn", disabled: "off", "not loaded (needs approval)": "approval",
+};
+
+/** `/mcp` from what `cursor-agent mcp list` printed: a line a server, `name: state`. */
+export function cursorMcpText(printed: string): string {
+  const servers = printed.replace(/\u001b\[[0-9;]*[A-Za-z]/g, "").split("\n").flatMap((line): McpServer[] => {
+    const at = line.indexOf(": ");
+    if (at <= 0 || line.startsWith("No MCP servers configured")) return [];
+    const name = line.slice(0, at).trim(), said = line.slice(at + 2).trim();
+    const error = /^Error: (.*)$/s.exec(said)?.[1];
+    if (error !== undefined) return [{ name, state: "failed", detail: error }];
+    const state = cursorMcpStates[said];
+    return [state ? { name, state } : { name, state: "unknown", detail: said }];
+  });
+  return mcpStatusText(cursorName, servers, {
+    signIn: "To sign in to one, run cursor-agent mcp login <name> on the host.",
+    approve: "To approve one, run cursor-agent mcp enable <name> on the host, in the thread's folder.",
+  });
+}
+
 export class CursorProvider implements Provider, CursorHost {
   readonly supportsModes = true;
+  /** Its command the bridge runs itself, through `cursor-agent mcp list`: Cursor's ACP has none for it. */
+  readonly executes = ["mcp"] as const;
   /**
    * Cursor's three modes alone (`cursorMode`), in the app's own words where they fit: with
    * none given, the app offered its five, and full access and accept edits were refused.
@@ -181,6 +213,8 @@ export class CursorProvider implements Provider, CursorHost {
   readonly modeMeanings = cursorModeMeanings;
   /** Cursor takes a mode as it takes a prompt: one chosen during a turn counts from the next. */
   readonly modesWaitForTurn = true;
+  /** Its terminal's chats are only forked (`adoptChat`). */
+  readonly deskForksOnly = true;
   readonly interruptGraceMs: number;
   /** What a thread's first message tells Cursor of the `portals` command; null when agents are not told. */
   readonly note: string | null;
@@ -193,8 +227,8 @@ export class CursorProvider implements Provider, CursorHost {
   private readonly planLimits: CursorProviderOptions["planLimits"];
   private readonly startTimeoutMs: number | undefined;
   private readonly checking: boolean;
-  /** The versions of the program told of since the bridge started; null is one that did not run. */
-  private readonly versionsSaid = new Set<string | null>();
+  /** Which Cursor runs, as `cursor-agent --version` said at the bridge's start and as each process started. */
+  readonly version: VersionCheck;
   /** Cursor's processes, by the folder each runs in. */
   private readonly running = new Map<string, Process>();
   private readonly starting = new Map<string, Promise<Process>>();
@@ -219,6 +253,8 @@ export class CursorProvider implements Provider, CursorHost {
   private readonly asides = new Map<string, string>();
   /** Sessions made by `newThread`, until their thread is started: the process each is in. */
   private readonly made = new Map<string, Process>();
+  /** What Cursor sends again of each fork of a terminal chat it is opening, by the fork's session (`replay`). */
+  private readonly replays = new Map<string, SessionUpdate[]>();
   private kept: Kept;
   private timer: NodeJS.Timeout | null = null;
   /** The folders Cursor worked in, as last read (./folders.ts), and when they are read again. */
@@ -241,6 +277,7 @@ export class CursorProvider implements Provider, CursorHost {
     this.planLimits = options.planLimits;
     this.note = options.portals?.instructions ?? null;
     this.checking = options.checkVersion ?? true;
+    this.version = new VersionCheck({ name: cursorName, tested: testedCursorVersion, path: this.command, setting: "cursor.path" });
     this.startTimeoutMs = options.startTimeoutMs;
     this.interruptGraceMs = options.interruptGraceMs ?? 15_000;
     this.notes = new ProcessNotes(join(this.directory, "processes.json"));
@@ -308,11 +345,7 @@ export class CursorProvider implements Provider, CursorHost {
    */
   private checkVersion(): void {
     if (!this.checking) return;
-    void cursorVersion(this.command, this.env).then((version) => {
-      if (this.versionsSaid.has(version)) return;
-      this.versionsSaid.add(version);
-      reportVersion({ name: cursorName, version, tested: testedCursorVersion, path: this.command, setting: "cursor.path" });
-    });
+    void cursorVersion(this.command, this.env).then((version) => this.version.installedIs(version));
   }
 
   /** How much of the plan is used (`/usage`), as Cursor says it to cursor-agent's own sign-in (`planLimits.ts`). */
@@ -324,8 +357,25 @@ export class CursorProvider implements Provider, CursorHost {
     return cursorCatalog({ id: this.profile.name, name: cursorName }, this.kept.models);
   }
 
-  async commands(): Promise<AgentCommand[]> {
-    return this.kept.commands;
+  async commands(thread?: { id: string; cwd: string }): Promise<AgentCommand[]> {
+    const mcp = mcpCommand(() => this.mcpStatus(thread?.cwd));
+    return [mcp, ...this.kept.commands.filter((command) => command.name !== mcp.name)];
+  }
+
+  /**
+   * How the MCP servers of a thread in `cwd` are (`/mcp`), as `cursor-agent mcp list` run
+   * there says: it reads the folder's `.cursor/mcp.json` and the user's, and connects to
+   * each for the moment it asks. Not run elsewhere for a thread whose folder is gone
+   * (`mcpFolderGone`).
+   */
+  private mcpStatus(cwd: string | undefined): Promise<string> {
+    if (cwd !== undefined && !existsSync(cwd)) return Promise.reject(mcpFolderGone(cursorName, cwd));
+    return new Promise((resolve, reject) => {
+      execFile(this.command, ["mcp", "list"], { cwd: cwd ?? (this.env.HOME || homedir()), env: { ...this.env, NO_COLOR: "1" }, timeout: 60_000, killSignal: "SIGKILL" }, (error, stdout, stderr) => {
+        if (error) reject(new Error(`${cursorName} did not say how its MCP servers are: ${(stderr.trim() || error.message).split("\n")[0]}`));
+        else resolve(cursorMcpText(stdout));
+      });
+    });
   }
 
   // MARK: Threads
@@ -354,6 +404,8 @@ export class CursorProvider implements Provider, CursorHost {
 
   /** A thread from before: its conversation as kept. Cursor starts when the thread gets a message. */
   async resumeSession(options: SessionOptions, sink: SessionSink): Promise<ProviderSession> {
+    // A terminal chat taken up to be read: `adopt` let it pass, since the bridge asks so for a fork's folder too.
+    if (options.readOnly && !this.hasExactThread(options.id) && this.cursorHome !== null && (await terminalChat(this.cursorHome, options.id))) throw new DeskRefused(chatForkedOnlyText);
     // The file's last save but one when a power cut left it unusable (`save`).
     const read = readBackedUp(this.threadFile(options.id));
     if (read.aside) this.asides.set(options.id, read.aside);
@@ -362,7 +414,7 @@ export class CursorProvider implements Provider, CursorHost {
     // A thread taken off the list and taken up again while its process still runs is on it still.
     const process = [...this.running.values()].find((running) => running.loaded.has(session)) ?? null;
     const stored = Array.isArray(file.messages) ? file.messages : [];
-    return this.add(new CursorSession(options, sink, this, { process, stored, session, told: file.told === true, todos: keptTodos(file.todos), cut: file.open === true }), session);
+    return this.add(new CursorSession(options, sink, this, { process, stored, session, told: file.told === true, todos: keptTodos(file.todos), cut: file.open === true, runsEverything: file.runsEverything === true }), session);
   }
 
   private add(session: CursorSession, cursorSession: string): CursorSession {
@@ -390,19 +442,32 @@ export class CursorProvider implements Provider, CursorHost {
   // MARK: Forks
 
   /**
+   * The chats of Cursor's terminal, newest first (./desk.ts), each to be taken up as a
+   * fork alone: Cursor's ACP opens a copy of one, and never the chat itself.
+   */
+  async deskSessions(wanted: number): Promise<DeskSession[]> {
+    if (this.cursorHome === null) return [];
+    return (await terminalChats(this.cursorHome)).slice(0, wanted).map((chat) => ({ id: chat.id, title: chat.title ?? "", cwd: chat.cwd, updated: chat.updated, state: "closed", modes: ["fork"] }));
+  }
+
+  /**
    * A thread of the bridge's, taken up again (`continue`, one taken off the list), only
    * read, or forked: a new thread whose Cursor session is a copy of this one's, which
    * Cursor loads as it would the thread's own and goes on from (recorded with 2026.10.22,
    * scenario fork-copy). Cursor has no call to fork a session; its sessions are folders
    * of its own (`~/.cursor/acp-sessions/<session>/`: a store and a `meta.json` with the
    * folder and title), and the copy is one of those. The thread's conversation as the
-   * app shows it is copied too. Sessions started in Cursor's terminal are not offered:
-   * Cursor's ACP opens none of them.
+   * app shows it is copied too. A chat of Cursor's terminal is forked the same way, and
+   * only forked (`adoptChat`).
    */
   async adopt(id: string, mode: AdoptMode): Promise<DeskAdoption> {
     const read = this.hasExactThread(id) ? readBackedUp(this.threadFile(id)) : null;
     const file = (read?.found ?? null) as ThreadFile | null;
-    if (!file) throw new DeskRefused(`${cursorName} has no thread by that id on this ${machineWord()}.`);
+    if (!file) {
+      const chat = this.cursorHome !== null && isBareName(id) ? await terminalChat(this.cursorHome, id) : null;
+      if (chat) return this.adoptChat(chat, mode);
+      throw new DeskRefused(`${cursorName} has no thread by that id on this ${machineWord()}.`);
+    }
     const session = typeof file.session === "string" && file.session !== "" ? file.session : id;
     const meta = this.sessionMeta(session);
     const cwd = meta?.cwd ?? (typeof file.cwd === "string" ? file.cwd : null);
@@ -416,7 +481,7 @@ export class CursorProvider implements Provider, CursorHost {
     const from = this.sessionsFolder ? join(this.sessionsFolder, session) : null;
     const to = from && existsSync(from) ? join(this.sessionsFolder!, fork) : null;
     // Without Cursor's session (one that never got a message keeps none), the fork's first message starts one afresh.
-    const kept: KeptThread = { messages: Array.isArray(file.messages) ? file.messages : [], cwd, ...(file.told === true ? { told: true } : {}), ...(Array.isArray(file.todos) && file.todos.length > 0 ? { todos: keptTodos(file.todos) } : {}) };
+    const kept: KeptThread = { messages: Array.isArray(file.messages) ? file.messages : [], cwd, ...(file.told === true ? { told: true } : {}), ...(Array.isArray(file.todos) && file.todos.length > 0 ? { todos: keptTodos(file.todos) } : {}), ...(file.runsEverything === true ? { runsEverything: true } : {}) };
     try {
       if (to) {
         cpSync(from!, to, { recursive: true });
@@ -433,9 +498,70 @@ export class CursorProvider implements Provider, CursorHost {
     return { id: fork, ...adoption, title };
   }
 
+  /**
+   * A chat of Cursor's terminal, forked: a copy of its folder as a session of Cursor's
+   * ACP, which Cursor opens now, sending the conversation again, which the fork's thread
+   * shows (./desk.ts). One Cursor cannot open is refused, and its copy goes. The chat
+   * itself is never continued nor read here: `read` answers only with its folder, which
+   * the bridge checks before it asks for a fork (a thread only read is refused as it
+   * starts, `resumeSession`).
+   */
+  private async adoptChat(chat: TerminalChat, mode: AdoptMode): Promise<DeskAdoption> {
+    const settings = { model: "default", provider: this.profile.name, reasoningEffort: "" };
+    if (mode === "read") return { id: chat.id, cwd: chat.cwd, title: chat.title, settings };
+    if (mode !== "fork" || !this.sessionsFolder) throw new DeskRefused(chatForkedOnlyText);
+    const fork = randomUUID();
+    const to = join(this.sessionsFolder, fork);
+    try {
+      await copyChat(chat.folder, to);
+      writeFileSync(join(to, "meta.json"), JSON.stringify({ schemaVersion: 1, cwd: chat.cwd, title: chat.title ?? "Fork" }));
+      // Read before Cursor opens the copy, which writes to its store.
+      const everything = await keepsRunEverything(join(to, "store.db"));
+      const { messages, title } = replayed(await this.replay(fork, chat.cwd), chat.cwd);
+      // Written here, not by `save`, which only logs a failure: a fork whose conversation is not on the disk would open empty.
+      writeJSON(this.threadFile(fork), { messages, cwd: chat.cwd, ...(everything ? { runsEverything: true } : {}) } satisfies KeptThread);
+      log.info(`${cursorName} terminal chat forked`, { chat: chat.id, fork, messages: messages.length, ...(everything ? { runsEverything: true } : {}) });
+      return { id: fork, cwd: chat.cwd, title: chat.title ?? title, settings };
+    } catch (error) {
+      rmSync(to, { recursive: true, force: true });
+      rmSync(this.threadFile(fork), { force: true });
+      if (error instanceof DeskRefused) throw error;
+      throw new DeskRefused(`The ${cursorName} chat could not be copied: ${(error as Error).message}`);
+    }
+  }
+
+  /**
+   * Opens a fork of a terminal chat in the Cursor of its folder, and returns what Cursor
+   * sent again of its conversation. The process has the session loaded from then on, so
+   * the fork's first message loads nothing.
+   */
+  private async replay(session: string, cwd: string): Promise<SessionUpdate[]> {
+    const process = await this.open(cwd);
+    process.touch();
+    const updates: SessionUpdate[] = [];
+    this.replays.set(session, updates);
+    try {
+      await process.making(async () => {
+        const state = await process.client.call<SessionState | null>("session/load", { sessionId: session, cwd, mcpServers: [] }, loadTimeoutMs);
+        process.loaded.add(session);
+        process.learn(state?.configOptions);
+      });
+    } catch (error) {
+      if (error instanceof AcpError && error.code === authRequiredCode) {
+        this.release(process, null, "is not signed in");
+        throw new DeskRefused(notSignedInText);
+      }
+      throw new DeskRefused(`${cursorName} could not open the chat: ${errorText(error)}`);
+    } finally {
+      this.replays.delete(session);
+      process.touch();
+    }
+    return updates;
+  }
+
   /** The manager keys policy by the supplied id, so filesystem aliases are not other identities. */
   private hasExactThread(id: string): boolean {
-    if (!id || /[/\\\0]/.test(id) || /^\.+$/.test(id)) return false;
+    if (!isBareName(id)) return false;
     try { return readdirSync(join(this.directory, "threads")).includes(`${id}.json`); }
     catch { return false; }
   }
@@ -625,6 +751,12 @@ export class CursorProvider implements Provider, CursorHost {
       default:
         break;
     }
+    // A terminal chat's fork being opened (`replay`): what Cursor sends again is its conversation.
+    const replay = typeof params.sessionId === "string" ? this.replays.get(params.sessionId) : undefined;
+    if (replay) {
+      replay.push(update);
+      return;
+    }
     const found = typeof params.sessionId === "string" ? this.sessionFor(params.sessionId) : undefined;
     if (!found) {
       if (typeof params.sessionId === "string" && this.ignored.has(params.sessionId)) this.passOver(process, params.sessionId, update);
@@ -765,15 +897,18 @@ export class CursorProvider implements Provider, CursorHost {
    * file it replaces as `<file>.bak`: nothing waits for a save to be on the disk, so a
    * power cut can leave the file empty, and the thread is then read from the save
    * before (`resumeSession`). That save keeps the file that could not be used aside
-   * (store/jsonFile.ts `readBackedUp`), not as the `.bak`.
+   * (store/jsonFile.ts `readBackedUp`), not as the `.bak`. Whether it could be written: the
+   * thread says so when it could not (CursorSession `save`).
    */
-  save(id: string, kept: KeptThread): void {
+  save(id: string, kept: KeptThread): { kept: true } | { kept: false; error: unknown } {
     try {
       const aside = this.asides.get(id);
       writeJSON(this.threadFile(id), kept, aside === undefined ? { backup: true } : { aside });
       this.asides.delete(id);
+      return { kept: true };
     } catch (error) {
       log.warn(`could not keep a ${cursorName} conversation`, { session: id, error: (error as Error).message });
+      return { kept: false, error };
     }
   }
 

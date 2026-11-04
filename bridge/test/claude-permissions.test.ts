@@ -66,11 +66,11 @@ test("AskUserQuestion is a clarify card; answers go back keyed by question text,
         choices: ["Python", "Swift"],
         multiSelect: false,
         header: "Language",
-        descriptions: { Python: "Prefer Python for this work", Swift: "Prefer Swift for this work" },
+        descriptions: { Python: "Python as your preferred language", Swift: "Swift as your preferred language" },
       },
     ],
   });
-  // Exactly what Claude was given in the recording, after which it answered "You prefer Swift."
+  // Exactly what Claude was given in the recording, after which it answered "Swift."
   assert.deepEqual(permissionResult(prompt.tool!, prompt.input!, undefined, { kind: "clarify", answers: { q0: "Swift" } }), prompt.answer);
   // Free text is passed on as typed; a multi-select answer arrives joined already.
   const many = { questions: [{ question: "Which?", header: "x", options: [{ label: "A" }, { label: "B" }], multiSelect: true }, { question: "Why?", options: [] }] };
@@ -99,14 +99,11 @@ test("other tools' cards say what they would do in one line", () => {
   assert.match(approvalCommand("Edit", { file_path: "/tmp/aeriportal-cwd/a.txt", old_string: "x\ny", new_string: "z" }, cwd), /^Edit \/tmp\/aeriportal-cwd\/a\.txt\n--- a\/a\.txt\n\+\+\+ b\/a\.txt\n-x\n-y\n\+z\n$/);
 });
 
-test("/mode words map onto Claude's permission modes and back", () => {
-  assert.deepEqual(
-    threadModes.filter((mode) => mode !== "medium").map((mode) => permissionModeFor(mode)),
-    ["default", "acceptEdits", "plan", "bypassPermissions", null],
-  );
-  for (const mode of ["ask", "edits", "plan", "full"] as const) assert.equal(threadModeFor(permissionModeFor(mode)), mode);
-  assert.throws(() => permissionModeFor("medium"), /does not offer Medium/);
-  assert.equal(threadModeFor("auto"), null);
+test("/mode words map onto Claude's permission modes and back; medium is Claude's auto mode", () => {
+  assert.deepEqual(threadModes.map((mode) => permissionModeFor(mode)), ["default", "acceptEdits", "auto", "plan", "bypassPermissions", null]);
+  for (const mode of ["ask", "edits", "medium", "plan", "full"] as const) assert.equal(threadModeFor(permissionModeFor(mode)), mode);
+  // Claude's mode that denies what is not allowed already, without asking, has no word.
+  assert.equal(threadModeFor("dontAsk"), null);
 });
 
 test("the app's thinking levels go to the nearest Claude has", () => {
@@ -135,6 +132,14 @@ test("the child's environment leaves out Claude Code's own variables and any inh
   // one inherited from a terminal is dropped like the rest of Claude Code's own.
   assert.equal(childEnvironment({ CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES: "1" }, { clientApp: "a", apiKey: null }).CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES, undefined);
   assert.equal(childEnvironment({}, { clientApp: "a", apiKey: null, toolSummaries: true }).CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES, "1");
+});
+
+test("a token from claude setup-token reaches the child only from config.json, and an API key there is used over it", () => {
+  // One in the bridge's own environment is dropped, as before.
+  assert.equal(childEnvironment({ CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-env" }, { clientApp: "a", apiKey: null }).CLAUDE_CODE_OAUTH_TOKEN, undefined);
+  assert.equal(childEnvironment({ CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-env" }, { clientApp: "a", apiKey: null, oauthToken: "sk-ant-oat01-config" }).CLAUDE_CODE_OAUTH_TOKEN, "sk-ant-oat01-config");
+  const both = childEnvironment({}, { clientApp: "a", apiKey: "sk-config", oauthToken: "sk-ant-oat01-config" });
+  assert.deepEqual([both.ANTHROPIC_API_KEY, both.CLAUDE_CODE_OAUTH_TOKEN], ["sk-config", undefined]);
 });
 
 test("query options: Dana's settings, partial messages, summarized thinking, and resume or a chosen id", () => {

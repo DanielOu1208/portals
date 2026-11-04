@@ -4,6 +4,7 @@ import type {
   ClarifyQuestion,
   ContextUsage,
   HostNote,
+  ModeState,
   ModelChangeResult,
   Prompt,
   ProviderEvent,
@@ -13,9 +14,14 @@ import type {
   SessionSettings,
   SessionSink,
   StoredMessage,
+  ThreadMode,
 } from "../types.ts";
+import { SettingRefused } from "../types.ts";
 import { machineWord } from "../../platform.ts";
 import { HermesError, type Frame } from "./client.ts";
+import { Unknowns } from "../unknowns.ts";
+import { HermesSubagents } from "./subagents.ts";
+import { rowsGone } from "./typed.ts";
 
 // One Hermes session as a thread of the bridge.
 //
@@ -46,6 +52,19 @@ export interface HermesHost {
   /** `session` hears when Hermes's stored sessions may have changed (`mayHaveChangedElsewhere`), until it closes. */
   watch?(session: HermesSession): void;
   unwatch?(session: HermesSession): void;
+  /**
+   * Whether `/name` is one of the profile's commands that Hermes makes a message of
+   * (`command.dispatch`), which goes as the turn's in place of the line: a skill, `/plan`.
+   */
+  turnCommand?(profile: string, name: string): Promise<boolean>;
+  /** What the user typed for the thread's messages Hermes stored in place of a command (`turnCommand`), by the stored row's id. */
+  typedCommands?(thread: string): Map<number, string>;
+  /** Keeps what the user typed for the thread's message Hermes stored as row `row`, after a restart too. */
+  keepTyped?(thread: string, row: number, text: string): void;
+  /** Lets go of what was typed for the thread's stored rows `rows`, which Hermes no longer has. */
+  forgetTyped?(thread: string, rows: readonly number[]): void;
+  /** Marks the thread's stored rows `rows` as read back: Hermes still has them, so they are kept past the bound for rows never read. */
+  confirmTyped?(thread: string, rows: readonly number[]): void;
 }
 
 /** Hermes's answer to `session.resume` and `session.create`, as far as it is read here. */
@@ -67,6 +86,8 @@ const notLoaded = 4001;
 const settling = 4009;
 /** A message that is `/compress` or `/compact`, with what to keep in focus after it. */
 const compressLine = /^\/(?:compress|compact)(?:\s+([\s\S]*))?$/;
+/** A message that is a slash command: its name, and what follows it. */
+const commandLine = /^\/([^\s/]+)(?:\s+([\s\S]*))?$/;
 /**
  * Compressing a long conversation takes a model call of its own, which can take minutes:
  * Hermes gives it up to ten (`compression.context_total_ceiling_seconds`), and its own
@@ -75,6 +96,20 @@ const compressLine = /^\/(?:compress|compact)(?:\s+([\s\S]*))?$/;
 const compressTimeoutMs = 11 * 60_000;
 /** What a turn says as it runs: not shown of a stopped turn the bridge ended for the app. */
 const abandonedTurnEvents = new Set(["message.delta", "message.interim", "reasoning.delta", "thinking.delta", "status.update", "tool.start", "tool.complete"]);
+/**
+ * The events Hermes's contract has (tui_gateway/contracts/events.py, at v0.22.5) that are
+ * not shown through the bridge (yet), or that its client reads itself.
+ */
+const quietEvents = new Set([
+  "gateway.ready", "skin.changed", "onboarding.ended", "setup.ready", "free_tier.challenge", "notice", "reasoning.available", "reaction",
+  "review.summary", "agent.print", "tool.generating", "tool.output_risk", "tool.progress", "todo.updated", "tip.show", "session.resume_progress", "session.reclaimed", "approval.cancelled", "session.control.update",
+  "billing.step_up.verification", "background.complete", "btw.complete", "preview.restart.complete", "preview.restart.progress",
+  "moa.reference", "moa.aggregating", "moa.progress", "moa.phase", "preview.open", "preview.close", "pane.reveal", "message.reaction",
+  "agent.terminal.output", "terminal.close", "browser.progress", "browser.controller.command", "browser.controller.cancel",
+  "voice.interrupted", "voice.status", "voice.partial", "voice.transcript", "wake.detected", "pet.changed", "pet.generate.progress",
+  "pet.hatch.progress", "cron.changed", "sessions.changed", "platforms.changed", "projects.changed", "pairing.changed", "skills.changed",
+  "bot_relay.outbox.pending", "subagent.thinking",
+]);
 
 interface Pending {
   controller: AbortController;
@@ -137,6 +172,10 @@ export class HermesSession implements ProviderSession {
   private retryDelay = 400;
   /** The profile's one ongoing conversation (feature bot_chat): it keeps its name, whatever Hermes titles it. */
   private readonly ongoing: boolean;
+  /** Kinds of event the bridge does not know, each said once in the log. */
+  private readonly unknowns = new Unknowns((type) => log.info("Hermes sent an event the bridge does not know", { session: this.id, type }), quietEvents);
+  /** The mode the bridge kept for the thread, which Hermes's own (`yolo`) may have changed from since. */
+  private readonly keptMode: ThreadMode;
   /**
    * A `/compress` Hermes is carrying out, which nothing stops (Hermes's own Stop leaves a
    * compression be). `turn` is the turn that asked for it, until Stop let go of it
@@ -156,6 +195,32 @@ export class HermesSession implements ProviderSession {
    * Hermes did not take is let go of (`begin`).
    */
   private unwritten: string[] = [];
+  /**
+   * Hermes's replay after a reconnect had lost some of what it said (`truncated`): the
+   * thread has holes until Hermes's stored copy is taken in its place, which the next look
+   * at it does once at rest (`changedConversation`).
+   */
+  private gap = false;
+  /** The children Hermes's `delegate_task` started, as the subagents line shows them. */
+  private readonly subagents = new HermesSubagents();
+  /** Hermes runs this session's commands without asking for approval (its session-only `yolo`): the thread's `full` mode. */
+  private yolo = false;
+  /**
+   * The profile asks for no approvals at all (its `approvals.mode` is `off`): Hermes's word
+   * on the session's `yolo` is then always yes, whatever the session's own is, and `default`
+   * comes to `full`.
+   */
+  private approvalsOff = false;
+  /** The text of each of Hermes's notices shown, by its key: one said again unchanged is not shown twice. */
+  private readonly notices = new Map<string, string>();
+  /** The key of the notice shown on the status line, which Hermes's `notification.clear` takes off. */
+  private statusNotice: string | null = null;
+  /** The last turn Hermes has (it took the message or began it, or was running it when loaded). */
+  private handedOver = 0;
+  /** What the user typed for the messages Hermes stored in place of a command, by the stored row's id (`typedCommands`). */
+  private readonly typed: Map<number, string>;
+  /** Hermes's `message.start`s heard so far, so a resume knows a turn began after its snapshot. */
+  private starts = 0;
 
   /**
    * `mark` is where Hermes's stored copy of the ongoing conversation stood before `loaded`
@@ -169,7 +234,10 @@ export class HermesSession implements ProviderSession {
     this.host = host;
     this.current = { ...options.settings };
     this.ongoing = options.ongoing === true;
+    this.keptMode = options.mode ?? "default";
+    this.yolo = this.keptMode === "full";
     this.runtimeID = loaded.session_id;
+    this.typed = host.typedCommands?.(options.id) ?? new Map();
     this.take(loaded);
     host.bind(this.runtimeID, this);
     if (this.ongoing && host.botChatMark) {
@@ -179,16 +247,40 @@ export class HermesSession implements ProviderSession {
     }
   }
 
+  /**
+   * Hermes's stored copy of the conversation, read back (`storedMessages`). What was typed
+   * for a row it no longer has (one compressing summarised away) is let go of, and one it
+   * still has is marked read back.
+   */
+  private readStored(messages: unknown[]): StoredMessage[] {
+    const gone = rowsGone(this.typed.keys(), messages);
+    if (gone.length > 0) {
+      for (const row of gone) this.typed.delete(row);
+      this.host.forgetTyped?.(this.id, gone);
+    }
+    const present = messages
+      .map((message) => (message as { row_id?: unknown } | null)?.row_id)
+      .filter((row): row is number => typeof row === "number" && this.typed.has(row));
+    if (present.length > 0) this.host.confirmTyped?.(this.id, present);
+    return storedMessages(messages, this.typed);
+  }
+
   /** What `session.resume` (or `session.create`) said: the conversation, a turn under way, the settings. */
   private take(loaded: Loaded): void {
-    this.stored = Array.isArray(loaded.messages) ? storedMessages(loaded.messages) : [];
+    this.stored = Array.isArray(loaded.messages) ? this.readStored(loaded.messages) : [];
     const info = loaded.info ?? {};
     if (typeof info.model === "string" && info.model !== "") this.current.model = info.model;
     if (typeof info.provider === "string" && info.provider !== "") this.current.provider = info.provider;
     if (typeof info.reasoning_effort === "string") this.current.reasoningEffort = info.reasoning_effort;
+    this.noteApprovals(info);
     if (loaded.running && loaded.inflight) {
       this.openTurn();
+      this.handedOver = this.turns;
       this.runningUser = loaded.inflight.user ?? "";
+      // The message that opened it, as the stored copy now reads (`storedMessages`): a command, as typed.
+      const opened = (Array.isArray(loaded.messages) ? loaded.messages : []).filter((message) => message?.role === "user").at(-1) as Frame | undefined;
+      const typed = opened?.text === this.runningUser && Number.isInteger(opened?.row_id) ? this.typed.get(opened.row_id) : undefined;
+      if (typed !== undefined) this.runningUser = typed;
       this.unwritten.push(this.runningUser);
       this.runningText = loaded.inflight.assistant ?? "";
       // Questions waiting in the turn are asked once the bridge's side is wired up.
@@ -214,6 +306,8 @@ export class HermesSession implements ProviderSession {
       if (this.closed) return;
       if (running && this.runningText !== "") this.report({ type: "text", text: this.runningText });
       this.runningText = "";
+      // Changed in another Hermes app since the bridge last kept it.
+      if (this.mode().mode !== this.keptMode) this.report({ type: "mode", mode: this.mode().mode });
       for (const entry of this.held.splice(0)) {
         if (entry.kind === "event") this.handle(entry.type, entry.seq, entry.payload);
         else this.request(entry.id, entry.method, entry.params);
@@ -224,6 +318,57 @@ export class HermesSession implements ProviderSession {
 
   settings(): SessionSettings {
     return { ...this.current };
+  }
+
+  /**
+   * Adds a message to the running turn (Hermes's `session.steer`), which Hermes hands its
+   * model with the next tool result; one that comes after the turn's last tool call is a
+   * turn of its own that Hermes begins once this one ends. Words only: a picture goes in a
+   * turn of its own. Refused when Hermes says no, as it does before its agent is ready.
+   */
+  async steer(prompt: Prompt): Promise<boolean | "refused"> {
+    if (!this.turnOpen || prompt.images.length > 0) return "refused";
+    let result: { status?: string };
+    try {
+      result = await this.call<{ status?: string }>("session.steer", { text: prompt.text });
+    } catch (error) {
+      // An answer that says no is surely no; a connection lost may have taken it with it.
+      return error instanceof HermesError ? "refused" : false;
+    }
+    if (result?.status !== "queued" && result?.status !== "redirected") return "refused";
+    // Hermes writes it down, as a message of the person's.
+    this.unwritten.push(prompt.text);
+    return true;
+  }
+
+  /** Not while Hermes compacts the conversation, nor before its agent has begun the turn: it would say no. */
+  steerable(): boolean {
+    return this.compression === null && !this.waitsOnCompression && this.startHeard && !this.abandoned;
+  }
+
+  /** Stops one of the children Hermes's `delegate_task` started (`subagent.interrupt`); the turn and the others go on. */
+  async stopSubagent(id: string): Promise<boolean> {
+    if (!this.subagents.running(id)) return false;
+    const result = await this.call<{ found?: boolean }>("subagent.interrupt", { subagent_id: id });
+    return result?.found === true;
+  }
+
+  /** `full` while Hermes runs this session's commands without asking (its `yolo`, for this session only), else `default`. */
+  mode(): ModeState {
+    return { mode: this.yolo ? "full" : "default", ...(this.approvalsOff ? { defaultsTo: "full" as const } : {}) };
+  }
+
+  /** Hermes's `yolo` for this session alone: the profile's own approval settings stay as they are. */
+  async setMode(mode: ThreadMode): Promise<void> {
+    if (mode !== "full" && mode !== "default") throw new SettingRefused("Hermes threads have two modes: full and default.");
+    const result = await this.call<{ value?: unknown }>("config.set", { key: "yolo", value: mode === "full" ? "on" : "off", scope: "session" });
+    this.yolo = result?.value === undefined ? mode === "full" : result.value === "1" || result.value === true;
+  }
+
+  /** What Hermes answers one of its own commands (`slash.exec`), as its text. */
+  async slash(line: string): Promise<string> {
+    const result = await this.call<{ output?: unknown; warning?: unknown }>("slash.exec", { command: line });
+    return [stringOf(result?.output).trim(), stringOf(result?.warning).trim()].filter((part) => part !== "").join("\n\n");
   }
 
   startTurn(prompt: Prompt): void {
@@ -318,7 +463,7 @@ export class HermesSession implements ProviderSession {
    * bridge's own messages after it (`ownWrites`) is Hermes writing down a turn of the
    * bridge's own, and the mark moves on; any other is taken. A copy the bridge cannot
    * account for is taken rather than passed over, so a doubt costs a reload, never a
-   * message.
+   * message. After a replay with a `gap`, the copy is taken however it stands.
    */
   async changedConversation(): Promise<{ messages: StoredMessage[]; take(): void } | null> {
     if (!this.ongoing || this.closed || this.busyHere || !this.host.botChatMark) return null;
@@ -329,19 +474,20 @@ export class HermesSession implements ProviderSession {
     const ended = this.ownTurnEnded;
     const stale = () => this.closed || this.busyHere || this.turns !== turns || this.ownTurnEnded !== ended;
     const mark = await this.host.botChatMark(this.profile);
-    if (mark === null || stale() || mark === this.mark) return null;
+    if (mark === null || stale() || (mark === this.mark && !this.gap)) return null;
     // The live session again, as Hermes has it in its store: what was said elsewhere, and
     // what compressing it summarised away. A failed look is tried again with the next change.
     const loaded = await this.call<Loaded>("session.resume", { session_id: this.id, inline_images: false }, 120_000);
     if (stale() || loaded?.running === true || loaded?.session_id !== this.runtimeID || !Array.isArray(loaded.messages)) return null;
-    const messages = storedMessages(loaded.messages);
+    const messages = this.readStored(loaded.messages);
     const own = ownWrites(this.stored, messages, this.unwritten);
     const read = () => {
       this.mark = mark;
       this.stored = messages;
       this.unwritten.splice(0, own.written);
+      this.gap = false;
     };
-    if (own.only) {
+    if (own.only && !this.gap) {
       read();
       return null;
     }
@@ -424,7 +570,17 @@ export class HermesSession implements ProviderSession {
       }
     }
     let asked = false;
+    let text = prompt.text;
     try {
+      // One of Hermes's own commands that it makes a message of: that message goes.
+      const command = isCommandOf(prompt);
+      if (command && (await this.host.turnCommand?.(this.profile, command.name))) {
+        if (!mine()) return;
+        const dispatched = await this.call<{ type?: string; message?: unknown }>("command.dispatch", { name: command.name, arg: command.argument });
+        if (!mine()) return;
+        if ((dispatched?.type !== "send" && dispatched?.type !== "skill") || stringOf(dispatched.message).trim() === "") throw new Error(`Hermes did not run /${command.name}.`);
+        text = stringOf(dispatched.message);
+      }
       for (const image of prompt.images) {
         const attached = await this.call<{ attached?: boolean; message?: string }>("image.attach_bytes", {
           content_base64: image.data.toString("base64"),
@@ -434,16 +590,27 @@ export class HermesSession implements ProviderSession {
         if (attached?.attached === false) throw new Error(attached.message || `Hermes did not take ${image.filename}.`);
       }
       // Before it is asked: Hermes may write it down before it answers.
-      this.unwritten.push(prompt.text);
+      this.unwritten.push(text);
       asked = true;
-      await this.call("prompt.submit", { text: prompt.text });
+      const submitted = await this.call<{ user_row_id?: unknown }>("prompt.submit", { text });
+      if (mine()) this.handedOver = turn;
+      // A command Hermes made a message of: the row Hermes stored it as reads back as typed,
+      // and Hermes writing it down is the bridge's own (`ownWrites`). Hermes says the row
+      // only once it is stored; without it, the row reads back as Hermes's message.
+      const row = submitted?.user_row_id;
+      if (text !== prompt.text && typeof row === "number" && Number.isInteger(row)) {
+        this.typed.set(row, prompt.text);
+        this.host.keepTyped?.(this.id, row, prompt.text);
+        const at = this.unwritten.lastIndexOf(text);
+        if (at >= 0) this.unwritten[at] = prompt.text;
+      }
     } catch (error) {
       // Events can finish this turn and start the next before the submit RPC answers.
       if (!mine()) return;
       // Not a message of the bridge's own in Hermes's store: the same words written there
       // later are another app's (said again in Hermes Desktop), and taken. One Hermes did
       // take after all (an answer lost with the connection) is then taken as a change too.
-      const at = asked ? this.unwritten.lastIndexOf(prompt.text) : -1;
+      const at = asked ? this.unwritten.lastIndexOf(text) : -1;
       if (at >= 0) this.unwritten.splice(at, 1);
       this.endTurn({ type: "turn.end", status: "error", error: `Hermes did not take the message: ${(error as Error).message}`, retryable: true });
     }
@@ -541,6 +708,7 @@ export class HermesSession implements ProviderSession {
         // Hermes is past the stopped turn the bridge ended for the app.
         this.abandoned = false;
         this.startHeard = true;
+        this.starts += 1;
         if (!this.turnOpen) {
           this.openTurn();
           this.streamed = "";
@@ -548,6 +716,7 @@ export class HermesSession implements ProviderSession {
           this.report({ type: "turn.begin", user: "", host });
         }
         this.announced = null;
+        this.handedOver = this.turns;
         return;
       case "message.delta":
         this.streamed += text;
@@ -570,25 +739,30 @@ export class HermesSession implements ProviderSession {
         else this.report({ type: "status", text });
         return;
       }
-      case "tool.start":
+      case "tool.start": {
         if (typeof payload.tool_id !== "string" || typeof payload.name !== "string") return;
         this.streamed = "";
-        this.report({ type: "tool.start", id: payload.tool_id, name: payload.name, args: objectOf(payload.args), ...context(payload) });
+        const tool = shownTool(payload.name, objectOf(payload.args));
+        this.report({ type: "tool.start", id: payload.tool_id, ...tool, ...context(payload) });
         return;
-      case "tool.complete":
+      }
+      case "tool.complete": {
         if (typeof payload.tool_id !== "string" || typeof payload.name !== "string") return;
         this.streamed = "";
+        const tool = shownTool(payload.name, objectOf(payload.args));
+        // A to-do call's args may only change some items (`merge`): Hermes adds the whole list after it.
+        if (tool.name === "todo" && Array.isArray(payload.todos)) tool.args = { ...tool.args, todos: payload.todos };
         this.report({
           type: "tool.end",
           id: payload.tool_id,
-          name: payload.name,
-          args: objectOf(payload.args),
+          ...tool,
           ...context(payload),
           result: payload.result ?? null,
           ...(typeof payload.duration_s === "number" ? { durationSeconds: payload.duration_s } : {}),
           ...(typeof payload.inline_diff === "string" && payload.inline_diff !== "" ? { inlineDiff: payload.inline_diff } : {}),
         });
         return;
+      }
       case "request.cancel": {
         const id = typeof payload.id === "string" ? payload.id : null;
         const entry = id ? this.pending.get(id) : undefined;
@@ -616,12 +790,69 @@ export class HermesSession implements ProviderSession {
       case "session.info": {
         // Not shown; where the session's tokens stand, said at rest or before any call, is kept (feature turn_usage).
         this.noteRest(payload.usage);
+        // Its `yolo` changed in another Hermes app (Hermes Desktop's Shift+Tab).
+        const before = this.mode().mode;
+        this.noteApprovals(payload);
+        if (this.mode().mode !== before) this.report({ type: "mode", mode: this.mode().mode });
+        return;
+      }
+      case "subagent.spawn_requested":
+      case "subagent.start":
+      case "subagent.progress":
+      case "subagent.tool":
+      case "subagent.complete": {
+        const subagent = this.subagents.news(type, payload);
+        if (subagent) this.report({ type: "subagent", subagent });
+        return;
+      }
+      case "notification.show":
+        this.notify(payload);
+        return;
+      case "notification.clear": {
+        const key = stringOf(payload.key);
+        this.notices.delete(key);
+        if (key !== "" && key === this.statusNotice) {
+          this.statusNotice = null;
+          if (this.turnOpen) this.report({ type: "status", text: "" });
+        }
         return;
       }
       default:
-        // session.info, subagent.*, tool.generating and the rest: not shown through the bridge (yet).
+        // subagent.thinking, tool.generating and the rest: not shown through the bridge (yet).
+        this.unknowns.note(type);
         return;
     }
+  }
+
+  /**
+   * One of Hermes's notices (`notification.show`): a credit warning, low disk, a model it
+   * could not switch to, or that its agent is slow to start. That last one (`kind` agent)
+   * is the status line while the turn waits for it; the rest are said in the thread, once
+   * for each key while their text stays the same.
+   */
+  private notify(payload: Frame): void {
+    const text = noticeText(stringOf(payload.text));
+    if (text === "") return;
+    const key = stringOf(payload.key) || stringOf(payload.id) || text;
+    if (this.notices.get(key) === text) return;
+    this.notices.set(key, text);
+    if (payload.kind === "agent" && this.turnOpen) {
+      this.statusNotice = key;
+      this.report({ type: "status", text });
+      return;
+    }
+    const level = payload.level === "error" ? "error" : payload.level === "warn" ? "warn" : "info";
+    this.report({ type: "notice", level, text });
+  }
+
+  /**
+   * What Hermes says of the session's approvals (`session.info`, or the `info` a resume
+   * answers with): whether the profile asks for none, and else the session's own `yolo`.
+   * A lazily loaded session's says neither.
+   */
+  private noteApprovals(info: Frame): void {
+    if (typeof info.approval_mode === "string") this.approvalsOff = info.approval_mode === "off";
+    if (typeof info.yolo === "boolean" && !this.approvalsOff) this.yolo = info.yolo;
   }
 
   /**
@@ -636,10 +867,13 @@ export class HermesSession implements ProviderSession {
 
   private complete(payload: Frame): void {
     if (!this.turnOpen) return;
-    const status = payload.status === "error" ? "error" : payload.status === "interrupted" ? "interrupted" : "complete";
+    // A turn that says no status ended as before Hermes said one; one that says a status the
+    // bridge does not know did not surely finish, and is not told as finished.
+    const said = payload.status ?? "complete";
+    const status = said === "error" || said === "interrupted" || said === "complete" ? said : null;
     const text = typeof payload.text === "string" ? payload.text : "";
     // The whole reply, when it did not come as deltas (a provider that does not stream).
-    if (status === "complete" && text !== "" && this.streamed === "" && payload.response_previewed !== true) {
+    if (status !== "error" && status !== "interrupted" && text !== "" && this.streamed === "" && payload.response_previewed !== true) {
       this.report({ type: "text", text });
     }
     const usage = usageOf(payload.usage);
@@ -653,6 +887,10 @@ export class HermesSession implements ProviderSession {
       const retryable = typeof surface?.retryable === "boolean" ? surface.retryable : typeof payload.recoverable === "boolean" ? payload.recoverable : true;
       const error = text || (typeof payload.error === "string" ? payload.error : "") || "The request failed.";
       this.endTurn({ type: "turn.end", status, error, retryable, ...(usage ? { usage } : {}), ...spent });
+      return;
+    }
+    if (status === null) {
+      this.endTurn({ type: "turn.end", status: "error", error: `Hermes ended the turn in a way Portals does not know ("${String(said)}").`, ...(usage ? { usage } : {}), ...spent });
       return;
     }
     this.endTurn({ type: "turn.end", status, ...(usage ? { usage } : {}), ...spent });
@@ -730,13 +968,17 @@ export class HermesSession implements ProviderSession {
   async reconnected(sameRun: boolean): Promise<void> {
     if (this.closed) return;
     // An idle thread is followed again when it is next used; one whose stopped turn Hermes
-    // may still run (`abandoned`) is followed now, to hear that turn's end.
-    if (!this.turnOpen && !this.abandoned && this.pending.size === 0) return;
+    // may still run (`abandoned`), or with a child still running after its turn ended, is
+    // followed now, to hear that turn's or that child's end.
+    if (!this.turnOpen && !this.abandoned && this.pending.size === 0 && !this.subagents.anyRunning()) return;
     try {
       await this.resume(sameRun);
     } catch (error) {
       log.warn("could not follow a Hermes thread again", { session: this.id, error: (error as Error).message });
     }
+    // Events lost while away: Hermes's stored copy fills the holes, now if the turn has
+    // ended, else once Hermes writes it down (`sessions.changed`).
+    if (this.gap) this.mayHaveChangedElsewhere();
   }
 
   private resume(sameRun: boolean): Promise<void> {
@@ -745,6 +987,8 @@ export class HermesSession implements ProviderSession {
     const generation = this.generation;
     const held = this.recovering ??= [];
     const cursor = this.lastSeq;
+    const turn = this.turns;
+    const starts = this.starts;
     const current = () => !this.closed && this.generation === generation && this.recovering === held;
     const resume = Promise.resolve().then(async () => {
       try {
@@ -771,7 +1015,7 @@ export class HermesSession implements ProviderSession {
         let replay: Frame[] = [];
         let open = loaded.running ? (loaded.open_requests ?? []) : [];
         if (sameRuntime) {
-          const since = await this.host.call<{ events?: Frame[]; open_requests?: Loaded["open_requests"] }>("session.events.since", {
+          const since = await this.host.call<{ events?: Frame[]; truncated?: boolean; open_requests?: Loaded["open_requests"] }>("session.events.since", {
             session_id: this.runtimeID,
             last_seen: cursor,
             profile: this.profile,
@@ -779,6 +1023,8 @@ export class HermesSession implements ProviderSession {
           if (!current()) return;
           replay = since.events ?? [];
           open = since.open_requests ?? [];
+          // Hermes keeps the latest 512 events or 4 MB of a session: older ones are gone.
+          if (since.truncated === true) this.gap = true;
         } else {
           // Another run of Hermes, or the session loaded anew: no replay crosses runs.
           if (this.turnOpen && !loaded.running) {
@@ -787,6 +1033,8 @@ export class HermesSession implements ProviderSession {
           }
           // Nor a stopped turn the bridge ended for the app.
           if (!loaded.running) this.abandoned = false;
+          // Nor the children the runtime before ran.
+          for (const subagent of this.subagents.stopAll()) this.report({ type: "subagent", subagent });
         }
         this.recovering = null;
         for (const event of replay) {
@@ -799,6 +1047,15 @@ export class HermesSession implements ProviderSession {
         for (const entry of held) {
           if (entry.kind === "event") this.event(entry.type, entry.seq, entry.payload);
           else if (!cancelled.has(entry.id)) this.request(entry.id, entry.method, entry.params);
+        }
+        // The turn Hermes was given ended among the events it lost: Hermes is at rest, and the
+        // turn ends here too, so its stored copy can fill the holes (`changedConversation`).
+        // Not one Hermes has not been given yet (a message waiting on this resume), nor a
+        // compression, which ends with its own answer. Nor when a turn began since, in the
+        // replay or live meanwhile: Hermes is at work on it, and its own end ends the turn (a
+        // start of the turn open would have its end in the replay too, which would close it).
+        if (sameRuntime && this.gap && !loaded.running && this.turnOpen && this.turns === turn && this.handedOver === turn && this.starts === starts && this.compression === null) {
+          this.endTurn({ type: "turn.end", status: "complete" });
         }
         this.retryDelay = 400;
       } catch (error) {
@@ -881,13 +1138,106 @@ export class HermesSession implements ProviderSession {
  * Hermes's stored messages, as the app reads them: they are already in the shape
  * `session.resume` returns (docs/gateway-protocol.md, section 8), richer keys
  * (`display_content`, `display_commentary`, …) included, so they pass as they are.
- * Only roles the app reads are kept.
+ * Only roles the app reads are kept, a user message Hermes stored in place of a command
+ * reads as the user typed it (`typed`, by the stored row's id), and tool calls go by the names the app knows
+ * (`shownTool`), each to-do call with the whole list as it stood after it. A batch of
+ * several calls Hermes keeps as one `tool_call` stays as it is, with its result, and each
+ * to-do call in it follows it as a `todo` row of its own.
  */
-export function storedMessages(messages: unknown[]): StoredMessage[] {
-  return messages.filter(
-    (message): message is StoredMessage =>
-      typeof message === "object" && message !== null && ["user", "assistant", "tool", "compaction"].includes((message as Frame).role),
-  );
+export function storedMessages(messages: unknown[], typed: ReadonlyMap<number, string> = new Map()): StoredMessage[] {
+  let todos: unknown[] | null = null;
+  return messages
+    .filter(
+      (message): message is StoredMessage =>
+        typeof message === "object" && message !== null && ["user", "assistant", "tool", "compaction"].includes((message as Frame).role),
+    )
+    .flatMap((message): StoredMessage[] => {
+      const row = (message as Frame).row_id;
+      if (message.role === "user" && typeof row === "number" && typed.has(row)) return [{ ...message, text: typed.get(row)! }];
+      if (message.role !== "tool" || typeof message.name !== "string") return [message];
+      const tool = shownTool(message.name, objectOf(message.args));
+      if (tool.name === "todo") {
+        todos = todoList(tool.args, todos);
+        if (todos) tool.args = { ...tool.args, todos };
+      }
+      if (tool.name === "tool_call") {
+        const plans = callsThrough(tool.args).flatMap((call, index): StoredMessage[] => {
+          if (!call || (formerToolNames[call.name] ?? call.name) !== "todo") return [];
+          todos = todoList(call.args, todos);
+          const args = todos ? { ...call.args, todos } : call.args;
+          return [{ role: "tool", name: "todo", args, tool_call_id: `${message.tool_call_id}:${index}`, timestamp: message.timestamp }];
+        });
+        return [message, ...plans];
+      }
+      return [tool.name === message.name && tool.args === message.args ? message : { ...message, ...tool }];
+    });
+}
+
+/**
+ * Hermes's tools the app knows by the names they had before Hermes 0.22.0 renamed them:
+ * its to-do list, shown as a plan, and its background processes, as a terminal's.
+ */
+const formerToolNames: Record<string, string> = { todo_list: "todo", process_manage: "process" };
+
+/**
+ * A tool call as the app shows it (docs/gateway-protocol.md, section 9). One made through
+ * Hermes's `tool_call`, how a model calls a tool Hermes loads only when asked (`todo_list`
+ * and `process_manage` by default), is the tool it called: Hermes's live events name that
+ * one, but its stored copy keeps `tool_call`. A renamed tool goes by its former name.
+ */
+export function shownTool(name: string, args: Record<string, unknown>): { name: string; args: Record<string, unknown> } {
+  const called = name === "tool_call" ? calledThrough(args) : null;
+  const tool = called ?? { name, args };
+  return { name: formerToolNames[tool.name] ?? tool.name, args: tool.args };
+}
+
+/** The one tool a `tool_call` called (`callsThrough`); null for a batch of several, or one it cannot read. */
+function calledThrough(args: Record<string, unknown>): { name: string; args: Record<string, unknown> } | null {
+  const calls = callsThrough(args);
+  return calls.length === 1 ? calls[0] : null;
+}
+
+/**
+ * The tools a `tool_call` called, read as Hermes reads it: `calls` (a list, or the list as
+ * JSON text), or the older `name` and `arguments`. Null for an entry it cannot read.
+ */
+function callsThrough(args: Record<string, unknown>): ({ name: string; args: Record<string, unknown> } | null)[] {
+  let calls: unknown = args.calls ?? (typeof args.name === "string" ? [{ name: args.name, arguments: args.arguments }] : null);
+  if (typeof calls === "string") calls = parsed(calls);
+  return (Array.isArray(calls) ? calls : [calls]).map((entry) => {
+    const call = objectOf(entry);
+    const name = typeof call.name === "string" ? call.name.trim() : "";
+    if (name === "") return null;
+    return { name, args: objectOf(typeof call.arguments === "string" ? parsed(call.arguments) : call.arguments) };
+  });
+}
+
+/**
+ * The whole to-do list after a `todo` call, as Hermes keeps it: the list given; with
+ * `merge`, the list `before` with the items given changed or added by their `id`; the
+ * list `before` for a call that gives none, which only reads it. `before` is null when
+ * no call before said.
+ */
+function todoList(args: Record<string, unknown>, before: unknown[] | null): unknown[] | null {
+  if (!Array.isArray(args.todos)) return before;
+  if (args.merge !== true || !before) return args.todos;
+  const list = before.map((item) => ({ ...objectOf(item) }));
+  for (const item of args.todos.map(objectOf)) {
+    if (typeof item.id !== "string" || item.id === "") continue;
+    const known = list.find((entry) => entry.id === item.id);
+    if (!known) list.push(item);
+    // Only what the item gives changes, as in Hermes.
+    else for (const [key, value] of Object.entries(item)) if (value !== undefined && value !== "") known[key] = value;
+  }
+  return list;
+}
+
+function parsed(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -933,6 +1283,13 @@ function compressionOutcome(result: Frame): ProviderEvent {
   return { type: "notice", level: "info", text: said.length > 0 ? said.join("\n") : fallback };
 }
 
+/** The command a message is and what follows it, for a message that is one; null for any other. One with images or files is words, as for the session (`isCommand`). */
+function isCommandOf(prompt: Prompt): { name: string; argument: string } | null {
+  if (prompt.images.length > 0 || (prompt.files?.length ?? 0) > 0) return null;
+  const match = commandLine.exec(prompt.text.trim());
+  return match ? { name: match[1].toLowerCase(), argument: (match[2] ?? "").trim() } : null;
+}
+
 /** What to keep in focus, for a message that is `/compress` (or `/compact`); null for any other. One with images or files is words, as for the session (`isCommand`). */
 function compressFocus(prompt: Prompt): string | null {
   if (prompt.images.length > 0 || (prompt.files?.length ?? 0) > 0) return null;
@@ -942,6 +1299,16 @@ function compressFocus(prompt: Prompt): string | null {
 
 function stringOf(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+/**
+ * A notice of Hermes's in the app's words: without the mark in front of it (its level
+ * says as much), and without the parts after a `·` that name a command to type in
+ * Hermes's own apps ("· run /topup to top up"), which Portals does not offer.
+ */
+export function noticeText(text: string): string {
+  const parts = text.replace(/^[\s\u2190-\u2BFF\uFE0F]+/u, "").split(" · ");
+  return parts.filter((part, index) => index === 0 || !/(^|\s)\/[a-z]/i.test(part)).join(" · ").trim();
 }
 
 function objectOf(value: unknown): Record<string, unknown> {

@@ -30,6 +30,7 @@ async function fixture(subscribed = true) {
     interruptGraceMs: 100,
     readyMs: 1000,
     nameThread() {}, forget() {},
+    skill: async () => null,
   };
   const adapter = new CodexSession({ id: "thread", cwd: "/tmp", settings, title: "Test" }, core.sink, host, { applied: null, subscribed });
   await core.attach(adapter);
@@ -96,4 +97,26 @@ for (const prompt of ["do not run after removal", "/compact"]) test(`closing Cod
     await step();
     assert.deepEqual(methods, ["thread/resume"]);
   } finally { resume.resolve(); await core.close(); }
+});
+
+test("a failed cold catch-up fails the queued message without an unhandled rejection", async () => {
+  const { core, adapter, setCall } = await fixture();
+  setCall(async (method) => {
+    if (method === "turn/start") return { turn: { id: "first" } };
+    if (method === "thread/read") return { thread: { status: { type: "idle" }, turns: [] } };
+    if (method === "thread/backgroundTerminals/list") return { data: [], nextCursor: null };
+    return {};
+  });
+  try {
+    core.submit("First.").begin?.();
+    await step(); await step();
+    adapter.notification("turn/completed", { threadId: "thread", turn: { id: "first", status: "completed", items: [] } });
+    await adapter.cool();
+    assert.equal(adapter.isReleased, true);
+    setCall(async () => { throw new Error("could not catch up"); });
+    core.submit("Next.").begin?.();
+    for (let i = 0; i < 10; i += 1) await step();
+    assert.ok((core.snapshot().messages as { text?: string }[]).some((message) => message.text?.includes("could not catch up")));
+    assert.equal(adapter.isReleased, true);
+  } finally { await core.close(); }
 });

@@ -16,6 +16,7 @@ import { isEvent, RpcFailure, sessionCookie, startTestBridge, TestClient, type F
 // Hermes is played.
 
 let hermes: FakeHermes;
+let agents: Map<string, Provider>;
 let bridge: TestBridge;
 let client: TestClient;
 let cwd: string;
@@ -38,7 +39,8 @@ before(async () => {
   hermes = await FakeHermes.start();
   cwd = realpathSync(mkdtempSync(join(tmpdir(), "portals-hermes-test-")));
   state = mkdtempSync(join(tmpdir(), "portals-hermes-state-"));
-  bridge = await startTestBridge({ providers: hermesAgents(), config: { generalFolder: cwd, push: { dryRun: join(state, "push.jsonl") } } });
+  agents = hermesAgents();
+  bridge = await startTestBridge({ providers: agents, config: { generalFolder: cwd, push: { dryRun: join(state, "push.jsonl") } } });
   client = await TestClient.open(bridge);
 });
 
@@ -280,6 +282,29 @@ test("a turn Hermes cannot run fails with its reason", async () => {
   assert.match(done.payload.text, /not connected to any AI provider/);
 });
 
+test("/mcp says how the profile's MCP servers are, as Hermes last found them; a Hermes from before that says it cannot", async () => {
+  const created = await client.call("session.create", { profile: "aeri", source: "tui", cwd });
+  const thread = created.session_id as string;
+  const mcp = async () => (await client.call("slash.exec", { session_id: thread, command: "mcp", profile: "aeri" })).output as string;
+  const catalog = await client.call("commands.catalog", { session_id: thread, profile: "aeri" });
+  assert.ok(catalog.pairs.some(([name]: [string]) => name === "/mcp"));
+  hermes.mcpServers = [
+    { name: "docs", transport: "stdio", tools: 3, connected: true, disabled: false, status: "connected", source: "config", plugin: null },
+    { name: "web", transport: "http", tools: 0, connected: false, disabled: false, status: "failed", source: "config", plugin: null },
+    { name: "notes", transport: "stdio", tools: 0, connected: false, disabled: false, status: "lazy", source: "plugin", plugin: "notes" },
+    { name: "old", transport: "stdio", tools: 0, connected: false, disabled: true, status: "disabled", source: "config", plugin: null },
+    { name: "new", transport: "stdio", tools: 0, connected: false, disabled: false, status: "configured", source: "config", plugin: null },
+  ];
+  try {
+    assert.equal(await mcp(), ["Aeri MCP servers:", "docs: connected, 3 tools", "new: not started", "notes: starts when first used", "old: off", "web: failed"].join("\n"));
+    assert.deepEqual(hermes.callsOf("mcp.servers.status").at(-1)!.params, { profile: "aeri" });
+    hermes.mcpServers = null;
+    await assert.rejects(mcp(), /This Hermes cannot say how its MCP servers are: a newer one can\./);
+  } finally {
+    hermes.mcpServers = [];
+  }
+});
+
 test("model and thinking level change for the thread only, through Hermes's own /model", async () => {
   const thread = await createThread();
   assert.deepEqual(await client.call("config.set", { key: "model", value: "google/gemini-3.8-flash --provider gmi --session", session_id: thread, profile: "hermes" }), {});
@@ -413,5 +438,131 @@ test("after a restart the threads Hermes runs are taken up at once, so one slow 
     hermes.onResume = () => {};
     hermes.active = [];
     await restarted.dispose();
+  }
+});
+
+test("Hermes's commands are offered but for those that change its settings: one that shows something runs in the thread's session, and /plan or a skill goes as the message Hermes makes of it", async () => {
+  const thread = await createThread();
+  const catalog = await client.call("commands.catalog", { session_id: thread, profile: "hermes" });
+  const offered = catalog.pairs.map((pair: string[]) => pair[0]);
+  for (const name of ["/status", "/mode", "/usage", "/compress", "/context", "/plan", "/tidy"]) assert.ok(offered.includes(name), name);
+  for (const name of ["/model", "/yolo", "/agents"]) assert.ok(!offered.includes(name), `${name} is not offered`);
+  assert.deepEqual(Object.keys(catalog.skills), ["/tidy"]);
+
+  const runtime = hermes.sessions.get(thread)!.runtime;
+  assert.deepEqual(await client.call("slash.exec", { session_id: thread, command: "/context", profile: "hermes" }), { type: "exec", output: "Hermes ran /context" });
+  assert.deepEqual(hermes.callsOf("slash.exec").at(-1)?.params, { session_id: runtime, command: "/context", profile: "default" });
+  // Not one of the bridge's, nor one that shows something: the app sends it as a message.
+  await assert.rejects(client.call("slash.exec", { session_id: thread, command: "/yolo", profile: "hermes" }), (error: RpcFailure) => error.code === 4018);
+  assert.deepEqual(await client.call("command.dispatch", { session_id: thread, name: "plan", arg: "the move", profile: "hermes" }), { type: "send", message: "/plan the move" });
+
+  const dispatched = hermes.callsOf("command.dispatch").length;
+  for (const [line, name, arg] of [["/plan the move", "plan", "the move"], ["/tidy", "tidy", ""]]) {
+    const each = await createThread();
+    await completed(each, await send(each, line, "chat-text-complete"));
+    assert.deepEqual(hermes.callsOf("command.dispatch").at(-1)?.params, { session_id: hermes.sessions.get(each)!.runtime, name, arg, profile: "default" });
+    assert.equal(hermes.callsOf("prompt.submit").at(-1)?.params.text, `[the ${name} prompt] ${arg}`.trim());
+  }
+  // One Hermes would only take as a setting is the user's words.
+  const words = await createThread();
+  await completed(words, await send(words, "/yolo please", "chat-text-complete"));
+  assert.equal(hermes.callsOf("command.dispatch").length, dispatched + 2);
+  assert.equal(hermes.callsOf("prompt.submit").at(-1)?.params.text, "/yolo please");
+});
+
+test("a Hermes thread's modes are its profile's approvals or Hermes's yolo for that session alone, and one changed in another Hermes app is shown", async () => {
+  const options = await client.call("model.options", { profile: "hermes" });
+  assert.deepEqual(options.modes, {});
+  assert.deepEqual(options.mode_options.map((option: Frame) => option.id), ["default", "full"]);
+  const thread = await createThread();
+  const runtime = hermes.sessions.get(thread)!.runtime;
+  assert.equal((await client.call("session.set_mode", { session_id: thread, mode: "full", profile: "hermes" })).mode, "full");
+  assert.deepEqual(hermes.callsOf("config.set").at(-1)?.params, { session_id: runtime, key: "yolo", value: "on", scope: "session", profile: "default" });
+  assert.equal(hermes.yolo.get(runtime), true);
+  await assert.rejects(client.call("session.set_mode", { session_id: thread, mode: "plan", profile: "hermes" }));
+
+  const start = client.frames.length;
+  hermes.tell(thread, "session.info", { yolo: false });
+  const changed = await client.from(start, (frame) => isEvent(frame, "session.mode", thread));
+  assert.equal(changed.params.payload.mode, "default");
+});
+
+test("the children Hermes's delegate_task starts are on the subagents line, and one is stopped by itself", async () => {
+  const thread = await createThread();
+  const start = client.frames.length;
+  const child = { goal: "Count the files", task_count: 1, task_index: 0, subagent_id: "sa-0-1", depth: 0, model: "m" };
+  hermes.tell(thread, "subagent.spawn_requested", child);
+  hermes.tell(thread, "subagent.tool", { ...child, tool_name: "terminal", text: "ls | wc -l", tool_count: 1 });
+  const tool = await client.from(start, (frame) => isEvent(frame, "subagent.progress", thread) && frame.params.payload.tool_name === "terminal");
+  assert.equal(tool.params.payload.summary, "ls | wc -l");
+  const listed = (await client.call("subagent.list", { session_id: thread, profile: "hermes" })).subagents;
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].goal, "Count the files");
+  assert.equal(listed[0].background, true);
+  assert.equal(listed[0].can_stop, true);
+
+  assert.equal((await client.call("subagent.stop", { session_id: thread, subagent_id: "sa-0-1", profile: "hermes" })).status, "stopped");
+  assert.deepEqual(hermes.callsOf("subagent.interrupt").at(-1)?.params, { session_id: hermes.sessions.get(thread)!.runtime, subagent_id: "sa-0-1", profile: "default" });
+  hermes.tell(thread, "subagent.complete", { ...child, status: "interrupted", summary: "Stopped after 3 files", input_tokens: 10, output_tokens: 5 });
+  const ended = await client.from(start, (frame) => isEvent(frame, "subagent.complete", thread));
+  assert.equal(ended.params.payload.status, "stopped");
+  assert.equal(ended.params.payload.result, "Stopped after 3 files");
+  assert.equal(ended.params.payload.tokens, 15);
+  assert.equal((await client.call("subagent.stop", { session_id: thread, subagent_id: "sa-0-1", profile: "hermes" })).status, "not_running");
+});
+
+test("the children of a delegation Hermes recorded are on the subagents line with what each answered", async () => {
+  const thread = await createThread();
+  // The app asked Hermes for its list of children mid-turn; the bridge keeps its own.
+  hermes.queueTurn(thread, "chat-delegation", ["subagent.list"]);
+  const start = client.frames.length;
+  await client.call("prompt.submit", { session_id: thread, text: "Run two commands in two subagents.", profile: "hermes" });
+  await completed(thread, start);
+  const listed = (await client.call("subagent.list", { session_id: thread, profile: "hermes" })).subagents;
+  assert.deepEqual(listed.map((child: Frame) => [child.subagent_id, child.status, child.model, child.tokens, child.tool_uses]), [
+    ["sa-1-ac781d0b", "completed", "zai-org/GLM-5.3-Flash", 23_843, 1],
+    ["sa-0-9b664774", "completed", "zai-org/GLM-5.3-Flash", 23_845, 1],
+  ]);
+  assert.match(listed[1].goal, /sleep 6 && echo alpha/);
+  assert.match(listed[1].result, /alpha/);
+  // A child's reasoning is not its row's line.
+  assert.ok(!turnEvents(thread, start).some((event) => event.type.startsWith("subagent.") && /ruminating|reflecting/.test(String(event.payload.summary))));
+});
+
+test("a Hermes thread's limits are those of its model provider as Hermes's model picker shows them, and a Nous plan's gauges and credits", async () => {
+  const thread = await createThread();
+  const kept = hermes.modelOptions;
+  try {
+    const providers = kept.providers as Frame[];
+    hermes.modelOptions = {
+      ...kept,
+      providers: [
+        { ...providers[0], usage: { windows: [{ label: "Weekly", used_percent: 2, resets_at: "2026-11-11T06:35:49+00:00", scope: "account" }, { label: "Session", used_percent: 100, resets_at: null }] } },
+        { slug: "nous", name: "Nous Portal", models: ["m"], authenticated: true, plan_usage: { kind: "window", plan: "plus", gauges: [{ label: "day", left_fraction: 0.25, style: "bar", resets_at_ms: 1_762_000_000_000 }, { label: "burst", title: "Burst", left_fraction: 0, style: "bar" }] } },
+      ],
+    };
+    const hermesAgent = agents.get("hermes")!;
+    assert.deepEqual(await hermesAgent.usage!(thread), {
+      limits: [
+        { name: "Weekly", percent: 2, resetsAt: Date.parse("2026-11-11T06:35:49+00:00") / 1000 },
+        { name: "Session", percent: 100, resetsAt: null, reached: true },
+      ],
+    });
+    hermes.modelOptions = { ...hermes.modelOptions, provider: "nous" };
+    hermes.usageBars = { ok: true, available: true, plan_name: "plus", plan_bar: { kind: "plan", pct_used: 40, remaining_display: "$6.00", total_display: "$10.00", spent_display: "$4.00", fill_fraction: 0.4 }, renews_at: "2026-12-01T00:00:00Z", total_spendable_display: "$8.50" };
+    assert.deepEqual(await hermesAgent.usage!("a thread not open here"), {
+      plan: "plus",
+      limits: [
+        { name: "daily", percent: 75, resetsAt: 1_762_000_000 },
+        { name: "Burst", percent: 100, resetsAt: null, reached: true },
+        { name: "credits", percent: 40, resetsAt: Date.parse("2026-12-01T00:00:00Z") / 1000 },
+      ],
+      note: "$8.50 of credits left.",
+    });
+    hermes.modelOptions = kept;
+    assert.deepEqual(await hermesAgent.usage!(thread), { limits: [], note: "Hermes shows no usage limits for GMI Cloud." });
+  } finally {
+    hermes.modelOptions = kept;
+    hermes.usageBars = { ok: true, available: false };
   }
 });

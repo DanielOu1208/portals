@@ -380,12 +380,34 @@ enum DebugLaunch {
     /// `PORTALS_DEBUG_PANEL=1`: the panel over the chat open as the app starts (`ThreadPanel`).
     static var opensPanel: Bool { value("PORTALS_DEBUG_PANEL") == "1" }
 
+    /// `PORTALS_DEBUG_FILE_UNDO=1`: open the latest eligible turn's actual file preview.
+    /// It never restores files.
+    static var opensFileUndo: Bool { value("PORTALS_DEBUG_FILE_UNDO") == "1" }
+
+    /// `PORTALS_DEBUG_MESSAGE_FORK=edit|fork`: stage an edit in the composer or open a
+    /// fork of the first eligible completed message after the debug thread appears.
+    /// Fork creates a thread but neither action sends a model prompt.
+    static var opensMessageFork: Bool? {
+        switch value("PORTALS_DEBUG_MESSAGE_FORK") {
+        case "edit": true
+        case "fork": false
+        default: nil
+        }
+    }
+
     /// `PORTALS_DEBUG_TURN_DIFF`: `<files>` or `<files>:file`. Open what a turn changed
     /// (`TurnDiffPanel`) for the first turn on screen that changed that many files, once;
     /// with `:file`, on its first file's diff. For screenshots.
     static var opensTurnDiff: (files: Int, onFile: Bool)? {
         guard let parts = value("PORTALS_DEBUG_TURN_DIFF")?.split(separator: ":"), let files = parts.first.flatMap({ Int($0) }) else { return nil }
         return (files, parts.dropFirst().first == "file")
+    }
+
+    /// `PORTALS_DEBUG_SUBAGENT`: open the detail of the first subagent on the line whose
+    /// messages can be read, once; `messages`, on its messages. For screenshots.
+    enum SubagentOpening { case detail, messages }
+    static var opensSubagent: SubagentOpening? {
+        value("PORTALS_DEBUG_SUBAGENT").map { $0 == "messages" ? .messages : .detail }
     }
 
     /// `PORTALS_DEBUG_OPEN_LATEST`: open the most recent saved thread, of any host, once

@@ -138,8 +138,10 @@ enum HermesHistoryMapper {
             let (text, images, files) = userText(stored)
             let from = features.contains(BridgeWire.Feature.senders) ? BridgeWire.sender(message["from"]) : nil
             let cardAnswer = features.contains(BridgeWire.Feature.asyncQuestions) ? message["card_answer"]?.stringValue : nil
+            let checkpoint = !steered && (features.contains(BridgeWire.Feature.messageFork) || features.contains(BridgeWire.Feature.turnFileUndo))
+                ? BridgeWire.messageCheckpoint(message["checkpoint"], features: features) : nil
             return [TurnItem(id: message["message_id"]?.stringValue.flatMap(UUID.init(uuidString:)) ?? UUID(),
-                             .user(UserMessage(text: text, sentAt: date, delivery: steered ? .steered : .started, images: images, files: files, from: from, cardAnswer: cardAnswer)))]
+                             .user(UserMessage(text: text, sentAt: date, delivery: steered ? .steered : .started, images: images, files: files, from: from, cardAnswer: cardAnswer, checkpoint: checkpoint)))]
         case let .event(event):
             return [TurnItem(.event(event))]
         case .hidden:

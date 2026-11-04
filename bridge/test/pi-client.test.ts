@@ -120,6 +120,18 @@ test("a command Pi does not answer in time fails, and its late answer is nobody'
   assert.deepEqual(seen, []);
 });
 
+test("a call given up on fails with the reason given, and its late answer is nobody's", async () => {
+  pi.holdStarts("given-up");
+  const { client } = run();
+  const lost = new AbortController();
+  const prompt = client.call({ type: "prompt", message: "hello" }, null, lost.signal);
+  lost.abort(new Error("Pi never answered this message."));
+  await assert.rejects(prompt, (error: Error) => error.message === "Pi never answered this message.");
+  pi.release("given-up");
+  // The next answer is the next command's, not the prompt's that came late.
+  assert.equal((await client.call({ type: "get_state" }, 5000)).sessionId, "client-test");
+});
+
 test("events and answers reach their takers in the order Pi printed them", async () => {
   const { client, seen } = run();
   // Pi says the level changed, then answers.

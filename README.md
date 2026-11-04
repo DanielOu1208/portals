@@ -26,9 +26,7 @@
 
 ---
 
-Portals is a native app for iPhone, iPad and Mac for working with Claude Code, Codex, Cursor, Droid, Pi and Hermes. The agents run on your own Mac or Linux computers, with your files, your settings and your logins. Start a thread at your desk, answer its question from your phone, and pick it up on your iPad.
-
-Portals is in alpha. The Mac app is a download here, the iPhone and iPad apps are on TestFlight, and the source and the host are in this repo.
+A native iPhone, iPad and Mac app for Claude Code, Codex, Cursor, Droid, Pi and Hermes. Agents run on your own Mac or Linux computers, and you can pick up any thread from any device. Currently in alpha.
 
 <p align="center">
   <img src="docs/images/portals-mac.jpg" alt="Portals on a Mac: a sidebar of threads across two computers, and Codex at work on a test suite" width="800">
@@ -36,15 +34,15 @@ Portals is in alpha. The Mac app is a download here, the iPhone and iPad apps ar
 
 ## Features
 
-- **Every agent in one place.** Claude Code, Codex, Cursor, Droid, Pi and Hermes, each with your own account and settings.
-- **All your computers.** Run setup on each Mac or Linux computer, and every device reaches all of them.
-- **In sync everywhere.** Threads, what you've read, your sidebar's order and queued messages follow you between iPhone, iPad and Mac.
-- **Approve from anywhere.** Commands and edits wait on a card until you allow them, and each thread can run in its own permission mode.
-- **Steer while it works.** Send a message to change course, or queue the next one. Type `/` for commands and `@` for files, and attach pictures.
-- **See what it's doing.** Steps, live command output, plans, subagents, workflows and the changes each turn made.
-- **Agents together.** Ask Claude Code to "start a Codex thread to review this", then follow that thread from the one that started it.
-- **Private notifications.** You're told when an agent finishes or needs you. The words are encrypted on your computer and can only be read on your device.
-- **Visuals in the chat.** Agents can draw interactive charts and diagrams in a reply, and formulas are typeset.
+- **Every agent in one place,** each with your own account and settings.
+- **All your computers.** Every device reaches every Mac or Linux computer you set up.
+- **In sync everywhere.** Threads, what you've read, sidebar order and queued messages.
+- **Approve from anywhere.** Allow commands and edits from a card, with a permission mode per thread.
+- **Steer while it works.** Change course or queue the next message, with `/` commands, `@` files and pictures.
+- **See what it's doing.** Steps, live command output, plans, subagents, workflows and each turn's changes.
+- **Agents together.** Ask Claude Code to "start a Codex thread to review this", then follow it from there.
+- **Private notifications.** Encrypted on your computer, readable only on your device.
+- **Visuals in the chat.** Interactive charts and diagrams, and typeset formulas.
 
 <p align="center">
   <img src="docs/images/portals-iphone.jpg" alt="Portals on an iPhone: Claude Code asks how the tests should reach a payment sandbox" width="210">
@@ -56,27 +54,27 @@ Portals is in alpha. The Mac app is a download here, the iPhone and iPad apps ar
 
 You need:
 
-- **A Mac or Linux computer** for your agents, with [Node 22.18 or newer](https://nodejs.org) and at least one agent installed and signed in.
-- **[Tailscale](https://tailscale.com)** on that computer and on your devices, signed in to the same account. You can skip it to use Portals only on the Mac your agents run on, and add it later for your iPhone or iPad.
+- **A Mac or Linux computer** with [Node 22.18 or newer](https://nodejs.org) and at least one agent signed in.
+- **[Tailscale](https://tailscale.com)** on that computer and your devices, on the same account. Only using Portals on the Mac your agents run on? You can skip it, and add it later for your iPhone or iPad.
 - **An iPhone, iPad or Mac** on iOS or macOS 26.1 or newer.
 
 Then:
 
-1. **Get the app.** On a Mac, [download the DMG](https://github.com/DanielOu1208/portals/releases/latest) and drag Portals to Applications. It keeps itself up to date. On an iPhone or iPad, [join on TestFlight](https://testflight.apple.com/join/TMV8FWA5).
-2. **Set up the host.** On the computer your agents run on:
+1. **Get the app.** [Download the DMG](https://github.com/DanielOu1208/portals/releases/latest) for Mac, or [join on TestFlight](https://testflight.apple.com/join/TMV8FWA5) for iPhone and iPad.
+2. **Set up the host** on the computer your agents run on:
 
    ```sh
    npx portals-host setup
    ```
 
-   Setup finds your agents, makes the computer reachable over Tailscale, and keeps the host running across logins. It asks before changing Tailscale or installing anything.
-3. **Add it to the app.** Scan the QR code setup shows, or paste the link under it on an iPad or Mac. On the Mac the host runs on, setup offers to open Portals with that Mac filled in.
+   It asks before changing Tailscale or installing anything.
+3. **Add it to the app.** Scan the QR code, or paste the link on an iPad or Mac.
 
-Run setup again on any other computer to add it. The [host's guide](bridge/README.md) covers every option, Linux and updates, and the [tester's guide](https://portals.build/start) covers using the app.
+Run setup again to add another computer. See the [host's guide](bridge/README.md) for options, Linux and updates, and the [tester's guide](https://portals.build/start) for the app.
 
 ## How it works
 
-The app doesn't run agents. A small host, `portals-host`, runs beside them on each computer. It listens only on `127.0.0.1`: Portals on the same Mac reaches it directly, and your other devices reach it through your own Tailscale network. When a device can't reach it directly, the Portals relay can carry the connection, encrypted so that only your device and your computer can read it.
+The app doesn't run agents. A small host, `portals-host`, runs beside them on each computer, listening only on `127.0.0.1`. Your devices reach it over your Tailscale network or, when they can't, through the Portals relay, encrypted so only your device and computer can read it. Portals on the same Mac can go without Tailscale and reach it directly.
 
 | Folder | What's in it |
 |---|---|
@@ -91,9 +89,9 @@ The app doesn't run agents. A small host, `portals-host`, runs beside them on ea
 ## Privacy
 
 - **No account, no analytics, no tracking.**
-- **Your work stays on your computers.** Conversations and files stay on the computers you own, and go only to the AI providers you use, under their terms.
-- **On your device:** the computers you've added and your settings, with passwords in the Keychain.
-- **The relay can't read what it passes.** Notifications and relayed connections are encrypted end to end, and it keeps no notifications.
+- **Your work stays on your computers,** and goes only to the AI providers you use.
+- **Your device keeps** the computers you've added and your settings, with passwords in the Keychain.
+- **The relay can't read what it passes.** It's encrypted end to end, and no notifications are kept.
 
 [Privacy policy](https://portals.build/privacy) · [Report a security issue](SECURITY.md)
 
@@ -144,7 +142,7 @@ npm start
 
 ## Support
 
-[Open an issue](https://github.com/DanielOu1208/portals/issues) for bugs or focused feature requests. Pull requests are welcome; [CONTRIBUTING.md](CONTRIBUTING.md) says what they need.
+[Open an issue](https://github.com/DanielOu1208/portals/issues) for bugs or focused feature requests. Pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

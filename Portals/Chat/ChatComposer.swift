@@ -42,6 +42,7 @@ struct ChatComposer<Accessory: View, Status: View>: View {
     let isRunning: Bool
     /// The host takes files of any kind; one that does not takes images only.
     var takesFiles = false
+    var sendEnabled = true
     var onSend: () -> Void
     var onStop: () -> Void
     /// Whether the chat is kept built out of sight now (`ChatScreen.isShown`), asked as
@@ -82,7 +83,7 @@ struct ChatComposer<Accessory: View, Status: View>: View {
     private var hasText: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     /// A message can be words, images, files, or any of them together.
     private var hasMessage: Bool { hasText || !attachments.isEmpty || !files.isEmpty }
-    private var canSend: Bool { hasMessage && !intake.isPending }
+    private var canSend: Bool { hasMessage && !intake.isPending && sendEnabled }
     private var slotsLeft: Int { max(ChatFeature.imageLimit - attachments.count, 0) }
     private var fileSlotsLeft: Int { max(FileAttachment.perMessage - files.count, 0) }
     /// Touch gets a 44 pt square; the toolbar and its glyph keep their existing size.

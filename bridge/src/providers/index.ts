@@ -1,4 +1,5 @@
 import { expandHome, type Config, type Paths } from "../config.ts";
+import { join } from "node:path";
 import { log } from "../log.ts";
 import { commandAccess } from "../portals/access.ts";
 import { droidProgram } from "../setup/agents.ts";
@@ -20,6 +21,7 @@ export function makeProviders(config: Config, paths: Paths): Map<string, Provide
   const portals = commandAccess(config, paths);
   if (config.providers.claude) {
     const claude = new ClaudeProvider({
+      checkpointPath: join(paths.state, "claude-checkpoints.json"),
       settings: { ...config.claude, path: expandHome(config.claude.path), folder: expandHome(config.generalFolder), portals },
     });
     providers.set(claude.profile.name, claude);

@@ -1,10 +1,15 @@
+import { dirname, join } from "node:path";
 import { log } from "../../log.ts";
 import { machineWord } from "../../platform.ts";
 import { readJSON, writeJSON } from "../../store/jsonFile.ts";
-import { thinkingLevels, type AgentCommand, type AgentProfile, type ModelCatalog, type OngoingThread, type Provider, type ProviderSession, type SessionOptions, type SessionSettings, type SessionSink } from "../types.ts";
-import { HermesClient, serveConnector, type ClientListener, type Connector, type Frame } from "./client.ts";
+import { thinkingLevels, type AgentCommand, type AgentProfile, type ModelCatalog, type ModeOption, type OngoingThread, type Provider, type ProviderSession, type SessionOptions, type SessionSettings, type SessionSink, type UsageLimit, type UsageReport } from "../types.ts";
+import { mcpCommand, mcpStatusText, type McpServer, type McpServerState } from "../mcpStatus.ts";
+import { HermesClient, HermesError, serveConnector, type ClientListener, type Connector, type Frame } from "./client.ts";
 import { ServeLocator } from "./serve.ts";
 import { HermesSession, type Loaded } from "./session.ts";
+import { hermesVersion } from "./setup.ts";
+import { TypedCommands } from "./typed.ts";
+import { VersionCheck } from "../program.ts";
 
 // Hermes as agents of the bridge: one per Hermes profile (its `default` is `hermes` in
 // profiles.list), all through one connection to the `hermes serve` this Mac runs
@@ -42,6 +47,8 @@ export interface HermesHostOptions {
   interruptGraceMs?: number;
   /** Each profile keeps one ongoing conversation, its Bot Chat (feature bot_chat). True unless said (tests). */
   oneThread?: boolean;
+  /** Ask the installed `hermes` its version at start; true unless said (tests). */
+  checkVersion?: boolean;
 }
 
 /** A Hermes profile, as the bridge offers it. */
@@ -56,6 +63,11 @@ export interface HermesProfile {
   provider: string;
 }
 
+/**
+ * The Hermes release the bridge was tested with. Hermes speaks the protocol the bridge
+ * speaks to the app, and changes it often: another release runs, with a warning at start.
+ */
+export const testedHermesVersion = "0.22.5";
 /** What a thread runs on when Hermes is left to choose: its own default, whatever that is. */
 export const hermesDefaultModel = "default";
 const catalogMaxAgeMs = 2 * 60_000;
@@ -64,6 +76,46 @@ const description = `Hermes on this ${machineWord()}, with its own profile, memo
 export const botChatTitle = "Bot Chat";
 /** Hermes's command that compacts a conversation, which a thread takes from the app. */
 const compressCommand: AgentCommand = { name: "compress", description: "Summarise the conversation so far, to free up context", usage: "[focus]", skill: false };
+/**
+ * Hermes's other commands the app offers, where Hermes lists them (`commands.catalog`): the
+ * ones that show something run through `slash.exec`, and their text is the answer; the
+ * ones Hermes makes a message of (`command.dispatch`) are a turn, as the user's skills are.
+ * None that changes a setting, nor one made for Hermes's own windows (`/copy`, `/skin`).
+ */
+const hermesCommands: { name: string; description: string; usage: string; turn?: boolean; writes?: boolean }[] = [
+  { name: "context", description: "Show what fills the context window", usage: "" },
+  { name: "agents", description: "Show the agents and tasks Hermes is running", usage: "" },
+  { name: "diff", description: "Show the uncommitted changes in the thread's folder", usage: "" },
+  { name: "insights", description: "Show how Hermes has been used lately", usage: "" },
+  { name: "toolsets", description: "List Hermes's toolsets", usage: "" },
+  { name: "bundles", description: "List the skill bundles", usage: "" },
+  { name: "profile", description: "Show this profile's name and folder", usage: "" },
+  { name: "version", description: "Show which Hermes runs", usage: "" },
+  { name: "review", description: "Have a subagent review the work just discussed", usage: "[focus]", writes: true },
+  { name: "plan", description: "Write a plan for a task without carrying it out", usage: "<task>", turn: true },
+  { name: "init", description: "Write or update the folder's AGENTS.md", usage: "[notes]", turn: true },
+  { name: "learn", description: "Make a skill from something you describe", usage: "<what to learn>", turn: true },
+];
+const catalogCommandMaxAgeMs = 2 * 60_000;
+/** A Hermes thread's modes: its profile's own approvals, or none asked for (Hermes's `yolo`, for the one session). */
+const modeOptions: ModeOption[] = [
+  { id: "default", label: "Default", description: "Asks before risky commands, as your Hermes approval settings say." },
+  { id: "full", label: "Full access", description: "Runs commands without asking, in this thread only." },
+];
+/** The words for a Nous plan's gauges that Hermes's apps have their own words for. */
+const gaugeNames: Record<string, string> = { day: "daily", week: "weekly", month: "monthly", top_tier: "Large models" };
+
+/** What `mcp.servers.status` says of a server, in `/mcp`'s words. `lazy`: connects when first used. */
+const hermesMcpStates: Record<string, McpServerState> = { connected: "connected", connecting: "starting", failed: "failed", disabled: "off", configured: "notStarted" };
+
+/** `/mcp` from Hermes's `mcp.servers.status`: its serve's last word on each server, which asking does not change. */
+export function hermesMcpText(agent: string, servers: { name: string; status: string; tools?: number }[]): string {
+  return mcpStatusText(agent, servers.map((server): McpServer => {
+    const state = hermesMcpStates[server.status] ?? "unknown";
+    const detail = server.status === "lazy" ? "starts when first used" : state === "unknown" ? server.status : undefined;
+    return { name: server.name, state, ...(typeof server.tools === "number" ? { tools: server.tools } : {}), ...(detail ? { detail } : {}) };
+  }));
+}
 
 /** The bridge's name for a Hermes profile: `hermes` for the default, else the profile's own unless another agent has it. */
 export function agentName(profile: string, taken: ReadonlySet<string>): string {
@@ -98,16 +150,24 @@ export class HermesHost {
   /** Events for runtime ids no session has claimed yet (a resume answered after its first events). */
   private readonly unclaimed = new Map<string, { type: string; seq: number | undefined; payload: Frame; at: number }[]>();
   private started = false;
+  /** Which Hermes is installed, as `hermes --version` said at the bridge's start. */
+  readonly version: VersionCheck;
   private refreshing: Promise<void> | null = null;
   /** The profiles' ongoing conversations open in the bridge, told when Hermes's stored sessions change (`sessions.changed`). */
   private readonly watching = new Set<HermesSession>();
   /** Hermes's `sessions.changed` came, to be told the sessions in `watching` a moment later, once for a burst. */
   private changeTimer: NodeJS.Timeout | null = null;
+  /** Each profile's commands as Hermes last listed them (`commands.catalog`), and when. */
+  private readonly catalogs = new Map<string, { catalog: Promise<Frame>; at: number }>();
+  /** What the user typed for the messages Hermes stored in place of a command, beside the profiles' file. */
+  private readonly typed: TypedCommands;
 
   constructor(options: HermesHostOptions) {
     this.options = options;
     this.interruptGraceMs = options.interruptGraceMs ?? 15_000;
     this.oneThread = options.oneThread ?? true;
+    this.version = new VersionCheck({ name: "Hermes", tested: testedHermesVersion, path: options.settings.path, setting: "hermes.path" });
+    this.typed = new TypedCommands(join(dirname(options.cachePath), "hermes-commands.json"));
     const locator = new ServeLocator({
       path: options.settings.path,
       start: options.settings.start,
@@ -157,11 +217,12 @@ export class HermesHost {
     };
   }
 
-  /** Connects, then learns the profiles. Once, however many agents call it. */
+  /** Connects, then learns the profiles, and logs which Hermes is installed. Once, however many agents call it. */
   start(): void {
     if (this.started) return;
     this.started = true;
     void this.client.start();
+    if (this.options.checkVersion !== false) void hermesVersion(this.options.settings.path, this.options.env).then((version) => this.version.installedIs(version));
     void this.refreshProfiles();
   }
 
@@ -330,6 +391,51 @@ export class HermesHost {
     return new HermesSession(options, profile, sink, this, loaded, mark);
   }
 
+  /** The session open here for a thread, if one is. */
+  sessionFor(thread: string): HermesSession | undefined {
+    return [...this.sessions.values()].find((session) => session.id === thread);
+  }
+
+  /** The profile's commands and skills, as Hermes lists them for its own menus; asked again after two minutes. */
+  commandCatalog(profile: string): Promise<Frame> {
+    const kept = this.catalogs.get(profile);
+    if (kept && Date.now() - kept.at < catalogCommandMaxAgeMs) return kept.catalog;
+    const catalog = this.client.call<Frame>("commands.catalog", { profile });
+    this.catalogs.set(profile, { catalog, at: Date.now() });
+    // One that failed is asked again next time.
+    catalog.catch(() => {
+      if (this.catalogs.get(profile)?.catalog === catalog) this.catalogs.delete(profile);
+    });
+    return catalog;
+  }
+
+  /** What the user typed for the thread's messages Hermes stored in place of a command, by the stored row's id. */
+  typedCommands(thread: string): Map<number, string> {
+    return this.typed.of(thread);
+  }
+
+  keepTyped(thread: string, row: number, text: string): void {
+    this.typed.keep(thread, row, text);
+  }
+
+  forgetTyped(thread: string, rows: readonly number[]): void {
+    this.typed.forget(thread, rows);
+  }
+
+  confirmTyped(thread: string, rows: readonly number[]): void {
+    this.typed.confirm(thread, rows);
+  }
+
+  /** Whether `/name` is a command Hermes makes a message of for the profile: one of the app's (`hermesCommands`) or a skill. */
+  async turnCommand(profile: string, name: string): Promise<boolean> {
+    try {
+      const catalog = await this.commandCatalog(profile);
+      return hermesCommands.some((command) => command.turn && command.name === name && listed(catalog, name)) || skillsOf(catalog).has(name);
+    } catch {
+      return false;
+    }
+  }
+
   /** Of these stored ids, the sessions Hermes has loaded and at work now. */
   async live(ids: string[]): Promise<string[]> {
     const listed = await this.client.call<{ sessions?: Frame[] }>("session.active_list", {});
@@ -371,6 +477,7 @@ export class HermesHost {
     connected: (again, sameRun) => {
       if (!again) return;
       for (const provider of this.providers.values()) provider.forgetCatalog();
+      this.catalogs.clear();
       void this.refreshProfiles();
       for (const session of new Set(this.sessions.values())) void session.reconnected(sameRun);
     },
@@ -378,6 +485,51 @@ export class HermesHost {
       for (const session of new Set(this.sessions.values())) session.connectionLost();
     },
   };
+}
+
+/** A sign-in's usage windows, as `model.options` gives them: one account's, or each account's of several. */
+function windowLimits(usage: Frame | undefined): UsageLimit[] {
+  const limits = (windows: unknown, prefix: string): UsageLimit[] =>
+    (Array.isArray(windows) ? windows : []).flatMap((window: Frame): UsageLimit[] => {
+      if (typeof window?.label !== "string" || typeof window.used_percent !== "number") return [];
+      const percent = Math.max(0, Math.min(100, window.used_percent));
+      return [{ name: `${prefix}${window.label}`, percent, resetsAt: unixSeconds(window.resets_at), ...(percent >= 100 ? { reached: true } : {}) }];
+    });
+  if (Array.isArray(usage?.accounts) && usage.accounts.length > 0) {
+    return usage.accounts.flatMap((account: Frame, index: number) => {
+      const label = typeof account?.label === "string" && account.label !== "" ? account.label : `Account ${index + 1}`;
+      return limits(account?.windows, usage.accounts.length > 1 ? `${label}, ` : "");
+    });
+  }
+  return limits(usage?.windows, "");
+}
+
+/** A Nous plan's gauges (`plan_usage`), each with how much of it is left. */
+function gaugeLimits(plan: Frame | undefined): UsageLimit[] {
+  return (Array.isArray(plan?.gauges) ? plan.gauges : []).flatMap((gauge: Frame): UsageLimit[] => {
+    if (typeof gauge?.label !== "string" || typeof gauge.left_fraction !== "number") return [];
+    const name = gaugeNames[gauge.label] ?? (typeof gauge.title === "string" && gauge.title !== "" ? gauge.title : gauge.label);
+    const percent = Math.round(Math.max(0, Math.min(1, 1 - gauge.left_fraction)) * 100);
+    const resetsAt = typeof gauge.resets_at_ms === "number" ? Math.floor(gauge.resets_at_ms / 1000) : null;
+    return [{ name, percent, resetsAt, ...(gauge.left_fraction <= 0 ? { reached: true } : {}) }];
+  });
+}
+
+/** An ISO time in Unix seconds; null when there is none. */
+function unixSeconds(value: unknown): number | null {
+  const at = typeof value === "string" ? Date.parse(value) : NaN;
+  return Number.isFinite(at) ? Math.floor(at / 1000) : null;
+}
+
+/** Whether Hermes's catalog lists `/name` among its commands. */
+function listed(catalog: Frame, name: string): boolean {
+  return Array.isArray(catalog?.pairs) && catalog.pairs.some((pair: unknown) => Array.isArray(pair) && pair[0] === `/${name}`);
+}
+
+/** The names of the skills in Hermes's catalog, without their slash. */
+function skillsOf(catalog: Frame): Set<string> {
+  const skills = catalog?.skills && typeof catalog.skills === "object" ? Object.keys(catalog.skills) : [];
+  return new Set(skills.filter((key) => key.startsWith("/") && key.length > 1).map((key) => key.slice(1)));
 }
 
 /** A Bot Chat as Hermes lists it, as the bridge's ongoing thread. */
@@ -400,6 +552,12 @@ export class HermesProvider implements Provider {
   private catalog: Catalog | null = null;
   private loading: Promise<ModelCatalog> | null = null;
   readonly ongoingThread?: Provider["ongoingThread"];
+  /** A thread asks before risky commands as the profile's settings say, or not at all (Hermes's `yolo`, for its session only). */
+  readonly supportsModes = true;
+  readonly modeOptions = modeOptions;
+  readonly modeMeanings = { full: "runs commands without asking" };
+  /** Its commands that show something, which the bridge runs (`commands`), and `/mcp` (`mcp.servers.status`). */
+  readonly executes = [...hermesCommands.filter((command) => !command.turn).map((command) => command.name), "mcp"];
 
   constructor(host: HermesHost, profile: HermesProfile) {
     this.host = host;
@@ -424,6 +582,11 @@ export class HermesProvider implements Provider {
 
   start(): void {
     this.host.start();
+  }
+
+  /** Every profile runs on the one Hermes. */
+  get version(): VersionCheck {
+    return this.host.version;
   }
 
   async close(): Promise<void> {
@@ -484,9 +647,89 @@ export class HermesProvider implements Provider {
     return catalog;
   }
 
-  /** Hermes's `/compress` (`/compact` too), which the session carries out (`session.compress`). */
-  async commands(): Promise<AgentCommand[]> {
-    return [compressCommand];
+  /** What `default` comes to is the profile's own approval settings, which none of the app's modes is. */
+  defaultMode(): null {
+    return null;
+  }
+
+  /**
+   * Hermes's `/compress` (`/compact` too), which the session carries out (`session.compress`),
+   * `/mcp`, which the bridge answers, Hermes's commands of `hermesCommands` that its catalog
+   * lists, and the profile's skills.
+   */
+  async commands(thread?: { id: string; cwd: string }, name?: string): Promise<AgentCommand[]> {
+    const mcp = mcpCommand(() => this.mcpStatus());
+    const shown = hermesCommands.filter((command) => !command.turn).map((command) => this.command(command, thread));
+    if (name !== undefined && (name === compressCommand.name || name === mcp.name || shown.some((command) => command.name === name))) return [compressCommand, mcp, ...shown];
+    let catalog: Frame;
+    try {
+      catalog = await this.host.commandCatalog(this.described.profile);
+    } catch (error) {
+      log.debug("Hermes did not list its commands", { error: (error as Error).message });
+      return [compressCommand, mcp];
+    }
+    const described = new Map<string, string>();
+    for (const pair of Array.isArray(catalog.pairs) ? catalog.pairs : []) {
+      if (Array.isArray(pair) && typeof pair[0] === "string") described.set(pair[0], typeof pair[1] === "string" ? pair[1] : "");
+    }
+    const own = hermesCommands.filter((command) => described.has(`/${command.name}`)).map((command) => this.command(command, thread));
+    const skills = [...skillsOf(catalog)]
+      .filter((skill) => skill !== mcp.name && !own.some((command) => command.name === skill))
+      .map((skill): AgentCommand => ({ name: skill, description: described.get(`/${skill}`) || "A skill of yours", usage: "[instructions]", skill: true }));
+    return [compressCommand, mcp, ...own, ...skills];
+  }
+
+  private async mcpStatus(): Promise<string> {
+    let answer: { servers?: { name: string; status: string; tools?: number }[] } | undefined;
+    try {
+      answer = await this.host.client.call("mcp.servers.status", { profile: this.described.profile });
+    } catch (error) {
+      if (error instanceof HermesError && error.code === -32601) throw new Error("This Hermes cannot say how its MCP servers are: a newer one can.");
+      throw new Error(`Hermes did not say how its MCP servers are: ${(error as Error).message}`);
+    }
+    return hermesMcpText(this.described.displayName, Array.isArray(answer?.servers) ? answer.servers : []);
+  }
+
+  /** One of `hermesCommands` as the app offers it: one that shows something runs in the thread's session. */
+  private command(command: (typeof hermesCommands)[number], thread: { id: string; cwd: string } | undefined): AgentCommand {
+    const offered: AgentCommand = { name: command.name, description: command.description, usage: command.usage, skill: false };
+    if (command.turn) return offered;
+    return {
+      ...offered,
+      ...(command.writes ? { requiresWritable: true } : {}),
+      execute: async (argument) => {
+        const session = thread ? this.host.sessionFor(thread.id) : undefined;
+        if (!session) throw new Error("This Hermes thread is not open.");
+        return (await session.slash(argument ? `/${command.name} ${argument}` : `/${command.name}`)) || "Hermes had nothing to show.";
+      },
+    };
+  }
+
+  /**
+   * How much of the limits of the thread's model provider is used, as Hermes's own model
+   * picker shows them (`model.options`): a ChatGPT or Claude sign-in's windows, or a Nous
+   * plan's gauges, with a Nous plan's credits (`usage.bars`). Hermes keeps the windows as
+   * it last heard them and asks again as it is asked, so a first answer may have none.
+   */
+  async usage(thread: string): Promise<UsageReport> {
+    const profile = this.described.profile;
+    const options = await this.host.call<Frame>("model.options", { profile });
+    const slug = this.host.sessionFor(thread)?.settings().provider || (typeof options.provider === "string" ? options.provider : "");
+    const row: Frame = (Array.isArray(options.providers) ? options.providers : []).find((entry: Frame) => entry?.slug === slug) ?? {};
+    const report: UsageReport = { limits: [...windowLimits(row.usage), ...gaugeLimits(row.plan_usage)] };
+    if (typeof row.plan_usage?.plan === "string" && row.plan_usage.plan !== "") report.plan = row.plan_usage.plan;
+    if (slug === "nous") {
+      const bars = await this.host.call<Frame>("usage.bars", { profile }).catch(() => null);
+      if (bars?.available === true) {
+        if (!report.plan && typeof bars.plan_name === "string" && bars.plan_name !== "") report.plan = bars.plan_name;
+        const used = bars.plan_bar?.pct_used;
+        if (typeof used === "number") report.limits.push({ name: "credits", percent: used, resetsAt: unixSeconds(bars.renews_at) });
+        if (typeof bars.total_spendable_display === "string" && bars.total_spendable_display !== "") report.note = `${bars.total_spendable_display} of credits left.`;
+      }
+    }
+    const name = typeof row.name === "string" && row.name !== "" ? row.name : slug || "this provider";
+    if (report.limits.length === 0) report.note ??= `Hermes shows no usage limits for ${name}.`;
+    return report;
   }
 
   newThread(options: { cwd: string; settings: SessionSettings }): Promise<string> {

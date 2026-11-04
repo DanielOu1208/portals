@@ -186,6 +186,12 @@ export interface ClaudeConfig {
    */
   apiKey: string | null;
   /**
+   * A long-lived token for Claude Code to sign in with, from `claude setup-token`, given to
+   * it as `CLAUDE_CODE_OAUTH_TOKEN`; usage counts against the Claude plan, as with the
+   * login. null uses the login of the installed `claude`. Not used when `apiKey` is set.
+   */
+  oauthToken: string | null;
+  /**
    * Claude Code says in a few words what each run of its tool calls did ("Read a.txt and
    * b.txt", its `tool_use_summary`), which the app shows as what the agent is working on
    * (feature status_headline). Each summary is one small model call of Claude Code's own.
@@ -336,7 +342,7 @@ export const defaults: Config = {
   generalFolder: "~/Portals",
   folders: { hide: [] },
   providers: { claude: true, codex: true, pi: false, cursor: true, droid: true, hermes: true, fake: false },
-  claude: { path: "~/.local/bin/claude", idleMinutes: 15, maxWarm: 6, apiKey: null, toolSummaries: true },
+  claude: { path: "~/.local/bin/claude", idleMinutes: 15, maxWarm: 6, apiKey: null, oauthToken: null, toolSummaries: true },
   // Codex's own model for titles (codex-cli 0.162.1).
   codex: { mode: "shared", path: "codex", socket: null, titleModel: "gpt-5.6-luna" },
   pi: { path: "pi", idleMinutes: 15, maxWarm: 6, model: null },
@@ -561,6 +567,10 @@ function parseClaude(value: unknown): ClaudeConfig {
   if (raw.apiKey !== undefined && raw.apiKey !== null) {
     if (typeof raw.apiKey !== "string" || raw.apiKey.trim() === "") throw new ConfigError("claude.apiKey must be an API key, or null to use the Claude sign-in.");
     claude.apiKey = raw.apiKey.trim();
+  }
+  if (raw.oauthToken !== undefined && raw.oauthToken !== null) {
+    if (typeof raw.oauthToken !== "string" || raw.oauthToken.trim() === "") throw new ConfigError("claude.oauthToken must be a token from claude setup-token, or null to use the Claude sign-in.");
+    claude.oauthToken = raw.oauthToken.trim();
   }
   if (raw.toolSummaries !== undefined) {
     if (typeof raw.toolSummaries !== "boolean") throw new ConfigError("claude.toolSummaries must be true or false.");

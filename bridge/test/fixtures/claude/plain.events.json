@@ -8,11 +8,11 @@
   "type": "turn.end",
   "status": "complete",
   "usage": {
-   "used": 25215,
+   "used": 24847,
    "max": 1000000
   },
   "spent": {
-   "tokens": 25215
+   "tokens": 24847
   }
  }
 ]

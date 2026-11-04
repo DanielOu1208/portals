@@ -11,7 +11,7 @@ import type { AskForApproval, SandboxPolicy, TurnStartParams } from "./types/ind
 // with one thread's turns (`turn/start`), which Codex keeps for that thread only.
 
 /** The Codex release the bridge was built and tested against (docs/bridge-spikes.md). */
-export const testedCodexVersion = "0.162.1";
+export const testedCodexVersion = "0.166.0";
 
 /** The shared app-server daemon's socket for `~/.codex`. */
 export function defaultSocketPath(): string {

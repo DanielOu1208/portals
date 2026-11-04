@@ -39,6 +39,7 @@ import { WaitingStore } from "./sessions/waiting.ts";
 import { Registry } from "./sessions/registry.ts";
 import { readJSON } from "./store/jsonFile.ts";
 import { UpdateCheck, type UpdateCheckOptions } from "./updates.ts";
+import { DiskSpace, type DiskSpaceOptions } from "./disk.ts";
 import { version } from "./version.ts";
 
 // Puts the pieces together and starts listening. `main.ts` runs this; tests run it on
@@ -65,6 +66,8 @@ export interface BridgeOptions {
   noticeRetries?: readonly number[];
   /** For the check for a later version when config.json has it on: another registry, clock or timing (tests; feature update_notice). */
   updates?: Partial<Omit<UpdateCheckOptions, "own" | "file" | "changed">>;
+  /** For the reading of the free space on the bridge's disk: a stand-in for `statfs`, other timing (tests; feature disk_space). */
+  disk?: Partial<Pick<DiskSpaceOptions, "statfs" | "everyMs">>;
 }
 
 /** How long telling another Mac which of its threads threads here keep at work may take. */
@@ -80,6 +83,8 @@ export interface RunningBridge {
   fleet: Fleet;
   /** The check for a later version, when config.json has it on: for tests, which wait for its answer. */
   updates: UpdateCheck | undefined;
+  /** The free space on the bridge's disk: for tests, which wait for its reading. */
+  disk: DiskSpace;
   /** Stops everything; once, however often it is called. */
   close(): Promise<void>;
 }
@@ -104,9 +109,18 @@ export async function startBridge(options: BridgeOptions = {}): Promise<RunningB
   } catch (error) {
     log.warn("could not let go of the diffs kept for removed threads", { error: (error as Error).message });
   }
+  // The free space on the disk this folder is on: Settings shows it, and the threads are
+  // told as it runs low (feature disk_space). Read from `start` on, once everything is made.
+  const disk = new DiskSpace({
+    path: home,
+    name: () => here.name,
+    changed: () => pollNow.moved(),
+    low: () => sessions.diskLow(),
+    ...options.disk,
+  });
   const sessions = new SessionManager({
     registry, providers, logCapacity: options.logCapacity, listener: notifier, waiting: new WaitingStore(paths.waiting), spent: new SpentStore(paths.spent), diffs,
-    heldFor: options.held?.for,
+    heldFor: options.held?.for, disk,
   });
   // A thread taken off the list is no device's to hear about any more, as when the app
   // asks for it with the push route's DELETE (feature thread_sync). When push.json cannot
@@ -213,7 +227,7 @@ export async function startBridge(options: BridgeOptions = {}): Promise<RunningB
   const updates = config.updates.check
     ? new UpdateCheck({ own: version, file: paths.update, changed: () => pollNow.moved(), ...options.updates })
     : undefined;
-  const gateway = new Gateway({ config, sessions, providers, folders, desk, fleet, looks, order, machine, pollNow, files, fileSearch, folderSearch, net, search, updates });
+  const gateway = new Gateway({ config, sessions, providers, folders, desk, fleet, looks, order, machine, pollNow, files, fileSearch, folderSearch, net, search, updates, disk });
   net.listener = {
     moved: () => pollNow.moved(),
     // Set from the app, here or on another Mac: what this Mac passes on says it at once.
@@ -297,6 +311,7 @@ export async function startBridge(options: BridgeOptions = {}): Promise<RunningB
     log.info(`devices that cannot reach this Mac directly come through the relay at ${config.relay.url}`);
   }
   updates?.start();
+  disk.start();
   // The threads an agent still runs are followed again; then those that had messages
   // waiting when the bridge stopped are loaded, so the messages are sent.
   const following = new AbortController();
@@ -306,6 +321,15 @@ export async function startBridge(options: BridgeOptions = {}): Promise<RunningB
     if (provider.ongoingThread) void keepOngoingOnceAnswered(name, provider, sessions, following.signal);
   };
   for (const provider of new Set(providers.values())) provider.onAgentAdded?.(keepOngoing);
+  for (const [name, provider] of providers) {
+    provider.watchThreads?.(
+      () => registry.all().filter((record) => record.agent === name && !record.readOnly),
+      async (id) => {
+        if (following.signal.aborted || registry.get(id)?.agent !== name) return;
+        await sessions.refresh(await sessions.load(id));
+      },
+    );
+  }
   startProviders(providers);
   for (const [name, provider] of providers) keepOngoing(name, provider);
   void followLiveThreads(registry, providers, sessions, following.signal).then(async (asking) => {
@@ -323,6 +347,7 @@ export async function startBridge(options: BridgeOptions = {}): Promise<RunningB
     replayEpoch: gateway.replayEpoch,
     fleet,
     updates,
+    disk,
     close() {
       closing ??= (async () => {
         // With a last line; only the bridge that started them stops them.
@@ -335,6 +360,7 @@ export async function startBridge(options: BridgeOptions = {}): Promise<RunningB
         net.close();
         standby?.close();
         updates?.stop();
+        disk.stop();
         pollNow.close();
         fileSearch.close();
         folderSearch.close();

@@ -4,6 +4,7 @@ import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import WebSocket, { WebSocketServer } from "ws";
+import { CodexError } from "../src/providers/codex/client.ts";
 import { fixture, fixtureCwd, recordedThread, rewrite } from "./codex-fixtures.ts";
 
 // A stand-in for Codex's shared app-server daemon: a WebSocket server on a unix socket
@@ -14,6 +15,15 @@ import { fixture, fixtureCwd, recordedThread, rewrite } from "./codex-fixtures.t
 // resumes the thread meanwhile.
 
 type Json = any;
+
+/**
+ * What Codex (0.166) says when asked for the turns of a thread it has loaded that has none
+ * yet: `thread/read` with its turns says this, and from then on so do `thread/turns/list`
+ * and `thread/resume`, which until then answer as `notMaterialized` and `noRollout` do.
+ */
+const noTurnsYet = "list_turns is not supported yet";
+const notMaterialized = (id: string) => `thread ${id} is not materialized yet; thread/turns/list is unavailable before first user message`;
+const noRollout = (id: string) => `no rollout found for thread id ${id}`;
 
 export class DaemonConnection {
   readonly socket: WebSocket;
@@ -50,6 +60,8 @@ interface ThreadState {
   preview: string;
   parentThreadId: string | null;
   source: Json;
+  /** With no turn yet, `thread/read` has been asked for its turns (`noTurnsYet`). */
+  turnsAsked?: boolean;
 }
 
 interface OpenRequest {
@@ -89,6 +101,15 @@ export class FakeDaemon {
   readonly playing: Promise<void>[] = [];
   /** False: the socket refuses new connections (the daemon is down). */
   accepting = true;
+  /** The paged protocol; false stands in for an older app-server. */
+  pagedHistory = false;
+  /** Unsubscribed connections miss turn/item events, as with the real app-server. */
+  subscriptionEventsOnly = false;
+  onUnsubscribe: (params: Json) => void | Promise<void> = () => {};
+  backgroundTerminals: Json[] = [];
+  historyPageSize = 2;
+  /** Runs after a turns page is captured, before it is returned. */
+  onTurnsRead: (params: Json) => void = () => {};
   /** While set, `turn/interrupt` is answered only once it resolves: Codex slow to take a Stop. */
   interruptHeld: Promise<void> | null = null;
   /** What `account/rateLimits/read` answers. */
@@ -110,6 +131,11 @@ export class FakeDaemon {
     accountId: null,
     rateLimitUpsell: null,
   };
+  /**
+   * The MCP servers `mcpServerStatus/list` gives, as Codex runs them for a loaded thread
+   * (`runtimeStatus`): asked of no thread, or of none loaded, it says none runs.
+   */
+  mcpServers: Json[] = [];
   /** Runs when a `turn/steer` arrives, before it is answered. */
   onSteer: (params: Json) => void = () => {};
   /** Runs when a `thread/read` arrives, before it is answered (once it settles, when it gives a promise). */
@@ -120,6 +146,8 @@ export class FakeDaemon {
   onConfigRead: (params: Json) => void | Promise<void> = () => {};
   /** Runs when a `turn/start` arrives, before the turn starts and the call is answered. */
   onTurnStart: (params: Json) => void | Promise<void> = () => {};
+  /** What `skills/list` gives for any folder (0.166's shape); a folder's own (`scope: "repo"`) only when it names one. */
+  skills: Json[] = [];
   /** Runs when a `thread/list` arrives, before it is answered: one that throws is Codex failing to list. */
   onList: (params: Json) => void = () => {};
   /** Runs when a `thread/loaded/list` arrives, before it is answered. */
@@ -190,7 +218,10 @@ export class FakeDaemon {
   /** Every connection hears it, whether it follows the thread or not. */
   broadcast(method: string, params: Json): void {
     this.observe(method, params);
-    for (const connection of this.connections) connection.send({ method, params });
+    for (const connection of this.connections) {
+      if (this.subscriptionEventsOnly && /^(turn|item)\//.test(method) && !connection.subscribed.has(params.threadId)) continue;
+      connection.send({ method, params });
+    }
   }
 
   /**
@@ -248,6 +279,51 @@ export class FakeDaemon {
       this.broadcast("item/completed", { threadId, turnId, item: { ...item, text }, completedAtMs: 2 });
     }
     this.broadcast("turn/completed", { threadId, turn: { id: turnId, items: [], itemsView: "summary", status, error: null, startedAt: 1, completedAt: 2, durationMs: 1000 } });
+  }
+
+  /**
+   * A review starts, as Codex 0.166 runs one (`review/start`, or `/review` at the desk):
+   * its turn, which its start (`enteredReviewMode`) is told under, then a `turn/started`
+   * for the review's own turn, whose root it is, and the prompt Codex gives its reviewer,
+   * told under the review's turn. Returns the review's turn.
+   */
+  startReview(threadId: string, review = "current changes", id = `review-${randomUUID()}`): Json {
+    const thread = this.thread(threadId);
+    const turn = { id, rootTurnId: id, items: [], itemsView: "notLoaded", status: "inProgress", error: null, startedAt: 1, completedAt: null, durationMs: null };
+    thread.turns.push(structuredClone(turn));
+    thread.status = { type: "active", activeFlags: [] };
+    const entered = { type: "enteredReviewMode", id: `entered-${randomUUID()}`, review };
+    this.broadcast("item/started", { threadId, turnId: id, item: entered, startedAtMs: 1 });
+    this.broadcast("item/completed", { threadId, turnId: id, item: entered, completedAtMs: 1 });
+    this.broadcast("turn/started", { threadId, turn: { ...turn, id: `reviewer-${randomUUID()}`, rootTurnId: id } });
+    // Kept as Codex keeps them: the review's own turn before the review's.
+    thread.turns.splice(thread.turns.length - 2, 0, thread.turns.pop());
+    const prompt = { type: "userMessage", id: `user-${randomUUID()}`, clientId: null, content: [{ type: "text", text: "Review the current code changes and provide prioritized findings.", text_elements: [] }] };
+    this.broadcast("item/started", { threadId, turnId: id, item: prompt, startedAtMs: 1 });
+    this.broadcast("item/completed", { threadId, turnId: id, item: prompt, completedAtMs: 1 });
+    return turn;
+  }
+
+  /**
+   * The review of `startReview` ends: its end (`exitedReviewMode`) with the findings, which
+   * Codex then gives as its reply, and the end of the review's turn. Codex keeps the review's
+   * work in the review's own turn, cut off, and only its start, end and reply in the review's.
+   */
+  finishReview(threadId: string, turnId: string, findings: string): void {
+    const exited = { type: "exitedReviewMode", id: `exited-${randomUUID()}`, review: findings };
+    this.broadcast("item/started", { threadId, turnId, item: exited, startedAtMs: 2 });
+    this.broadcast("item/completed", { threadId, turnId, item: exited, completedAtMs: 2 });
+    const reply = { type: "agentMessage", id: `msg-${randomUUID()}`, text: findings, phase: null, memoryCitation: null, delivery: null, questions: null };
+    this.broadcast("item/started", { threadId, turnId, item: reply, startedAtMs: 2 });
+    this.broadcast("item/completed", { threadId, turnId, item: reply, completedAtMs: 2 });
+    this.broadcast("turn/completed", { threadId, turn: { id: turnId, rootTurnId: turnId, items: [], itemsView: "summary", status: "completed", error: null, startedAt: 1, completedAt: 2, durationMs: 1000 } });
+    const thread = this.thread(threadId);
+    const review = thread.turns.find((turn) => turn.id === turnId);
+    const own = thread.turns.find((turn) => turn.rootTurnId === turnId && turn.id !== turnId);
+    const kept = new Set(["enteredReviewMode", "exitedReviewMode"]);
+    own.items = review.items.filter((item: Json) => !kept.has(item.type) && item.id !== reply.id);
+    own.status = "interrupted";
+    review.items = review.items.filter((item: Json) => kept.has(item.type) || item.id === reply.id);
   }
 
   /** Someone at a terminal answers first. */
@@ -392,7 +468,7 @@ export class FakeDaemon {
       const result = await this.handle(connection, call.method, call.params);
       connection.send({ id: message.id, result });
     } catch (error) {
-      connection.send({ id: message.id, error: { code: -32600, message: (error as Error).message } });
+      connection.send({ id: message.id, error: { code: error instanceof CodexError ? error.code : -32600, message: (error as Error).message } });
     }
   }
 
@@ -422,7 +498,7 @@ export class FakeDaemon {
       case "thread/resume": {
         await this.onResume(params);
         const thread = this.thread(params.threadId);
-        if (thread.turns.length === 0 && !thread.loaded) throw new Error(`no rollout found for thread id ${thread.id}`);
+        if (thread.turns.length === 0) throw thread.turnsAsked ? new CodexError(-32601, noTurnsYet) : new Error(noRollout(thread.id));
         thread.loaded = true;
         if (thread.status.type === "notLoaded") thread.status = { type: "idle" };
         connection.subscribed.add(thread.id);
@@ -436,12 +512,30 @@ export class FakeDaemon {
         }
         return { thread: this.threadJSON(thread, params.excludeTurns !== true, true), ...this.settings(thread) };
       }
-      case "thread/read":
+      case "thread/turns/list": {
+        if (!this.pagedHistory) throw new CodexError(-32601, "Method not found: thread/turns/list");
+        const listed = this.thread(params.threadId);
+        if (listed.turns.length === 0 && listed.loaded) throw listed.turnsAsked ? new CodexError(-32601, noTurnsYet) : new Error(notMaterialized(listed.id));
+        const turns = this.threadJSON(listed, true).turns.reverse();
+        const start = Number(params.cursor ?? 0);
+        const limit = Math.min(params.limit ?? 50, this.historyPageSize);
+        const data = turns.slice(start, start + limit);
+        if (params.itemsView === "notLoaded") for (const turn of data) { turn.items = []; turn.itemsView = "notLoaded"; }
+        this.onTurnsRead(params);
+        return { data, nextCursor: start + limit < turns.length ? String(start + limit) : null, backwardsCursor: null };
+      }
+      case "thread/read": {
         await this.onRead(params);
-        return { thread: this.threadJSON(this.thread(params.threadId), params.includeTurns === true) };
+        const thread = this.thread(params.threadId);
+        if (params.includeTurns === true && thread.turns.length === 0 && thread.loaded) {
+          thread.turnsAsked = true;
+          throw new CodexError(-32601, noTurnsYet);
+        }
+        return { thread: this.threadJSON(thread, params.includeTurns === true) };
+      }
       case "thread/fork": {
         const from = this.thread(params.threadId);
-        if (from.turns.length === 0) throw new Error(`no rollout found for thread id ${from.id}`);
+        if (from.turns.length === 0) throw new Error(noRollout(from.id));
         const id = this.addThread(from.cwd, structuredClone(from.turns.filter((turn) => turn.status !== "inProgress")), {
           loaded: true,
           preview: from.preview,
@@ -467,6 +561,16 @@ export class FakeDaemon {
       case "turn/start":
         await this.onTurnStart(params);
         return this.startTurn(params);
+      case "skills/list":
+        return { data: (params.cwds ?? [""]).map((cwd: string) => ({ cwd, skills: this.skills.filter((skill) => cwd || skill.scope !== "repo"), errors: [] })) };
+      case "review/start": {
+        if (this.thread(params.threadId).status.type === "active") throw new Error("a turn is already running");
+        // As Codex answers, before it tells of the review: the review's turn, with the review it was asked for.
+        const id = `review-${randomUUID()}`;
+        const review = params.target?.type === "custom" ? params.target.instructions : "current changes";
+        setImmediate(() => this.startReview(params.threadId, review, id));
+        return { turn: { id, rootTurnId: null, items: [], itemsView: "notLoaded", status: "inProgress", error: null, startedAt: null, completedAt: null, durationMs: null }, reviewThreadId: params.threadId };
+      }
       case "thread/compact/start":
         // Answered at once with nothing; the recording playing (or the test) starts the
         // turn that compacts.
@@ -482,9 +586,19 @@ export class FakeDaemon {
       case "turn/interrupt":
         if (this.interruptHeld) await this.interruptHeld;
         return {};
+      case "mcpServerStatus/list": {
+        if (params.threadId && !this.thread(params.threadId).loaded) throw new Error(`thread not found: ${params.threadId}`);
+        // Two to a page, so a client has to follow the cursor.
+        const start = params.cursor ? Number(params.cursor) : 0;
+        const page = this.mcpServers.slice(start, start + 2).map((server) => ({ ...server, runtimeStatus: params.threadId ? server.runtimeStatus : null }));
+        return { data: page, nextCursor: start + 2 < this.mcpServers.length ? String(start + 2) : null };
+      }
       case "account/rateLimits/read":
         return this.accountLimits;
+      case "thread/backgroundTerminals/list":
+        return { data: this.backgroundTerminals, nextCursor: null };
       case "thread/unsubscribe":
+        await this.onUnsubscribe(params);
         // An ephemeral thread is gone once nobody follows it.
         connection.subscribed.delete(params.threadId);
         if (this.ephemeral.delete(params.threadId)) this.threads.delete(params.threadId);

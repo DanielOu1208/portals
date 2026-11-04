@@ -1,9 +1,10 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, realpathSync, rmSync } from "node:fs";
 import { connect as connectSocket } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { performance } from "node:perf_hooks";
 import { counters } from "../../counters.ts";
 import { codexProjects, type RecentFolder } from "../../folders.ts";
@@ -28,19 +29,23 @@ import {
   type ThreadMode,
   type UsageReport,
 } from "../types.ts";
-import { reportVersion } from "../program.ts";
+import { userAgentVersion, VersionCheck } from "../program.ts";
 import { titleFrom, titleSource } from "../titles.ts";
+import { Unknowns } from "../unknowns.ts";
 import { CodexClient, processConnector, socketConnector, type ClientListener, type Connector } from "./client.ts";
 import { codexVersion, defaultSocketPath, desktopDefaults, testedCodexVersion, threadModeFor, type DesktopDefaults } from "./options.ts";
-import { compactCommand } from "./history.ts";
+import { compactCommand, reviewCommand } from "./history.ts";
+import { listSkills, skillCommands, skillIn } from "./skills.ts";
 import { nameFrom, titleConfig, titleInstructions, titlePrompt, titleSchema } from "./naming.ts";
 import { onPath, type CommandAccess } from "../../portals/access.ts";
 import { idKey } from "./requests.ts";
+import { WarmPool } from "../pool.ts";
 import { CodexSession, type Applied, type CodexHost } from "./session.ts";
 import { usageReport } from "./stream.ts";
 import type { Model, RequestId, Thread, ThreadForkResponse, ThreadListResponse, ThreadStartResponse } from "./types/index.ts";
 import { CodexRollouts } from "../../search/locate.ts";
 import type { SearchFile } from "../../search/readers.ts";
+import { mcpCommand, mcpFolderGone, mcpStatusText, type McpServer, type McpServerState } from "../mcpStatus.ts";
 
 // Codex as an agent of the bridge (`codex` in profiles.list). The bridge keeps one
 // connection to Codex's app server for all its threads: in the shared mode (the
@@ -96,12 +101,27 @@ export interface CodexProviderOptions {
   daemonStartMs?: number;
   /** How many threads' parents are kept (`parents`; tests give fewer). */
   parentsKept?: number;
+  /** Short intervals for isolated lifecycle tests; not user settings. */
+  idleMs?: number;
+  idleCheckMs?: number;
 }
 
 interface Catalog {
   models: Model[];
   defaults: DesktopDefaults;
   at: number;
+}
+
+const idleMs = 10 * 60_000;
+const idleCheckMs = 60_000;
+const idlePageSize = 100;
+/** Targeted metadata checks per scan, rotating through cold threads outside that page. */
+const idleBackfillSize = 10;
+
+/** Unloading alone changes runtime status, not the conversation. */
+function idleVersion(thread: Thread): string {
+  const status = thread.status?.type === "active" ? thread.status : thread.status?.type === "systemError" ? "error" : "idle";
+  return JSON.stringify([thread.updatedAt, thread.name, thread.preview, status]);
 }
 
 const catalogMaxAgeMs = 10 * 60_000;
@@ -124,6 +144,18 @@ const maxSubAgentDepth = 8;
  * grew by a sub-agent's thread for as long as the bridge ran (recovery-21).
  */
 const parentsKeptDefault = 4096;
+/**
+ * What Codex tells every connection of that is about no thread (its notifications with no
+ * thread id, at 0.166) and the bridge does not read: anything else is new.
+ */
+const threadlessQuiet = new Set([
+  "skills/changed", "project/changed", "command/exec/outputDelta", "process/outputDelta", "process/exited", "mcpServer/event/stream/notification",
+  "account/updated", "account/gatewayOAuth/changed", "app/list/updated", "remoteControl/status/changed", "externalAgentConfig/import/progress",
+  "externalAgentConfig/import/completed", "fs/changed", "fuzzyFileSearch/sessionUpdated", "fuzzyFileSearch/sessionCompleted",
+  "windows/worldWritableWarning", "windowsSandbox/setupCompleted", "account/login/completed",
+]);
+/** How many of Codex's warnings (`warned`) are kept, so one said again is not logged again. */
+const warningsKept = 64;
 
 /** The environment for `codex`: the bridge's own, with `~/.codex` as Codex's home whatever the shell said. */
 export function codexEnvironment(parent: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -146,8 +178,38 @@ function deskState(thread: Thread): DeskState {
   }
 }
 
+/** The parts of Codex's `McpServerStatus` that `/mcp` reads. */
+interface CodexMcpServer {
+  name: string;
+  /** How it runs for the thread asked about; null with no thread, or none loaded. */
+  runtimeStatus?: string | null;
+  authStatus?: string;
+  tools?: Record<string, unknown>;
+  toolsError?: string | null;
+}
+
+/** `/mcp` from Codex's `mcpServerStatus/list`: as they run for the thread when `running`, else as set up. */
+export function codexMcpText(servers: CodexMcpServer[], running: boolean): string {
+  const states: Record<string, McpServerState> = {
+    connected: "connected", starting: "starting", notStarted: "notStarted", authenticationRequired: "signIn", failed: "failed", cancelled: "failed", disabled: "off",
+  };
+  return mcpStatusText("Codex", servers.map((server): McpServer => {
+    const tools = server.tools ? Object.keys(server.tools).length : undefined;
+    let state: McpServerState = running && server.runtimeStatus ? states[server.runtimeStatus] ?? "unknown" : "notStarted";
+    if (state !== "off" && server.authStatus === "notLoggedIn") state = "signIn";
+    else if (state !== "off" && state !== "connected" && server.toolsError) state = "failed";
+    const detail = state === "failed" ? server.toolsError ?? (server.runtimeStatus === "cancelled" ? "its start was cancelled" : undefined) : state === "unknown" ? server.runtimeStatus ?? undefined : undefined;
+    return { name: server.name, state, ...(tools !== undefined ? { tools } : {}), ...(detail ? { detail } : {}) };
+  }), {
+    note: running ? undefined : "Not started for this thread yet. Each is as set up, with the tools Codex last found.",
+    signIn: "To sign in to one, run codex mcp login <name> on the host.",
+  });
+}
+
 export class CodexProvider implements Provider, CodexHost {
   readonly supportsModes = true;
+  /** Its command the bridge runs itself (`mcpServerStatus/list`). */
+  readonly executes = ["mcp"] as const;
 
   defaultMode(): Exclude<ThreadMode, "default"> | null {
     const defaults = this.defaults();
@@ -166,8 +228,18 @@ export class CodexProvider implements Provider, CodexHost {
   private readonly env: NodeJS.ProcessEnv;
   private readonly portals: CommandAccess | undefined;
   private readonly checking: boolean;
+  /** Which Codex runs: `codex --version` at start, then what the app server says of itself at each connect. */
+  readonly version: VersionCheck;
   private readonly ownProcess: ReturnType<typeof processConnector> | null;
   private readonly sessions = new Map<string, CodexSession>();
+  private readonly pool: WarmPool;
+  private readonly idleCheckMs: number;
+  private idleTimer: NodeJS.Timeout | null = null;
+  private checkingIdle = false;
+  private watchedThreads: (() => { id: string; updatedAt: number }[]) | null = null;
+  private changedThread: ((id: string) => Promise<void>) | null = null;
+  private readonly idleVersions = new Map<string, string>();
+  private idleBackfill: string[] = [];
   /** Threads made by `newThread`, until their session is started. */
   private readonly made = new Map<string, ThreadStartResponse>();
   private catalog: Catalog | null = null;
@@ -195,8 +267,14 @@ export class CodexProvider implements Provider, CodexHost {
   private readonly unowned = new Map<string, boolean>();
   /** Each title-generation thread at work: what Codex says of it goes to whoever waits for its answer, and `stop` ends the wait. */
   private readonly naming = new Map<string, { notify(method: string, params: Record<string, any>): void; stop(): void }>();
+  /** What Codex says of no thread that the bridge does not know, each kind said once in the log. */
+  private readonly threadless = new Unknowns((method) => log.info("Codex sent a notification the bridge does not know", { method }), threadlessQuiet);
+  /** The warnings Codex gave of no thread that were logged: it gives the same one again at each read of a thread. */
+  private readonly warnings = new Set<string>();
 
   constructor(options: CodexProviderOptions) {
+    this.pool = new WarmPool({ maxWarm: Infinity, idleMs: options.idleMs ?? idleMs });
+    this.idleCheckMs = options.idleCheckMs ?? idleCheckMs;
     this.settings = options.settings;
     this.imagesDir = options.settings.imagesDir;
     this.timeZone = options.timeZone;
@@ -204,6 +282,7 @@ export class CodexProvider implements Provider, CodexHost {
     this.daemonStartMs = options.daemonStartMs ?? 30_000;
     this.readyMs = options.readyMs ?? 15_000;
     this.checking = options.checkVersion ?? true;
+    this.version = new VersionCheck({ name: "Codex", tested: testedCodexVersion, path: options.settings.path, setting: "codex.path" });
     this.configPath = options.configPath ?? join(homedir(), ".codex", "config.toml");
     this.folderRefreshMs = options.folderRefreshMs ?? folderRefreshMs;
     this.parentsKept = Math.max(1, options.parentsKept ?? parentsKeptDefault);
@@ -242,6 +321,9 @@ export class CodexProvider implements Provider, CodexHost {
   start(): void {
     if (this.started) return;
     this.started = true;
+    this.pool.start();
+    this.idleTimer = setInterval(() => void this.checkIdle(), this.idleCheckMs);
+    this.idleTimer.unref();
     rmSync(this.imagesDir, { recursive: true, force: true });
     void this.client.start();
     if (this.checking) void this.checkVersion();
@@ -252,8 +334,7 @@ export class CodexProvider implements Provider, CodexHost {
   }
 
   private async checkVersion(): Promise<void> {
-    const version = await codexVersion(this.settings.path, this.env);
-    reportVersion({ name: "Codex", version, tested: testedCodexVersion, path: this.settings.path, setting: "codex.path" });
+    this.version.installedIs(await codexVersion(this.settings.path, this.env));
   }
 
   /**
@@ -292,7 +373,11 @@ export class CodexProvider implements Provider, CodexHost {
         return;
       }
       const threadID = params?.threadId ?? params?.thread?.id;
-      if (typeof threadID !== "string") return;
+      if (typeof threadID !== "string") {
+        if (method === "deprecationNotice" || method === "configWarning" || method === "warning") this.warned(method, params);
+        else this.threadless.note(method);
+        return;
+      }
       const naming = this.naming.get(threadID);
       if (naming) {
         naming.notify(method, params);
@@ -341,6 +426,8 @@ export class CodexProvider implements Provider, CodexHost {
       if (typeof threadID === "string") void this.subAgentRequest(threadID, id, method, params ?? {});
     },
     connected: (again) => {
+      // The daemon joined may be another release than `codex --version` says, and one started again after an update a newer one.
+      this.version.runningIs(userAgentVersion(this.client.userAgent));
       if (!again) return;
       this.catalog = null;
       void this.catalogReady().catch(() => undefined);
@@ -357,6 +444,23 @@ export class CodexProvider implements Provider, CodexHost {
       for (const naming of this.naming.values()) naming.stop();
     },
   };
+
+  /**
+   * A warning Codex gave of no thread: a call the bridge makes that Codex means to take
+   * away (`deprecationNotice`), a setting in its config it passes over (`configWarning`),
+   * or any other (`warning`, its `message`). Logged once each, for whoever looks into what
+   * changed; nobody in a thread is told.
+   */
+  private warned(method: string, params: Record<string, any> | undefined): void {
+    const summary = typeof params?.summary === "string" ? params.summary : typeof params?.message === "string" ? params.message : "";
+    const details = typeof params?.details === "string" ? params.details : undefined;
+    const key = `${method}\n${summary}\n${details ?? ""}`;
+    if (this.warnings.has(key)) return;
+    if (this.warnings.size >= warningsKept) this.warnings.delete(this.warnings.values().next().value!);
+    this.warnings.add(key);
+    const what = method === "deprecationNotice" ? "Codex says something the bridge does is deprecated" : method === "configWarning" ? "Codex warned of its configuration" : "Codex warned";
+    log.warn(what, { summary, ...(details ? { details } : {}) });
+  }
 
   // MARK: Sub-agents
 
@@ -503,9 +607,68 @@ export class CodexProvider implements Provider, CodexHost {
     };
   }
 
-  /** The one Codex command a thread takes from the app: `/compact`, which the session carries out (`thread/compact/start`). */
-  async commands(): Promise<AgentCommand[]> {
-    return [{ name: compactCommand, description: "Summarise the conversation so far, to free up context", usage: "", skill: false }];
+  /**
+   * The Codex commands a thread takes from the app: `/compact` (`thread/compact/start`) and
+   * `/review` (`review/start`), which the session carries out, and `/mcp`, which the bridge
+   * answers; then Codex's skills for the thread's folder (./skills.ts). Without the skills
+   * when Codex cannot list them.
+   */
+  async commands(thread?: { id: string; cwd: string }): Promise<AgentCommand[]> {
+    const own: AgentCommand[] = [
+      { name: compactCommand, description: "Summarise the conversation so far, to free up context", usage: "", skill: false },
+      { name: reviewCommand, description: "Review your uncommitted changes", usage: "[what to review]", skill: false },
+      mcpCommand(() => this.mcpStatus(thread)),
+    ];
+    try {
+      return [...own, ...skillCommands(await listSkills(this.client, thread?.cwd), own.map((command) => command.name))];
+    } catch (error) {
+      log.debug("Codex did not list its skills", { error: (error as Error).message });
+      return own;
+    }
+  }
+
+  async skill(cwd: string, text: string): Promise<{ name: string; path: string } | null> {
+    return skillIn(text, await listSkills(this.client, cwd));
+  }
+
+  /**
+   * How the thread's MCP servers are (`/mcp`), as Codex runs them for it. A thread Codex
+   * has not loaded has none running: then the servers as set up, with the tools Codex
+   * last found, unless its folder is gone (`mcpFolderGone`).
+   */
+  private async mcpStatus(thread: { id: string; cwd: string } | undefined): Promise<string> {
+    const list = async (threadId: string | undefined) => {
+      const servers: CodexMcpServer[] = [];
+      let cursor: string | null = null;
+      // Pages, as Codex gives them; a list longer than these is not a person's.
+      for (let page = 0; page < 20; page += 1) {
+        const answer: { data?: CodexMcpServer[]; nextCursor?: string | null } | undefined = await this.client.call("mcpServerStatus/list", {
+          detail: "toolsAndAuthOnly", limit: 100, ...(threadId ? { threadId } : {}), ...(cursor ? { cursor } : {}),
+        });
+        servers.push(...(answer?.data ?? []));
+        cursor = answer?.nextCursor ?? null;
+        if (!cursor) break;
+      }
+      return servers;
+    };
+    try {
+      if (thread) {
+        try {
+          return codexMcpText(await list(thread.id), true);
+        } catch (error) {
+          // Not loaded: Codex knows no thread of that id until a message loads it.
+          if (!/thread not found/i.test((error as Error).message)) throw error;
+        }
+      }
+    } catch (error) {
+      throw new Error(`Codex did not say how its MCP servers are: ${(error as Error).message}`);
+    }
+    if (thread && !existsSync(thread.cwd)) throw mcpFolderGone("Codex", thread.cwd);
+    try {
+      return codexMcpText(await list(undefined), false);
+    } catch (error) {
+      throw new Error(`Codex did not say how its MCP servers are: ${(error as Error).message}`);
+    }
   }
 
   defaults(): DesktopDefaults | null {
@@ -581,6 +744,73 @@ export class CodexProvider implements Provider, CodexHost {
     } while (cursor && read < folderThreadLimit);
     this.threadFolders = [...newest].map(([path, lastUsed]) => ({ path, lastUsed }));
     if (started) counters.codexFolders(read, performance.now() - started, false);
+  }
+
+  // MARK: Idle subscriptions
+
+  used(session: CodexSession): void {
+    if (this.sessions.get(session.id) === session && !session.isReleased) this.pool.warmed(session);
+  }
+
+  released(session: CodexSession, thread?: Thread): void {
+    this.pool.cooled(session);
+    if (thread) this.idleVersions.set(session.id, idleVersion(thread));
+    else this.idleVersions.delete(session.id);
+  }
+
+  watchThreads(threads: () => { id: string; updatedAt: number }[], changed: (id: string) => Promise<void>): void {
+    this.watchedThreads = threads;
+    this.changedThread = changed;
+  }
+
+  /** One recent index page plus bounded cold-thread metadata checks; history only when changed. */
+  private async checkIdle(): Promise<void> {
+    if (this.checkingIdle || !this.client.isConnected || !this.started) return;
+    const records = new Map((this.watchedThreads?.() ?? []).map((thread) => [thread.id, thread.updatedAt]));
+    for (const [id, session] of this.sessions) if (session.isReleased && !records.has(id)) records.set(id, 0);
+    const cold = new Set([...records.keys()].filter((id) => !this.sessions.has(id) || this.sessions.get(id)!.isReleased));
+    for (const id of this.idleVersions.keys()) if (!records.has(id)) this.idleVersions.delete(id);
+    if (cold.size === 0) { this.idleBackfill = []; return; }
+    this.checkingIdle = true;
+    try {
+      const page: ThreadListResponse = await this.client.call("thread/list", { cursor: null, limit: idlePageSize, sortKey: "updated_at", sortDirection: "desc", useStateDbOnly: true });
+      const indexed = new Set(page.data.map((thread) => thread.id));
+      const checks: { id: string; thread?: Thread }[] = page.data.filter((thread) => cold.has(thread.id)).map((thread) => ({ id: thread.id, thread }));
+      if (this.idleBackfill.length === 0) this.idleBackfill = [...cold].reverse();
+      let added = 0;
+      while (this.idleBackfill.length > 0 && added < idleBackfillSize) {
+        const id = this.idleBackfill.pop()!;
+        if (!cold.has(id) || indexed.has(id)) continue;
+        checks.push({ id });
+        added += 1;
+      }
+      let next = 0;
+      const read = async () => {
+        while (next < checks.length) {
+          const check = checks[next++]!;
+          if (!this.started || this.sessions.get(check.id)?.isReleased === false) continue;
+          try {
+            const thread = check.thread ?? (await this.client.call<{ thread: Thread }>("thread/read", { threadId: check.id, includeTurns: false })).thread;
+            const version = idleVersion(thread);
+            const previous = this.idleVersions.get(thread.id);
+            const changed = previous !== undefined ? previous !== version : thread.status?.type === "active" || thread.updatedAt > records.get(thread.id)!;
+            if (changed) {
+              const session = this.sessions.get(thread.id);
+              if (session) await session.prepareOpen();
+              else await this.changedThread?.(thread.id);
+            }
+            this.idleVersions.set(thread.id, version);
+          } catch (error) {
+            log.debug("could not catch up a Codex thread left idle", { thread: check.id, error: (error as Error).message });
+          }
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(4, checks.length) }, read));
+    } catch (error) {
+      log.debug("could not check Codex threads left idle", { error: (error as Error).message });
+    } finally {
+      this.checkingIdle = false;
+    }
   }
 
   // MARK: Threads from the desk
@@ -668,6 +898,63 @@ export class CodexProvider implements Provider, CodexHost {
       throw new DeskRefused(`Codex could not fork this thread: ${(error as Error).message}`);
     }
     return { id: fork.thread.id, cwd: fork.cwd ?? thread.cwd, title: `${title} (fork)`, settings: settings({ model: fork.model, reasoningEffort: fork.reasoningEffort }) };
+  }
+
+  /** Copies exactly the native turn prefix, leaving the source untouched. */
+  async forkAt(id: string, checkpointId: string, before: boolean, expectedCwd: string): Promise<DeskAdoption> {
+    let thread: Thread;
+    try {
+      thread = (await this.client.call("thread/read", { threadId: id, includeTurns: true })).thread;
+    } catch (error) {
+      throw new DeskRefused(`Codex could not read this thread: ${(error as Error).message}`);
+    }
+    if (thread.id !== id) throw new DeskRefused("Use the exact Codex thread id shown in the sessions list.");
+    try {
+      if (realpathSync(thread.cwd) !== realpathSync(expectedCwd)) throw new Error("folder changed");
+    } catch {
+      throw new DeskRefused("The Codex thread's folder no longer matches this Portals thread. Branching was refused.");
+    }
+    if (!this.client.supportsMessageForks) throw new DeskRefused("This Codex app server must be version 0.166.0 or newer to branch at a message.");
+    const turn = thread.turns?.find((turn) => turn.id === checkpointId);
+    if (!turn || !turn.items.some((item) => item.type === "userMessage")) throw new DeskRefused("Codex has no user turn at this checkpoint.");
+    if (turn.status === "inProgress" || thread.status?.type === "active") throw new DeskRefused("Wait for this Codex thread to finish before branching it.");
+    if (thread.turns.some((turn) => turn.itemsView !== "full")) throw new DeskRefused("Codex did not provide the complete source history, so it cannot be branched safely.");
+    const catalog = await this.models();
+    let fork: ThreadForkResponse;
+    try {
+      fork = await this.client.callVersioned<ThreadForkResponse>("thread/fork", {
+        threadId: id,
+        ...(before ? { beforeTurnId: checkpointId } : { lastTurnId: checkpointId }),
+        excludeTurns: true,
+        deferGoalContinuation: true,
+      }, "0.166.0");
+    } catch (error) {
+      throw new DeskRefused(`Codex could not fork at this checkpoint: ${(error as Error).message}`);
+    }
+    if (!fork.thread.id || fork.thread.id === id) throw new DeskRefused("Codex did not create a separate fork, so it was not adopted.");
+    const position = thread.turns.findIndex((turn) => turn.id === checkpointId);
+    const expected = thread.turns.slice(0, position + (before ? 0 : 1));
+    const copied = (await this.client.call<{ thread: Thread }>("thread/read", { threadId: fork.thread.id, includeTurns: true })).thread;
+    const samePrefix = copied.id === fork.thread.id && copied.status?.type !== "active" && copied.turns.length === expected.length && expected.every((turn, index) => {
+      const actual = copied.turns[index];
+      return actual.id === turn.id && actual.status === turn.status && turn.itemsView === "full" && actual.itemsView === "full" && isDeepStrictEqual(actual.items, turn.items);
+    });
+    if (!samePrefix) throw new DeskRefused("Codex did not return the exact requested turn prefix, so the fork was not adopted.");
+    try {
+      if (realpathSync(copied.cwd) !== realpathSync(expectedCwd)) throw new Error("folder changed");
+    } catch {
+      throw new DeskRefused("Codex returned a fork in a different folder, so it was not adopted.");
+    }
+    return {
+      id: fork.thread.id,
+      cwd: expectedCwd,
+      title: `${thread.name?.trim() || titleFrom(thread.preview ?? "") || "Untitled thread"} (fork)`,
+      settings: {
+        model: fork.model ?? thread.model ?? catalog.model,
+        provider: "openai",
+        reasoningEffort: fork.reasoningEffort ?? thread.reasoningEffort ?? catalog.reasoning,
+      },
+    };
   }
 
   // MARK: Names
@@ -787,6 +1074,7 @@ export class CodexProvider implements Provider, CodexHost {
     this.sessions.set(options.id, session);
     // What default comes to in its folder, for `/mode` and the mode chip.
     await session.noteFolderDefaults();
+    this.used(session);
     return session;
   }
 
@@ -796,6 +1084,7 @@ export class CodexProvider implements Provider, CodexHost {
     this.sessions.set(options.id, session);
     try {
       await session.load();
+      this.used(session);
     } catch (error) {
       this.sessions.delete(options.id);
       throw error;
@@ -824,10 +1113,17 @@ export class CodexProvider implements Provider, CodexHost {
   }
 
   forget(session: CodexSession): void {
+    this.pool.cooled(session);
+    this.idleVersions.delete(session.id);
     if (this.sessions.get(session.id) === session) this.sessions.delete(session.id);
   }
 
   async close(): Promise<void> {
+    this.started = false;
+    this.pool.stop();
+    if (this.idleTimer) clearInterval(this.idleTimer);
+    this.idleTimer = null;
+    this.idleBackfill = [];
     if (this.folderTimer) clearInterval(this.folderTimer);
     this.folderTimer = null;
     await Promise.all([...this.sessions.values()].map((session) => session.close()));

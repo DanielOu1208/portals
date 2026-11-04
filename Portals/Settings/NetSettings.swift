@@ -422,6 +422,15 @@ private struct HostRow: View {
                 }
                 .font(.app.footnote)
                 .foregroundStyle(.secondary)
+                // The free space on its disk, while connected, and a warning while it runs
+                // low (`HostDisk`). None in the demo, which has no disk.
+                if !isDemo, host.status == .connected, let disk = host.disk {
+                    Text("\(Image(systemName: disk.isLow ? "exclamationmark.triangle.fill" : "internaldrive")) \(disk.message)")
+                        .font(.app.caption)
+                        .foregroundStyle(Self.colour(of: disk))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("host-disk")
+                }
                 if let hint = host.tailscaleHint {
                     Text(hint)
                         .font(.app.caption)
@@ -454,6 +463,15 @@ private struct HostRow: View {
         }
         .listRowOnMac()
         .contentShape(.rect)
+    }
+
+    /// Grey while there is room, orange as the disk runs low, red once it is all but full.
+    private static func colour(of disk: HostDisk) -> AnyShapeStyle {
+        switch disk.level {
+        case .ok: AnyShapeStyle(.secondary)
+        case .low: AnyShapeStyle(.orange)
+        case .critical: AnyShapeStyle(.red)
+        }
     }
 
     /// The address without its scheme: `mini.example.ts.net:8443`.

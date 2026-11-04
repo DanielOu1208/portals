@@ -6,6 +6,7 @@ import SwiftUI
 /// terminal still has open is offered as a fork or to read only, since continuing it
 /// here would write behind that terminal's back. So is one the host would not continue
 /// after all (open elsewhere, unfinished tool calls, its folder moved), with its reason.
+/// One the host only forks (a chat of Cursor's terminal) is offered as a fork alone.
 struct DeskSheet: View {
     let agent: Agent
     let host: HostModel
@@ -16,8 +17,8 @@ struct DeskSheet: View {
     @State private var isLoading = false
     /// The session being taken up, while the host does it.
     @State private var adopting: DeskSession.ID?
-    /// A session open in a terminal, or one the host would not continue, while the user
-    /// picks fork or read.
+    /// A session open in a terminal, one the host would not continue, or one it only
+    /// forks, while the user picks fork or read.
     @State private var choosing: DeskSession?
     /// The host's sentence on why it would not continue the session being chosen for;
     /// nil when the list said a terminal has it open.
@@ -60,16 +61,20 @@ struct DeskSheet: View {
             }
             .task { await load() }
             .confirmationDialog(
-                refusal == nil ? "Open in a terminal" : "Could not continue the session",
+                dialogTitle,
                 isPresented: Binding(get: { choosing != nil }, set: { if !$0 { choosing = nil; refusal = nil } }),
                 titleVisibility: .visible,
                 presenting: choosing
             ) { session in
-                Button("Fork into a new thread") { take(session, as: .fork) }
-                Button("View only") { take(session, as: .read) }
+                if session.allows(.fork) {
+                    Button("Fork into a new thread") { take(session, as: .fork) }
+                }
+                if session.allows(.read) {
+                    Button("View only") { take(session, as: .read) }
+                }
                 Button("Cancel", role: .cancel) {}
-            } message: { _ in
-                Text(refusal ?? "This session is open in a terminal on \(host.host.name). Continuing it here would write behind that terminal's back.")
+            } message: { session in
+                Text(dialogMessage(for: session))
             }
             .alert(
                 "Could not open the session",
@@ -142,6 +147,19 @@ struct DeskSheet: View {
         .disabled(adopting != nil)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("desk-row")
+    }
+
+    private var dialogTitle: String {
+        if refusal != nil { return "Could not continue the session" }
+        return choosing?.isForkOnly == true ? "Fork this session" : "Open in a terminal"
+    }
+
+    private func dialogMessage(for session: DeskSession) -> String {
+        if let refusal { return refusal }
+        if session.isForkOnly {
+            return "\(agent.displayName) opens it here as a new thread with what was said so far. The session in the terminal stays as it is."
+        }
+        return "This session is open in a terminal on \(host.host.name). Continuing it here would write behind that terminal's back."
     }
 
     /// What the session is doing, when it is worth saying.
