@@ -132,6 +132,32 @@ test("a loaded thread with no turn, whose listing Codex 0.166 refuses as not mat
   assert.deepEqual(calls.map((call) => [call.method, call.params.includeTurns]), [["thread/turns/list", undefined], ["thread/read", false]]);
 });
 
+test("an unrelated failure that only mentions the refusal's words stays visible", async () => {
+  for (const error of [
+    new CodexError(-32603, "EACCES: /tmp/thread abc is not materialized yet/rollout.jsonl"),
+    new CodexError(-32600, "could not read: thread abc is not materialized yet"),
+    new Error("list_turns is not supported yet"),
+  ]) {
+    const client = reader(async (method) => {
+      if (method === "thread/turns/list") throw error;
+      return { thread: { id: "abc", status: { type: "idle" }, turns: [] } };
+    });
+    await assert.rejects(readThread(client, "abc"), error);
+  }
+});
+
+test("a thread whose first page was read does not become empty when a later page is refused", async () => {
+  const thread = recordedHistory("compact");
+  const refusal = new CodexError(-32600, "thread abc is not materialized yet; thread/turns/list is unavailable before first user message");
+  let reads = 0;
+  const client = reader(async (method) => {
+    if (method === "thread/read") return { thread };
+    if (reads++ === 0) return { data: [thread.turns.at(-1)], nextCursor: "older" };
+    throw refusal;
+  });
+  await assert.rejects(readThread(client, "abc"), refusal);
+});
+
 test("unsupported paging after one page discards the partial history before falling back", async () => {
   const thread = recordedHistory("compact");
   let reads = 0;

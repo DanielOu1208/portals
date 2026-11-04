@@ -22,7 +22,9 @@ export interface ReadOptions {
  * been asked `thread/turns/list` says so too.
  */
 export function noTurnsYet(error: unknown): boolean {
-  return /list_turns is not supported|is not materialized yet/i.test((error as Error)?.message ?? "");
+  if (!(error instanceof CodexError)) return false;
+  return (error.code === -32601 && /^list_turns is not supported( yet)?$/.test(error.message))
+    || (error.code === -32600 && /^thread \S+ is not materialized yet; thread\/turns\/list is unavailable before first user message$/.test(error.message));
 }
 
 /**
@@ -71,8 +73,8 @@ export async function readThread(client: Pick<CodexCalls, "call">, threadId: str
       || (error.code === -32600 && /unknown variant [`'"]thread\/turns\/list[`'"]/.test(error.message)));
     if (!unsupported) {
       // A thread with no turn yet that Codex still has loaded has none to list (0.166):
-      // read without them, it is empty.
-      if (noTurnsYet(error)) return empty(client, threadId);
+      // read without them, it is empty. Pages already read say otherwise.
+      if (turns.length === 0 && noTurnsYet(error)) return empty(client, threadId);
       throw error;
     }
     try {
