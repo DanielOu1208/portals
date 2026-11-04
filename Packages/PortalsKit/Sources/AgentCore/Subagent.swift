@@ -187,6 +187,37 @@ public protocol SubagentReading: Sendable {
     func subagentTranscript(_ id: String, in thread: ThreadRef.ID) async throws -> Transcript?
 }
 
+extension Transcript {
+    /// A subagent's messages read again (`SubagentReading`), with the ids of the earlier
+    /// read: each read maps its messages afresh, under new ids, and the steps and rows the
+    /// reader opened are kept by them. Its messages only grow, so the turns match in order
+    /// while they open with the same words (none, for messages that begin with the agent
+    /// speaking, as a Codex subagent's do), and their items in order while they are the
+    /// same kind of item. What follows is new and keeps its own.
+    public func keepingIdentities(of earlier: Transcript) -> Transcript {
+        var kept = self
+        for (index, before) in zip(kept.turns.indices, earlier.turns) {
+            guard kept.turns[index].userTexts == before.userTexts else { break }
+            kept.turns[index].id = before.id
+            for (place, item) in zip(kept.turns[index].items.indices, before.items) {
+                guard Self.sameKind(kept.turns[index].items[place].content, item.content) else { break }
+                kept.turns[index].items[place].id = item.id
+            }
+        }
+        return kept
+    }
+
+    /// The same kind of item; a tool call, of the same tool.
+    private static func sameKind(_ one: TurnItem.Content, _ other: TurnItem.Content) -> Bool {
+        switch (one, other) {
+        case let (.tool(one), .tool(other)): one.name == other.name
+        case (.user, .user), (.text, .text), (.reasoning, .reasoning), (.request, .request), (.notice, .notice),
+             (.command, .command), (.event, .event), (.compaction, .compaction): true
+        default: false
+        }
+    }
+}
+
 extension [Subagent] {
     /// Takes in news of one agent. The agents shown are one batch: news of a new agent
     /// when none of the earlier ones is still working starts the list over. From a host

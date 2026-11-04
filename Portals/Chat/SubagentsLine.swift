@@ -448,7 +448,8 @@ private struct SubagentMessages: View {
         .task(id: news) {
             do {
                 let transcript = try await read(agent.id)
-                turns = transcript?.turns ?? []
+                // Under the ids of the last read, so what the reader opened stays open.
+                turns = transcript?.keepingIdentities(of: Transcript(turns: turns ?? [])).turns ?? []
                 failure = nil
             } catch is CancellationError {
             } catch {
