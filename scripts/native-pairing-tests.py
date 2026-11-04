@@ -30,6 +30,9 @@ def main():
     # regression fails on observed behavior, not a missing declaration.
     if "private var pairingAsTyped:" in settings:
         signatures.append("private var pairingAsTyped:")
+    # Likewise what run()'s guard on a loopback address reads.
+    if "private var addressIsTheDeviceItself:" in settings:
+        signatures += ["private var addressIsTheDeviceItself:", "private var isOnlyOnThisMac:"]
     declarations = "\n\n".join(declaration(settings, signature) for signature in signatures)
     fixture = fixture.replace("/* PRODUCTION_ACTIONS */", declarations)
     invalidation = declaration(settings, ".onChange(of: [address, username, password])")

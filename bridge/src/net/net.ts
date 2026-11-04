@@ -35,6 +35,12 @@ import { isAddress, isNamedLater, liveMembers, longestMemberName, memberIDPatter
 // takes the name and its stamp, and the device reads it from the list. One that joins
 // again replaces its entry, as before, its name stamped as a rename made then.
 
+/** Why nothing else can join a Mac set up for itself alone (`Net.thisMacOnly`): what to do about it. */
+export const thisMacOnlyRefusal = "This Mac is set up to use Portals on this Mac only, so nothing else can reach it. To add your iPhone, iPad or another computer, install Tailscale and run npx portals-host setup again.";
+
+/** Why a Mac can't join one set up for itself alone: said to that other Mac, so "that". */
+export const thisMacOnlyJoinRefusal = "That Mac is set up to use Portals on itself only, so it can't share a net. To change that, install Tailscale and run npx portals-host setup again on it.";
+
 /** How long a call to another Mac about the list may take. */
 const syncCallMs = 10_000;
 /** A day: how far past this Mac's clock a device's stamp of a name may be (`rename`). */
@@ -148,6 +154,12 @@ export class Net {
   private byHash = new Map<string, Member>();
   /** This Mac's address, once listening. */
   private url = "";
+  /**
+   * Setup gave this Mac no address but its own, 127.0.0.1 (no Tailscale): only Portals on
+   * this Mac can reach it. A code or an entry carrying that address would have whoever got
+   * it dial themselves, so it hands out neither (docs/net-plan.md).
+   */
+  thisMacOnly = false;
   private timer: NodeJS.Timeout | undefined;
   /** Aborted when the bridge closes, so no call to another Mac outlives it. */
   private readonly closing = new AbortController();
@@ -206,8 +218,9 @@ export class Net {
    * key or relay id changed (or it has none: a new net), every other Mac is asked for
    * its copy, and asked again every ten minutes.
    */
-  start(url: string): void {
+  start(url: string, options: { thisMacOnly?: boolean } = {}): void {
     this.url = url;
+    this.thisMacOnly = options.thisMacOnly ?? false;
     const entry = this.members.find((member) => member.id === this.here.id);
     if (entry?.removed) {
       // Removed while it was off, or as it stopped: a net of its own.
@@ -383,6 +396,9 @@ export class Net {
   }
 
   private joinMac(code: string, given: Record<string, unknown>, list: unknown, from: unknown): Record<string, unknown> {
+    // The answer would hand that Mac this one's 127.0.0.1, for it and its devices to dial
+    // themselves at. A code gets this far by a password sign-in, or a tunnel to this Mac. It is kept.
+    if (this.thisMacOnly) throw new NetRefused(409, thisMacOnlyJoinRefusal);
     // Its devices would come along into the net this Mac is joining, their tokens with them.
     if (this.joining) throw new NetRefused(409, "This Mac is joining another net. Try again in a moment.");
     // Made by this Mac, as a device's is: a Mac's own word does not undo its removal
@@ -451,6 +467,7 @@ export class Net {
    */
   async joinWith(text: string): Promise<ReturnType<Net["list"]>> {
     const link = parseJoinLink(text);
+    if (this.thisMacOnly) throw new NetError(thisMacOnlyRefusal);
     if (this.joining) throw new NetError("This Mac is already joining a net. Try again once that is done.");
     // The net of its own it starts as the leave ends would leave the net joined holding a token it no longer has.
     if (this.leaving) throw new NetError("This Mac is leaving its net. Join once that is done.");

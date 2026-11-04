@@ -5,6 +5,7 @@ import { bridgeHome, ConfigError, defaultBridgeHome, defaults, expandHome, parse
 import { makeGeneral } from "../folders.ts";
 import { hashPassword } from "../http/auth.ts";
 import { computerName, hostOS, machineWord, type HostOS } from "../platform.ts";
+import { isLoopbackAddress } from "../net/members.ts";
 import { ensureDirectory, readJSON, writeJSON } from "../store/jsonFile.ts";
 import { droidProgram, findClaude, findCodex, findCursor, findDroid, findPi, installHints, looksLikeAnthropicKey, type FoundAgent } from "./agents.ts";
 import { cursorProgram } from "../providers/cursor/options.ts";
@@ -15,6 +16,7 @@ import { moveOldInstall, oldBridgeHome, oldInstallToMove } from "./migrate.ts";
 import { pairingLink, qrCode } from "./pairing.ts";
 import { newPassword, readSavedPassword, savePassword } from "./password.ts";
 import { serviceFor, serviceKind, type Service, type ServiceState } from "./service.ts";
+import { UnsupportedServiceDefinition, type DefinitionUpdate } from "./serviceDefinition.ts";
 import { namesFor, readSetupState, writeSetupState, type SetupState } from "./state.ts";
 import { enableLingering, lingering, userManagerAnswers } from "./systemd.ts";
 import type { System } from "./system.ts";
@@ -57,6 +59,12 @@ export interface SetupOptions {
 
 export type ClaudeMode = "api-key" | "login" | "off";
 
+const skipped = "Skipped. The phone can't reach Portals host until there is an address; run setup again for one.";
+const thisMacCommand = "To use Portals on just this Mac, without Tailscale: npx portals-host setup --no-tailscale";
+
+/** Said wherever a Mac is set up for itself alone: other devices are the one thing that needs Tailscale. */
+const needsTailscale = "To use Portals on your iPhone or iPad, you'll need Tailscale: install it on this Mac and on the device, signed in to the same account, then run npx portals-host setup again.";
+
 // Soft on purpose (2026-10-28): it follows the choice most people make.
 const termsNote = "To use an API key instead (what Anthropic's terms cover most clearly): npx portals-host setup --claude=api-key";
 
@@ -75,7 +83,7 @@ export async function setup(options: SetupOptions, context: Context): Promise<nu
   const os = context.os ?? hostOS;
   const here = `this ${machineWord(os)}`;
   const { version } = readManifest();
-  ui.begin(`Portals host ${version}`, `Sets up Portals host on ${here}, so the Portals app on your iPhone can run your agents here.`);
+  ui.begin(`Portals host ${version}`, `Sets up Portals host on ${here}, so the Portals app can run your agents here.`);
 
   // Without a systemd manager of the person's own (no systemd, or a shell outside a login
   // session of theirs, as from `sudo -u`), there is nothing to keep it running: said
@@ -227,11 +235,20 @@ export async function setup(options: SetupOptions, context: Context): Promise<nu
   if (savedOwner === null) return 1;
   let address = options.address ?? previous?.address ?? null;
   let servePort = previous?.servePort ?? null;
+  // Tailscale is the way to reach a host. Portals on the Mac it runs on can do without it, as
+  // the exception someone asks for (2026-11-03): `--no-tailscale`, or the choice below, never
+  // because Tailscale happened not to work. Setup run again with Tailscale replaces the address.
+  let thisMac = !options.address && !options.tailscale && !address;
   if (options.address) {
     addAllowedHost(raw, options.address);
   } else if (options.tailscale) {
     const found = await tailscaleStep(raw, previous, context);
-    if (found) ({ address, servePort } = found);
+    if (found === "this-mac") thisMac = true;
+    else if (found) ({ address, servePort } = found);
+  }
+  if (os === "macos" && !options.address && (thisMac || (address && isLoopbackAddress(address)))) {
+    address = `http://127.0.0.1:${raw.port}`;
+    ui.ok("Portals on this Mac will reach the host directly, without Tailscale.");
   }
 
   ui.step("Running Portals host");
@@ -303,7 +320,7 @@ export async function setup(options: SetupOptions, context: Context): Promise<nu
     ui.say(`No ${serviceKind(os)} (--no-service). Start it with: node "${paths.app}/dist/main.js"`);
   }
 
-  ui.step("Pair your iPhone");
+  ui.step(isThisMacOnly(state) ? "Add this Mac to Portals" : "Pair your iPhone");
   // Setup's code is also the way into the net from a device already in it (docs/net-plan.md).
   const link = showPairing(ui, paths, state, os, "Already use Portals on another device? Scan this with Add a host there instead.");
   if (!link) {
@@ -311,6 +328,11 @@ export async function setup(options: SetupOptions, context: Context): Promise<nu
     return 0;
   }
   const opened = await offerToOpen(context, link);
+  if (isThisMacOnly(state)) {
+    ui.warn(needsTailscale);
+    ui.end(`Done. ${thisMacNextStep(opened)}`);
+    return 0;
+  }
   ui.end(opened ? "Done. Add this Mac in Portals, open now; for your iPhone, scan the code with its Camera." : `Done. Scan the code with your iPhone's Camera to add ${here}.`);
   return 0;
 }
@@ -499,11 +521,16 @@ async function signIn(raw: RawConfig, paths: Paths, context: Context): Promise<s
   return password;
 }
 
-async function tailscaleStep(raw: RawConfig, previous: SetupState | null, context: Context): Promise<{ address: string; servePort: number | null } | null> {
+/** The tailnet address made or found; "this-mac" when the person chose to go without Tailscale; null with neither. */
+async function tailscaleStep(raw: RawConfig, previous: SetupState | null, context: Context): Promise<{ address: string; servePort: number | null } | "this-mac" | null> {
   const { ui, system } = context;
   const os = context.os ?? hostOS;
   ui.step("Tailscale");
   ui.say(`The iPhone reaches this ${machineWord(os)} through Tailscale, on your own tailnet; Portals host is never on the open internet.`);
+  // A Mac with no way in yet may go without, if the person says so: Portals on that Mac reaches
+  // it directly. Not one with a tailnet address, whose devices count on it: Tailscale being
+  // off is to be put right.
+  const canDoWithout = os === "macos" && (!previous?.address || isLoopbackAddress(previous.address));
   // With someone at the terminal, setup waits while what is missing is put right and checks
   // again, rather than ending with "run setup again".
   let found: { tailscale: Tailscale; dnsName: string };
@@ -519,10 +546,23 @@ async function tailscaleStep(raw: RawConfig, previous: SetupState | null, contex
     ui.warn(problem ?? "Tailscale can't be used.");
     if (!context.interactive) {
       ui.say("Then run setup again.");
+      if (canDoWithout) ui.say(thisMacCommand);
       return null;
     }
+    if (canDoWithout) {
+      const next = await ui.choose(
+        "Once Tailscale is ready:",
+        [
+          { value: "check", label: "Check again", hint: "recommended" },
+          { value: "this-mac", label: "Use just this Mac without it", hint: "your iPhone or iPad can't reach it until you add Tailscale" },
+        ],
+        "check",
+      );
+      if (next === "this-mac") return "this-mac";
+      continue;
+    }
     if (!(await ui.confirm("Done? Check again", true))) {
-      ui.say("Skipped. The phone can't reach Portals host until there is an address; run setup again for one.");
+      ui.say(skipped);
       return null;
     }
   }
@@ -548,7 +588,8 @@ async function tailscaleStep(raw: RawConfig, previous: SetupState | null, contex
   }
   const address = `https://${dnsName}:${port}`;
   if (!(await ui.confirm(`Make ${address} reach Portals host? Only devices on your tailnet can open it.`, true))) {
-    ui.say("Skipped. The phone can't reach Portals host until there is an address; run setup again for one.");
+    if (canDoWithout) return "this-mac";
+    ui.say(skipped);
     return null;
   }
   const target = `http://127.0.0.1:${raw.port}`;
@@ -637,6 +678,18 @@ async function machineName(system: System, os: HostOS): Promise<string> {
   return name || hostname().replace(/\.local$/, "");
 }
 
+/** Whether only Portals on this Mac can reach the host: setup gave it no other address. */
+function isThisMacOnly(state: SetupState): boolean {
+  return state.address !== null && isLoopbackAddress(state.address);
+}
+
+/** What's left to do on a Mac set up for itself, once `opened` says whether its link opened in Portals. */
+function thisMacNextStep(opened: boolean): string {
+  return opened
+    ? "Choose Add this host in Portals, open now."
+    : "Paste the link above in Add a host in Portals on this Mac. No Portals yet? Get it at https://github.com/DanielOu1208/portals/releases/latest";
+}
+
 /** Shows the pairing code and link; `afterCode`, a line said right after the code. Gives back the link, or null when there is none to show. */
 function showPairing(ui: Ui, paths: Paths, state: SetupState, os: HostOS, afterCode?: string): string | null {
   const config = parseConfig(readJSON<Record<string, unknown>>(paths.config, {}));
@@ -647,9 +700,19 @@ function showPairing(ui: Ui, paths: Paths, state: SetupState, os: HostOS, afterC
   }
   if (!state.address) {
     ui.warn("There is no address the iPhone can reach yet. Set up Tailscale, then run npx portals-host setup again.");
+    if (os === "macos") ui.say(thisMacCommand);
     return null;
   }
   const link = pairingLink({ url: state.address, user: config.auth.username, password, name: state.name });
+  if (isThisMacOnly(state)) {
+    // No code to scan: a phone holding it would dial itself.
+    ui.say("This link adds this Mac to Portals on this Mac:");
+    ui.raw(link);
+    ui.raw("");
+    ui.warn("The link holds this host's password. Anyone with it can use your agents on this Mac, so don't share it.");
+    ui.say("To show it again: npx portals-host pair");
+    return link;
+  }
   ui.say("On the iPhone: install Tailscale and sign in to the same tailnet, and install Portals.");
   ui.say(`Then scan this code with the Camera. It opens Portals with this ${machineWord(os)} filled in.`);
   ui.raw("");
@@ -697,10 +760,10 @@ async function offerToOpen(context: Context, link: string): Promise<boolean> {
 
 export async function pair(context: Context): Promise<number> {
   const { ui } = context;
-  ui.begin("Pair your iPhone");
   const os = context.os ?? hostOS;
   const paths = pathsFor(bridgeHome(context.env, os));
   const state = readSetupState(paths.setup);
+  ui.begin(state && isThisMacOnly(state) ? "Add this Mac to Portals" : "Pair your iPhone");
   if (!state || !existsSync(paths.config)) {
     ui.warn(`Portals host isn't set up on this ${machineWord(os)}. Run: npx portals-host setup`);
     return 1;
@@ -708,6 +771,11 @@ export async function pair(context: Context): Promise<number> {
   const link = showPairing(ui, paths, state, os);
   if (!link) return 1;
   const opened = await offerToOpen(context, link);
+  if (isThisMacOnly(state)) {
+    ui.warn(needsTailscale);
+    ui.end(thisMacNextStep(opened));
+    return 0;
+  }
   ui.end(opened ? "Add this Mac in Portals, open now; for your iPhone, scan the code with its Camera." : "Scan it with your iPhone's Camera.");
   return 0;
 }
@@ -741,13 +809,14 @@ export async function status(context: Context): Promise<number> {
   else if (agent.loaded) running = "loaded, not running";
   ui.say(`Folder:   ${paths.home}`);
   ui.say(`Running:  ${running}${up ? `, answers on 127.0.0.1:${config.port}` : ""}`);
-  ui.say(`Address:  ${state.address ?? "none yet"}`);
+  ui.say(`Address:  ${state.address ?? "none yet"}${isThisMacOnly(state) ? " (this Mac only)" : ""}`);
   ui.say(`Agents:   ${agents.join(", ") || "none"}`);
   ui.say(`General:  ${config.generalFolder}`);
   ui.say(`Log:      ${state.log}`);
   // What the bridge last heard from npm's registry (src/updates.ts), while it asks.
   const latest = config.updates.check ? lastHeard(paths.update) : undefined;
   if (installed && latest && isNewer(latest, installed)) ui.say(`Update:   version ${latest} is out. Run: npx portals-host@latest update`);
+  if (isThisMacOnly(state)) ui.say(needsTailscale);
   ui.end(up ? "It's running." : "It isn't answering. Its log says why.");
   return up ? 0 : 1;
 }
@@ -794,7 +863,30 @@ export async function update(context: Context): Promise<number> {
   ui.say("Restarting it. Claude Code, Pi, Cursor and Droid turns in progress stop; Codex's keep going.");
   const config = parseConfig(readJSON<Record<string, unknown>>(paths.config, {}));
   const up = await ui.task("Restarting Portals host", async () => {
-    await agent.restart();
+    let definition: DefinitionUpdate | undefined;
+    try {
+      definition = await agent.refreshDefinition();
+    } catch (error) {
+      if (!(error instanceof UnsupportedServiceDefinition)) throw error;
+      ui.say(`Service settings left unchanged (${error.message}); \`portals-host setup\` will refresh them.`);
+    }
+    try {
+      await agent.restart();
+    } catch (error) {
+      if (definition?.changed) {
+        // Reload never stops a service. If restart did, put back the last definition
+        // and start it again before reporting the update's failure.
+        try {
+          await definition.rollback();
+          await agent.restart();
+        } catch (recovery) {
+          throw new AggregateError([error, recovery], `Restart failed and ${agent.name} could not be recovered: ${(recovery as Error).message}`);
+        }
+      }
+      throw error;
+    }
+    definition?.commit();
+    if (definition?.changed && os === "macos") ui.say("Service settings updated; they take full effect after your next login or `portals-host setup`.");
     return answers(config.port);
   });
   if (up) ui.ok(`Restarted. It answers on 127.0.0.1:${config.port}.`);

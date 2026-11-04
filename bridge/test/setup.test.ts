@@ -1,6 +1,7 @@
 import "./environment.ts";
 import assert from "node:assert/strict";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import fs from "node:fs";
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { createServer as createSocketServer } from "node:net";
 import type { AddressInfo } from "node:net";
@@ -84,6 +85,8 @@ class FakeSystem implements System {
   /** Port → target of `tailscale serve`, with the ports something else serves. */
   served = new Map<number, string>([[443, "http://127.0.0.1:8787"], [10010, "http://127.0.0.1:8792"]]);
   tailscaleRunning = true;
+  /** `tailscale serve` fails, for a reason nobody can do anything about here. */
+  serveFails = false;
   claudeSignedIn = false;
   /** Where `pi` is on PATH; null on a Mac without it. */
   pi: string | null = null;
@@ -172,6 +175,7 @@ class FakeSystem implements System {
         return ok();
       }
       if (args[0] === "serve" && args[1] === "--bg") {
+        if (this.serveFails) return { code: 1, stdout: "", stderr: "no" };
         if (this.operatorOnly && this.operator === null) {
           return { code: 1, stdout: "", stderr: `Access denied: serve config denied\nUse 'sudo tailscale serve ${args.slice(1).join(" ")}'.\nTo not require root, use 'sudo tailscale set --operator=$USER' once.\n` };
         }
@@ -621,7 +625,9 @@ for (const os of ["macos", "linux"] as const) {
   });
 
   test(`F1: update on ${os} succeeds without restarting when the manager state is unknown`, async () => {
-    const { system, ui, paths, ctx } = await uninstallFixture(os, `update-unknown-${os}`);
+    const { system, ui, paths, ctx, file } = await uninstallFixture(os, `update-unknown-${os}`);
+    const definition = readFileSync(file, "utf8").replace(os === "macos" ? "<key>KeepAlive</key><true/>" : "TimeoutStopSec=20", os === "macos" ? "<key>KeepAlive</key><false/>" : "TimeoutStopSec=10");
+    writeFileSync(file, definition);
     const run = system.run.bind(system);
     system.run = async (program, args, options) => {
       if ((program === "/fake/launchctl" && args[0] === "print") || (program === "/fake/systemctl" && args[1] === "show")) {
@@ -632,6 +638,7 @@ for (const os of ["macos", "linux"] as const) {
     };
     assert.equal(await update(ctx), 0, ui.text);
     assert.equal(readSetupState(paths.setup)!.version, "9.9.9");
+    assert.equal(readFileSync(file, "utf8"), definition);
     assert.match(ui.text, /couldn't be checked.*nothing was restarted/);
     assert.ok(!system.calls.some((call) => call.args[0] === "kickstart" || call.args[1] === "restart"));
   });
@@ -709,6 +716,57 @@ for (const os of ["macos", "linux"] as const) {
       }
     });
   }
+}
+
+for (const custom of ["quoting", "specifier", "linux logs", "macos logs", "linux directive", "macos directive", "linux indented directive", "linux spaced directive", "linux unit directive", "linux environment reset", "macos colliding directive", "macos nested directive", "macos duplicate field", "macos symlink", "linux symlink", "macos missing", "linux missing"] as const) {
+  test(`update skips an unsupported service definition (${custom}), explains how to refresh it, and still restarts`, async () => {
+    const os = custom.startsWith("macos") ? "macos" : "linux";
+    const { system, ui, paths, ctx, file } = await uninstallFixture(os, `refresh-custom-${custom.replaceAll(" ", "-")}`);
+    const bridge = await healthCheck();
+    writeFileSync(paths.config, JSON.stringify({ ...JSON.parse(readFileSync(paths.config, "utf8")), port: bridge.port }));
+    let text = readFileSync(file, "utf8");
+    if (custom === "quoting") text = text.replace("[Service]", "[Service]\nEnvironment='CUSTOM=value'");
+    if (custom === "specifier") text = text.replace("WorkingDirectory=", "WorkingDirectory=%h");
+    if (custom === "linux logs") text = text.replace("StandardError=append:", "StandardError=append:/other");
+    if (custom === "macos logs") text = text.replace("<key>StandardErrorPath</key><string>", "<key>StandardErrorPath</key><string>/other");
+    if (custom === "linux directive") text = text.replace("[Service]", "[Service]\nEnvironmentFile=/custom.env");
+    if (custom === "macos directive") text = text.replace("<key>RunAtLoad</key>", "<key>Umask</key><integer>63</integer>\n<key>RunAtLoad</key>");
+    if (custom === "linux indented directive") text = text.replace("[Service]", "[Service]\n  EnvironmentFile=/custom.env");
+    if (custom === "linux spaced directive") text = text.replace("[Service]", "[Service]\nEnvironmentFile = /custom.env");
+    if (custom === "linux unit directive") text = text.replace("[Unit]", "[Unit]\n  ConditionPathExists=/custom/required");
+    if (custom === "linux environment reset") text = text.replace("[Service]", '[Service]\nEnvironment="CUSTOM=old"\nEnvironment=');
+    if (custom === "macos colliding directive") {
+      text = text.replace("<key>PATH</key>", "<key>Umask</key><string>custom</string>\n<key>PATH</key>");
+      text = text.replace("<key>RunAtLoad</key>", "<key>Umask</key><integer>63</integer>\n<key>RunAtLoad</key>");
+    }
+    if (custom === "macos nested directive") text = text.replace("<key>KeepAlive</key><true/>", "<key>KeepAlive</key><dict><key>PATH</key><false/></dict>");
+    if (custom === "macos duplicate field") text = text.replace("<key>KeepAlive</key><true/>", "<key>KeepAlive</key><true/><key>KeepAlive</key><false/>");
+    writeFileSync(file, text);
+    const target = `${file}.custom`;
+    if (custom.endsWith("symlink")) {
+      writeFileSync(target, text);
+      rmSync(file);
+      symlinkSync(target, file);
+    }
+    if (custom.endsWith("missing")) rmSync(file);
+    system.calls.length = 0;
+    try {
+      assert.equal(await update(ctx), 0, ui.text);
+      if (custom.endsWith("missing")) assert.ok(!existsSync(file));
+      else assert.equal(readFileSync(file, "utf8"), text);
+      if (custom.endsWith("symlink")) {
+        assert.ok(lstatSync(file).isSymbolicLink());
+        assert.equal(readFileSync(target, "utf8"), text);
+      }
+      assert.match(ui.text, /Installed version 9\.9\.9/);
+      assert.equal(ui.lines.filter((line) => /Service settings left unchanged.*portals-host setup.*refresh/.test(line)).length, 1);
+      assert.match(ui.text, /Restarted.*answers/);
+      assert.ok(system.calls.some((call) => call.args[0] === "kickstart" || call.args[1] === "restart"));
+      assert.ok(!system.calls.some((call) => ["bootout", "bootstrap"].includes(call.args[0]) || call.args[1] === "daemon-reload"));
+    } finally {
+      bridge.close();
+    }
+  });
 }
 
 test("R2: Linux uninstall skips an unreachable manager only without a unit, socket or listener", async () => {
@@ -1476,8 +1534,9 @@ test("own Claude login is a choice, with a note on how to use an API key instead
   assert.equal(config.claude.apiKey, null);
   assert.match(ui.text, /To use an API key instead \(what Anthropic's terms cover most clearly\): npx portals-host setup --claude=api-key/);
   assert.match(ui.text, /not signed in\. Run claude once/);
-  // No address, so no code: setup says what is missing.
-  assert.match(ui.text, /no address the iPhone can reach yet/);
+  // No address for anything else: this Mac's own, its link, and what a phone would need.
+  assert.equal(readSetupState(pathsFor(bridgeHome).setup)!.address, "http://127.0.0.1:39122");
+  assert.match(ui.text, /Add this Mac to Portals/);
 });
 
 test("choosing the own Claude login drops a token from claude setup-token kept in config.json", async () => {
@@ -1862,11 +1921,14 @@ test("with someone at the terminal, setup waits for Tailscale to connect and che
   const system = new FakeSystem();
   system.tailscaleRunning = false;
   const ui = new ScriptedUi();
-  const confirm = ui.confirm.bind(ui);
-  // The person opens Tailscale and signs in, then answers that it is done.
-  ui.confirm = async (question, fallback) => {
-    if (question.includes("Check again")) system.tailscaleRunning = true;
-    return confirm(question, fallback);
+  // The person opens Tailscale and signs in, then takes the default: Check again.
+  const choose = ui.choose.bind(ui);
+  ui.choose = async <T extends string>(question: string, choices: readonly Choice<T>[], fallback: T) => {
+    if (question.includes("Once Tailscale is ready")) {
+      assert.equal(fallback, "check");
+      system.tailscaleRunning = true;
+    }
+    return choose(question, choices, fallback);
   };
   const bridgeHome = join(root, "waits-for-tailscale");
   assert.equal(await setup({ service: false, tailscale: true, port: 39132, claude: "off" }, { ...context(system, ui, { PORTALS_BRIDGE_HOME: bridgeHome }), interactive: true }), 0, ui.text);
@@ -1874,6 +1936,131 @@ test("with someone at the terminal, setup waits for Tailscale to connect and che
   assert.ok(!ui.text.includes("Then run setup again"), ui.text);
   assert.ok(system.calls.some((call) => call.args[0] === "serve" && call.args[1] === "--bg"));
   assert.equal(readSetupState(pathsFor(bridgeHome).setup)!.address, `https://${dnsName}:10011`);
+});
+
+const phoneNeedsTailscale = /To use Portals on your iPhone or iPad, you'll need Tailscale: install it on this Mac and on the device/;
+
+test("no Tailscale on a Mac: going without it is the choice not taken by default, and says what a phone would need", async () => {
+  const system = new FakeSystem();
+  system.tailscaleRunning = false;
+  const ui = new ScriptedUi({ "Once Tailscale is ready": "this-mac" });
+  const env = { PORTALS_BRIDGE_HOME: join(root, "this-mac") };
+  assert.equal(await setup({ service: false, tailscale: true, port: 39150, claude: "off" }, { ...context(system, ui, env), interactive: true }), 0, ui.text);
+  const state = readSetupState(pathsFor(env.PORTALS_BRIDGE_HOME).setup)!;
+  assert.equal(state.address, "http://127.0.0.1:39150");
+  assert.equal(state.servePort, null);
+  assert.match(ui.text, /The iPhone reaches this Mac through Tailscale/);
+  assert.match(ui.text, /Tailscale is not connected/);
+  // No code: a phone that scanned it would dial itself.
+  assert.ok(!ui.text.includes("Pair your iPhone"), ui.text);
+  assert.ok(!ui.text.includes("Camera"), ui.text);
+  assert.match(ui.text, /portals:\/\/pair\?v=1&url=http%3A%2F%2F127\.0\.0\.1%3A39150/);
+  assert.match(ui.text, phoneNeedsTailscale);
+  assert.ok(!system.calls.some((call) => call.args[0] === "serve" && call.args[1] === "--bg"));
+
+  // `pair` and `status` say the same.
+  const paired = new ScriptedUi();
+  assert.equal(await pair(context(system, paired, env)), 0, paired.text);
+  assert.match(paired.text, /Add this Mac to Portals/);
+  assert.ok(!paired.text.includes("Camera"), paired.text);
+  assert.match(paired.text, phoneNeedsTailscale);
+  const shown = new ScriptedUi();
+  await status(context(system, shown, env));
+  assert.match(shown.text, /Address: {2}http:\/\/127\.0\.0\.1:39150 \(this Mac only\)/);
+  assert.match(shown.text, phoneNeedsTailscale);
+});
+
+test("the default answer on a Mac is Tailscale: --yes does not go without it, and says how to", async () => {
+  const system = new FakeSystem();
+  system.tailscaleRunning = false;
+  const ui = new ScriptedUi();
+  const bridgeHome = join(root, "this-mac-yes");
+  assert.equal(await setup({ service: false, tailscale: true, port: 39151, claude: "off" }, context(system, ui, { PORTALS_BRIDGE_HOME: bridgeHome })), 0, ui.text);
+  assert.equal(readSetupState(pathsFor(bridgeHome).setup)!.address, null);
+  assert.match(ui.text, /Tailscale is not connected/);
+  assert.match(ui.text, /no address the iPhone can reach yet/);
+  assert.match(ui.text, /npx portals-host setup --no-tailscale/);
+  assert.ok(!phoneNeedsTailscale.test(ui.text), ui.text);
+});
+
+test("--no-tailscale is asking for this Mac alone", async () => {
+  const system = new FakeSystem();
+  const ui = new ScriptedUi();
+  const bridgeHome = join(root, "this-mac-no-tailscale");
+  assert.equal(await setup({ service: false, tailscale: false, port: 39152, claude: "off" }, context(system, ui, { PORTALS_BRIDGE_HOME: bridgeHome })), 0, ui.text);
+  assert.equal(readSetupState(pathsFor(bridgeHome).setup)!.address, "http://127.0.0.1:39152");
+  assert.ok(!ui.text.includes("Once Tailscale is ready"), ui.text);
+  assert.match(ui.text, phoneNeedsTailscale);
+});
+
+test("Tailscale there, the mapping declined: this Mac alone, not no address", async () => {
+  const system = new FakeSystem();
+  const ui = new ScriptedUi({ "reach Portals host": false });
+  const bridgeHome = join(root, "this-mac-declined");
+  assert.equal(await setup({ service: false, tailscale: true, port: 39153, claude: "off" }, { ...context(system, ui, { PORTALS_BRIDGE_HOME: bridgeHome }), interactive: true }), 0, ui.text);
+  assert.equal(readSetupState(pathsFor(bridgeHome).setup)!.address, "http://127.0.0.1:39153");
+  assert.match(ui.text, phoneNeedsTailscale);
+});
+
+test("Tailscale failing is not asking to go without it: a refused mapping leaves no address", async () => {
+  const system = new FakeSystem();
+  system.serveFails = true;
+  const ui = new ScriptedUi();
+  const bridgeHome = join(root, "this-mac-refused");
+  assert.equal(await setup({ service: false, tailscale: true, port: 39157, claude: "off" }, { ...context(system, ui, { PORTALS_BRIDGE_HOME: bridgeHome }), interactive: true }), 0, ui.text);
+  assert.equal(readSetupState(pathsFor(bridgeHome).setup)!.address, null);
+  assert.match(ui.text, /tailscale serve did not work/);
+});
+
+test("setup run again once Tailscale is there replaces this Mac's own address with the tailnet's", async () => {
+  const system = new FakeSystem();
+  const env = { PORTALS_BRIDGE_HOME: join(root, "this-mac-then-tailscale") };
+  const before = new ScriptedUi();
+  assert.equal(await setup({ service: false, tailscale: false, port: 39154, claude: "off" }, context(system, before, env)), 0, before.text);
+  assert.equal(readSetupState(pathsFor(env.PORTALS_BRIDGE_HOME).setup)!.address, "http://127.0.0.1:39154");
+
+  // Run again with Tailscale still not ready and nobody to ask, it stays as it was.
+  system.tailscaleRunning = false;
+  const waiting = new ScriptedUi();
+  assert.equal(await setup({ service: false, tailscale: true, claude: "off" }, context(system, waiting, env)), 0, waiting.text);
+  assert.equal(readSetupState(pathsFor(env.PORTALS_BRIDGE_HOME).setup)!.address, "http://127.0.0.1:39154");
+
+  system.tailscaleRunning = true;
+  const after = new ScriptedUi();
+  assert.equal(await setup({ service: false, tailscale: true, claude: "off" }, context(system, after, env)), 0, after.text);
+  const state = readSetupState(pathsFor(env.PORTALS_BRIDGE_HOME).setup)!;
+  assert.match(state.address!, /^https:\/\/mac\.example\.ts\.net:/);
+  // The usual ending, with a code to scan, and nothing about needing Tailscale.
+  assert.match(after.text, /Pair your iPhone/);
+  assert.ok(!phoneNeedsTailscale.test(after.text), after.text);
+});
+
+test("a Mac with a tailnet address whose Tailscale is off is not offered this Mac alone: its devices count on it", async () => {
+  const system = new FakeSystem();
+  const env = { PORTALS_BRIDGE_HOME: join(root, "tailnet-then-off") };
+  const first = new ScriptedUi();
+  assert.equal(await setup({ service: false, tailscale: true, port: 39155, claude: "off" }, context(system, first, env)), 0, first.text);
+  const address = readSetupState(pathsFor(env.PORTALS_BRIDGE_HOME).setup)!.address!;
+
+  system.tailscaleRunning = false;
+  const again = new ScriptedUi({ "Check again": false });
+  assert.equal(await setup({ service: false, tailscale: true, claude: "off" }, { ...context(system, again, env), interactive: true }), 0, again.text);
+  assert.equal(readSetupState(pathsFor(env.PORTALS_BRIDGE_HOME).setup)!.address, address);
+  assert.ok(!again.text.includes("Once Tailscale is ready"), again.text);
+  assert.match(again.text, /Done\? Check again/);
+  assert.match(again.text, /Tailscale is not connected/);
+});
+
+test("Linux has no Portals of its own to reach it: no Tailscale still means no address, and no way around it is offered", async () => {
+  const system = new FakeSystem();
+  system.tailscaleRunning = false;
+  const ui = new ScriptedUi();
+  const bridgeHome = join(root, "linux-no-address");
+  assert.equal(await setup({ service: false, tailscale: true, port: 39156, claude: "off" }, linuxContext(system, ui, { PORTALS_BRIDGE_HOME: bridgeHome })), 0, ui.text);
+  assert.equal(readSetupState(pathsFor(bridgeHome).setup)!.address, null);
+  assert.ok(!ui.text.includes("Once Tailscale is ready"), ui.text);
+  assert.ok(!ui.text.includes("--no-tailscale"), ui.text);
+  assert.match(ui.text, /no address the iPhone can reach yet/);
 });
 
 test("signed in to Claude, setup offers the own login first, and takes it without questions", async () => {
@@ -2050,6 +2237,117 @@ test("update installs the new version and restarts the LaunchAgent", async () =>
   } finally {
     bridge.close();
   }
+});
+
+for (const os of ["macos", "linux"] as const) {
+  test(`update on ${os} leaves an unloaded service definition untouched`, async () => {
+    const { system, ui, ctx, file, label } = await uninstallFixture(os, `update-unloaded-${os}`);
+    const definition = readFileSync(file, "utf8").replace(os === "macos" ? "<key>KeepAlive</key><true/>" : "TimeoutStopSec=20", os === "macos" ? "<key>KeepAlive</key><false/>" : "TimeoutStopSec=10");
+    writeFileSync(file, definition);
+    if (os === "macos") system.loaded.delete(label);
+    else system.active.delete(unitName(label));
+    system.calls.length = 0;
+    assert.equal(await update(ctx), 0, ui.text);
+    assert.equal(readFileSync(file, "utf8"), definition);
+    assert.match(ui.text, /isn't loaded.*nothing was restarted/);
+    assert.ok(!system.calls.some((call) => call.args[0] === "kickstart" || ["restart", "daemon-reload"].includes(call.args[1])));
+  });
+
+  for (const failRestart of [false, true]) {
+    test(`update on ${os} refreshes its definition before restarting${failRestart ? ", rolling back a failed restart" : ""}`, async () => {
+      const { system, ui, paths, ctx, file, label } = await uninstallFixture(os, `refresh-${os}-${failRestart}`);
+      const bridge = await healthCheck();
+      const config = readFileSync(paths.config, "utf8");
+      writeFileSync(paths.config, JSON.stringify({ ...JSON.parse(config), port: bridge.port }));
+      const settings = readFileSync(paths.config, "utf8");
+      const current = readFileSync(file, "utf8");
+      const previous = current.replace(os === "macos" ? "<key>KeepAlive</key><true/>" : "TimeoutStopSec=20", os === "macos" ? "<key>KeepAlive</key><false/>" : "TimeoutStopSec=10");
+      writeFileSync(file, previous);
+      const run = system.run.bind(system);
+      let failed = false;
+      system.calls.length = 0;
+      system.run = async (program, args, options) => {
+        if (failRestart && !failed && (args[0] === "kickstart" || args[1] === "restart")) {
+          failed = true;
+          system.calls.push({ program, args, options: options ?? {} });
+          if (os === "linux") system.active.delete(unitName(label));
+          return { code: 1, stdout: "", stderr: "restart failed" };
+        }
+        return run(program, args, options);
+      };
+      try {
+        if (failRestart) await assert.rejects(update(ctx), /restart failed/);
+        else assert.equal(await update(ctx), 0, ui.text);
+        assert.equal(readFileSync(file, "utf8"), failRestart ? previous : current);
+        assert.equal(readFileSync(paths.config, "utf8"), settings, "config.json is untouched");
+        assert.ok(os === "macos" ? system.loaded.has(label) : system.active.has(unitName(label)), "the service is still running, including after recovery");
+        assert.ok(!system.calls.some((call) => call.args[0] === "bootout" || call.args[0] === "bootstrap"));
+        if (os === "macos" && !failRestart) assert.match(ui.text, /Service settings updated;.*next login/);
+        if (os === "linux") {
+          const reload = system.calls.findIndex((call) => call.args[1] === "daemon-reload");
+          const restart = system.calls.findIndex((call) => call.args[1] === "restart");
+          assert.ok(reload >= 0 && reload < restart, "daemon-reload precedes restart");
+          if (failRestart) assert.equal(system.calls.filter((call) => call.args[1] === "daemon-reload").length, 2);
+        }
+      } finally {
+        bridge.close();
+      }
+    });
+  }
+}
+
+test("update reports a failed recovery reload with the backup location and leaves the previous definition recoverable", async () => {
+  const { system, ui, ctx, file } = await uninstallFixture("linux", "refresh-recovery-failure");
+  const previous = readFileSync(file, "utf8").replace("TimeoutStopSec=20", "TimeoutStopSec=10");
+  writeFileSync(file, previous);
+  const run = system.run.bind(system);
+  let reloads = 0;
+  system.run = async (program, args, options) => {
+    if (args[1] === "restart") return { code: 1, stdout: "", stderr: "restart failed" };
+    if (args[1] === "daemon-reload" && ++reloads === 2) return { code: 1, stdout: "", stderr: "recovery reload failed" };
+    return run(program, args, options);
+  };
+  await assert.rejects(update(ctx), (error) => {
+    assert.ok(error instanceof AggregateError);
+    assert.match(error.message, /could not be recovered:.*backup is .*previous.*recovery reload failed/);
+    assert.match(error.errors[0].message, /restart failed/);
+    return true;
+  });
+  assert.equal(readFileSync(file, "utf8"), previous);
+  const folder = readdirSync(dirname(file)).find((name) => name.startsWith(".portals-service-update-"))!;
+  assert.equal(readFileSync(join(dirname(file), folder, "previous"), "utf8"), previous);
+});
+
+test("update recovers the stopped service from its prepared backup when payload writes fail with ENOSPC", async (t) => {
+  const { system, ui, ctx, file, label } = await uninstallFixture("linux", "refresh-disk-full");
+  const previous = readFileSync(file, "utf8").replace("TimeoutStopSec=20", "TimeoutStopSec=10");
+  writeFileSync(file, previous);
+  const run = system.run.bind(system);
+  let writesFail = false;
+  let restarts = 0;
+  let reloads = 0;
+  system.run = async (program, args, options) => {
+    if (args[1] === "daemon-reload") reloads++;
+    if (args[1] === "restart" && ++restarts === 1) {
+      writesFail = true;
+      system.active.delete(unitName(label));
+      return { code: 1, stdout: "", stderr: "restart failed" };
+    }
+    return run(program, args, options);
+  };
+  const write = fs.writeFileSync;
+  t.mock.method(fs, "writeFileSync", (...args: Parameters<typeof write>) => {
+    if (writesFail) throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
+    return Reflect.apply(write, fs, args);
+  });
+  let failure: unknown;
+  try { await update(ctx); } catch (error) { failure = error; }
+  assert.ok(system.active.has(unitName(label)), "the recovery restart starts the service despite unavailable payload writes");
+  assert.equal(readFileSync(file, "utf8"), previous);
+  assert.equal(reloads, 2);
+  assert.equal(restarts, 2);
+  assert.ok(failure instanceof Error);
+  assert.match(failure.message, /restart failed/);
 });
 
 test("relay reset takes the relay id out of net-own.json and its .bak, keeping the token and key, and restarts a bridge its LaunchAgent runs around it (net-19)", async () => {

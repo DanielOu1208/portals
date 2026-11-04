@@ -4,7 +4,9 @@ import SwiftUI
 
 /// Add a portal: a join code from a host of the net, as a QR code to scan on the other
 /// device and as its link to copy there, with how long it still works. One use, for ten
-/// minutes (`net.invite`); a new one once it has run out.
+/// minutes (`net.invite`); a new one once it has run out. A Mac whose host only it can reach
+/// has no code to give: what the other device needs instead, until the code shows here by
+/// itself, as setup gives the host an address.
 struct AddDeviceSheet: View {
     let net: Net
 
@@ -28,23 +30,10 @@ struct AddDeviceSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                switch code {
-                case .making:
-                    Section {
-                        HStack(spacing: Theme.grid) {
-                            ProgressView()
-                            Text("Making a code…")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                case let .made(invite, qr):
-                    made(invite, qr: qr)
-                case let .failed(reason):
-                    Section {
-                        Label(reason, systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.red)
-                        Button("Try again", action: makeAgain)
-                    }
+                if net.portalsNeedTailscale {
+                    needsTailscale
+                } else {
+                    codeSections
                 }
             }
             .navigationTitle("Add a portal")
@@ -54,7 +43,18 @@ struct AddDeviceSheet: View {
                     Button("Done") { dismiss() }
                 }
             }
-            .task { await make() }
+            // Asked for once there is a way to use it: at once, or as setup gives the host an address.
+            .task(id: net.portalsNeedTailscale) {
+                guard !net.portalsNeedTailscale else { return }
+                makeAgain()
+            }
+            // That new address is where the app reconnects next, so no host answers for a moment;
+            // nor does one while it wakes. The code it could not make, it can make once one does.
+            .onChange(of: net.connectedNetHostIDs) { _, hosts in
+                guard !hosts.isEmpty, !net.portalsNeedTailscale else { return }
+                if case .made = code { return }
+                makeAgain()
+            }
             .task {
                 while !Task.isCancelled {
                     now = .now
@@ -64,6 +64,64 @@ struct AddDeviceSheet: View {
         }
         .onDisappear { making?.cancel() }
         .sheetOnMac(height: 680)
+    }
+
+    /// A Mac set up without Tailscale: only it can reach its host, so a code would lead the
+    /// other device nowhere. What to do, which ends with the code here.
+    @ViewBuilder
+    private var needsTailscale: some View {
+        Section {
+            VStack(alignment: .leading, spacing: Theme.grid * 0.75) {
+                Text("Your iPhone or iPad needs Tailscale")
+                    .font(.app.headline)
+                Text("Only this Mac can reach your host for now. Your other devices reach it through Tailscale, your own private network.")
+                    .font(.app.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.vertical, Theme.grid)
+            .accessibilityIdentifier("add-portal-needs-tailscale")
+        }
+
+        Section {
+            VStack(alignment: .leading, spacing: Theme.grid * 2.5) {
+                WelcomeStep(number: 1, title: "Tailscale on both") {
+                    Text("Install it on this Mac and on the other device, signed in to the same account.")
+                    GetTailscaleLink(identifier: "add-portal-get-tailscale")
+                }
+                WelcomeStep(number: 2, title: "Run setup again on this Mac") {
+                    Text("In Terminal, run:")
+                    CommandBox(command: PairingLink.setupCommand, copyIdentifier: "add-portal-copy-command")
+                }
+                WelcomeStep(number: 3, title: "Scan the code") {
+                    Text("Setup shows a code to scan with the other device's Camera. It shows here too.")
+                }
+            }
+            .padding(.vertical, Theme.grid)
+        }
+    }
+
+    /// The code, as far as it has come.
+    @ViewBuilder
+    private var codeSections: some View {
+        switch code {
+        case .making:
+            Section {
+                HStack(spacing: Theme.grid) {
+                    ProgressView()
+                    Text("Making a code…")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        case let .made(invite, qr):
+            made(invite, qr: qr)
+        case let .failed(reason):
+            Section {
+                Label(reason, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.red)
+                Button("Try again", action: makeAgain)
+            }
+        }
     }
 
     /// The code, its link with Copy, and how long it still works.
@@ -131,6 +189,7 @@ struct AddDeviceSheet: View {
         copied = false
         do {
             let invite = try await net.invite()
+            guard !Task.isCancelled else { return }
             code = .made(invite, qr: Self.qrCode(invite.link))
         } catch is CancellationError {
             return
