@@ -7,14 +7,16 @@ import { log } from "./log.ts";
 // promise that failed with nothing to catch it is logged with its stack, and the bridge
 // goes on. A close that has not ended after eight seconds (an agent that does not close;
 // a session that does not is given six, and the agents close after it all the same) is
-// given up on, and the process exits all the same, well before launchd kills it (twenty
-// seconds after its SIGTERM, unless the plist says otherwise).
+// given up on, and the process exits all the same. An owned OpenCode server needs a
+// native interrupt/idle confirmation before it stops, so its live owner may request
+// sixteen seconds instead, still below the service manager's twenty-second stop.
 
 /** How long a stop waits for the bridge to close. */
 export const stopDeadlineMs = 8000;
 
 interface Closable {
   close(): Promise<void>;
+  readonly stopDeadlineMs?: number;
 }
 
 export interface Lifetime {
@@ -32,6 +34,8 @@ export function watchProcess(): Lifetime {
     stopping = true;
     log.info(`stopping (${reason})`);
     if (bridge) {
+      // Read before close: a fast provider may have already cleared its live owner.
+      const deadlineMs = Math.min(16_000, Math.max(stopDeadlineMs, bridge.stopDeadlineMs ?? 0));
       const closed = bridge.close().then(
         () => true,
         (error) => {
@@ -39,8 +43,8 @@ export function watchProcess(): Lifetime {
           return true;
         },
       );
-      const late = new Promise<false>((resolve) => setTimeout(() => resolve(false), stopDeadlineMs));
-      if (!(await Promise.race([closed, late]))) log.warn(`the bridge had not closed after ${stopDeadlineMs / 1000} seconds; it stops without waiting for the rest`);
+      const late = new Promise<false>((resolve) => setTimeout(() => resolve(false), deadlineMs));
+      if (!(await Promise.race([closed, late]))) log.warn(`the bridge had not closed after ${deadlineMs / 1000} seconds; it stops without waiting for the rest`);
     }
     process.exit(code);
   };

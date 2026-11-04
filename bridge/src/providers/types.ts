@@ -890,4 +890,6 @@ export interface Provider {
   start?(): void;
   /** Stops everything it runs, for shutting down. */
   close?(): Promise<void>;
+  /** Longer bridge signal deadline only while an owned process needs graceful shutdown. */
+  readonly stopDeadlineMs?: number;
 }

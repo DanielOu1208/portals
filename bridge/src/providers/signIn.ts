@@ -6,9 +6,9 @@ import { hostOS, machineWord, type HostOS } from "../platform.ts";
 // not have, or is an HTTP error. A turn that failed so is still offered again: it works
 // once the agent is signed in.
 
-export type SignInAgent = "claude" | "codex" | "droid" | "pi" | "cursor";
+export type SignInAgent = "claude" | "codex" | "droid" | "pi" | "cursor" | "opencode";
 
-const agentNames: Record<SignInAgent, string> = { claude: "Claude Code", codex: "Codex", droid: "Droid", pi: "Pi", cursor: "Cursor" };
+const agentNames: Record<SignInAgent, string> = { claude: "Claude Code", codex: "Codex", droid: "Droid", pi: "Pi", cursor: "Cursor", opencode: "OpenCode" };
 
 /** What signs each agent in, run in a terminal on the host. */
 export const signInCommands: Record<SignInAgent, string> = {
@@ -17,6 +17,7 @@ export const signInCommands: Record<SignInAgent, string> = {
   droid: "Run `droid` in a terminal there and sign in with /login",
   pi: "Run `pi` in a terminal there and sign in with /login",
   cursor: "Run `cursor-agent login` in a terminal there",
+  opencode: "Run `opencode auth login` in a terminal there",
 };
 
 /** What to do, after a first sentence that says what is wrong: "Run `codex login` in a terminal there, then try again." */

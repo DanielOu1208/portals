@@ -6,9 +6,10 @@ import { makeGeneral } from "../folders.ts";
 import { hashPassword } from "../http/auth.ts";
 import { computerName, hostOS, machineWord, type HostOS } from "../platform.ts";
 import { ensureDirectory, readJSON, writeJSON } from "../store/jsonFile.ts";
-import { droidProgram, findClaude, findCodex, findCursor, findDroid, findPi, installHints, looksLikeAnthropicKey, type FoundAgent } from "./agents.ts";
+import { droidProgram, findClaude, findCodex, findCursor, findDroid, findOpenCode, findPi, installHints, looksLikeAnthropicKey, type FoundAgent } from "./agents.ts";
 import { cursorProgram } from "../providers/cursor/options.ts";
 import { findHermes } from "../providers/hermes/setup.ts";
+import { minimumOpenCodeVersion, opencodeProgram, supportedOpenCodeVersion } from "../providers/opencode/options.ts";
 import { setUpHermes } from "./hermes.ts";
 import { bridgePath, installApp, installedVersion, InstallError, readManifest } from "./install.ts";
 import { moveOldInstall, oldBridgeHome, oldInstallToMove } from "./migrate.ts";
@@ -40,6 +41,8 @@ export interface Context {
   packageRoot?: string;
   /** Where Pi is looked for when it is not on PATH, instead of the usual folders; tests only. */
   piFolders?: string[];
+  /** Where OpenCode is looked for when it is not on PATH, instead of the usual folders; tests only. */
+  opencodeFolders?: string[];
 }
 
 export interface SetupOptions {
@@ -117,8 +120,15 @@ export async function setup(options: SetupOptions, context: Context): Promise<nu
   if (fresh) raw.port = options.port ?? (await freeLocalPort(defaults.port));
 
   ui.step("Agents");
-  const [claude, codex, pi, cursor, droid] = await ui.task(`Looking for the agents on ${here}`, () =>
-    Promise.all([findClaude(system), findCodex(system), findPi(system, context.piFolders), findCursor(system), findDroid(system, (raw.droid as { path?: string } | undefined)?.path)]),
+  const [claude, codex, pi, cursor, droid, opencode] = await ui.task(`Looking for the agents on ${here}`, () =>
+    Promise.all([
+      findClaude(system),
+      findCodex(system),
+      findPi(system, context.piFolders),
+      findCursor(system),
+      findDroid(system, (raw.droid as { path?: string } | undefined)?.path),
+      findOpenCode(system, context.opencodeFolders, (raw.opencode as { path?: string } | undefined)?.path),
+    ]),
   );
   reportClaude(ui, claude);
   reportCodex(ui, codex);
@@ -126,6 +136,9 @@ export async function setup(options: SetupOptions, context: Context): Promise<nu
   reportCursor(ui, cursor, !fresh && raw.providers.cursor === true);
   // As Cursor: a new install on a Mac without Droid hears nothing of it.
   reportDroid(ui, droid, !fresh && raw.providers.droid === true);
+  // Only OpenCode 2 is run; an OpenCode 1 found is said, with how to upgrade.
+  const opencode2 = opencode.path !== null && supportedOpenCodeVersion(opencode.version);
+  reportOpenCode(ui, opencode, !fresh && raw.providers.opencode === true);
   const hermes = await setUpHermes({ ui, system, interactive: context.interactive, paths, enabled: raw.providers.hermes !== false });
   ui.say(hermes.summary);
   if (hermes.config) raw.hermes = { ...(raw.hermes as object | undefined), ...hermes.config };
@@ -172,16 +185,27 @@ export async function setup(options: SetupOptions, context: Context): Promise<nu
     raw.providers.droid = false;
   }
 
+  if (opencode2) {
+    raw.opencode = { ...(raw.opencode as object | undefined), path: opencode.path };
+    // Off unless config.json says otherwise: found on a new install, or by a config.json from before OpenCode was an agent, it is turned on.
+    if (fresh || raw.providers.opencode === undefined) raw.providers.opencode = true;
+    else if (raw.providers.opencode === false && (await ui.confirm("OpenCode is off on this host. Turn it on?", false))) raw.providers.opencode = true;
+    if (raw.providers.opencode === true) ui.say("OpenCode follows its own permission settings; what it asks comes to the phone.");
+  } else if (fresh) {
+    raw.providers.opencode = false;
+  }
+
   const offered =
     (claude.path && raw.providers.claude !== false) ||
     (codex.path && raw.providers.codex !== false) ||
     (pi.path && raw.providers.pi === true) ||
     (cursor.path && raw.providers.cursor !== false) ||
     (droid.path && raw.providers.droid === true) ||
+    (opencode2 && raw.providers.opencode === true) ||
     hermes.state === "ready" ||
     raw.providers.fake === true;
   if (!offered) {
-    ui.warn("There is no agent for Portals host to run. Install Claude Code, Codex, Pi, Cursor, Droid or Hermes, then run setup again.");
+    ui.warn("There is no agent for Portals host to run. Install Claude Code, Codex, Pi, Cursor, Droid, Hermes or OpenCode, then run setup again.");
     return 1;
   }
 
@@ -260,7 +284,7 @@ export async function setup(options: SetupOptions, context: Context): Promise<nu
     return 0;
   }
   try {
-    await ui.task("Installing Portals host; this takes a minute or two", () => installApp(system, paths, context.packageRoot));
+    await ui.task("Installing Portals host; this takes a minute or two", () => installApp(system, paths, context.packageRoot, { opencode: opencode2 || raw.providers.opencode === true }));
   } catch (error) {
     if (!(error instanceof InstallError)) throw error;
     ui.warn(error.message);
@@ -407,6 +431,23 @@ function reportCursor(ui: Ui, cursor: FoundAgent, wanted: boolean): void {
     return;
   }
   ui.ok(`Cursor ${cursor.version ?? ""} at ${cursor.path}${cursor.signedIn ? ", signed in" : ""}`.replace("  ", " "));
+}
+
+/**
+ * Most Macs have no OpenCode, so one without it hears nothing of it unless config.json
+ * asks for it (`wanted`). An OpenCode 1 is said, with how to upgrade: Portals runs
+ * OpenCode 2 only, whose server is another.
+ */
+function reportOpenCode(ui: Ui, opencode: FoundAgent, wanted: boolean): void {
+  if (!opencode.path) {
+    if (wanted) ui.warn(`OpenCode: not found. ${installHints.opencode}`);
+    return;
+  }
+  if (!supportedOpenCodeVersion(opencode.version)) {
+    ui.say(`OpenCode ${opencode.version ?? ""} at ${opencode.path}: Portals runs OpenCode 2 (${minimumOpenCodeVersion} or newer). Choose a separate v2 installation with opencode.path; upgrading is your choice (opencode upgrade --major).`.replace("  ", " "));
+    return;
+  }
+  ui.ok(`OpenCode ${opencode.version} at ${opencode.path}`);
 }
 
 function reportDroid(ui: Ui, droid: FoundAgent, wanted: boolean): void {
@@ -733,6 +774,7 @@ export async function status(context: Context): Promise<number> {
     config.providers.cursor && cursorProgram(config.cursor.path) ? "Cursor" : null,
     config.providers.droid && droidProgram(config.droid.path) ? "Droid" : null,
     config.providers.hermes && findHermes(config.hermes.path) ? "Hermes" : null,
+    config.providers.opencode && opencodeProgram(config.opencode.path) ? "OpenCode" : null,
     config.providers.fake ? "the scripted test agent" : null,
   ].filter(Boolean);
   let running = "no";
@@ -762,8 +804,10 @@ export async function update(context: Context): Promise<number> {
     ui.warn(`Portals host isn't set up on this ${machineWord(os)}. Run: npx portals-host setup`);
     return 1;
   }
+  const config = parseConfig(readJSON<Record<string, unknown>>(paths.config, {}));
   try {
-    const { version } = await ui.task("Installing it; this takes a minute or two", () => installApp(system, paths, context.packageRoot));
+    const opencode = config.providers.opencode || supportedOpenCodeVersion((await findOpenCode(system, context.opencodeFolders, config.opencode.path)).version);
+    const { version } = await ui.task("Installing it; this takes a minute or two", () => installApp(system, paths, context.packageRoot, { opencode }));
     writeSetupState(paths.setup, { ...state, version, updatedAt: new Date().toISOString() });
     ui.ok(`Installed version ${version} in ${paths.app}.`);
   } catch (error) {
@@ -792,7 +836,6 @@ export async function update(context: Context): Promise<number> {
     return 0;
   }
   ui.say("Restarting it. Claude Code, Pi, Cursor and Droid turns in progress stop; Codex's keep going.");
-  const config = parseConfig(readJSON<Record<string, unknown>>(paths.config, {}));
   const up = await ui.task("Restarting Portals host", async () => {
     await agent.restart();
     return answers(config.port);

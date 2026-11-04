@@ -294,12 +294,13 @@ POSSIBILITY OF SUCH DAMAGE.
 ## The coding agents' logos
 
 The coding agents' badges (`Portals/Assets.xcassets/ClaudeLogo.imageset`,
-`OpenAILogo.imageset`, `PiLogo.imageset`, `CursorLogo.imageset`, `FactoryLogo.imageset`) are their makers' own
-marks, used only to say whose agent a sidebar entry is. Claude's and OpenAI's were
-downloaded on 2026-10-07, Pi's and Cursor's on 2026-10-12. Claude's and OpenAI's are
+`OpenAILogo.imageset`, `PiLogo.imageset`, `CursorLogo.imageset`, `FactoryLogo.imageset`,
+`OpenCodeLogo.imageset`) are their makers' own marks, used only to say whose agent a
+sidebar entry is. Claude's and OpenAI's were downloaded on 2026-10-07, Pi's and
+Cursor's on 2026-10-12, OpenCode's on 2026-11-03. Claude's and OpenAI's are
 trademarks of Anthropic and OpenAI; Pi's logo is that of Earendil Inc. and Pi's
-contributors, and Cursor's that of Anysphere, Inc. Portals is not affiliated with or
-endorsed by any of them.
+contributors, Cursor's that of Anysphere, Inc., and OpenCode's that of Anomaly.
+Portals is not affiliated with or endorsed by any of them.
 
 - Claude Code: the Claude spark, `Claude Spark - Clay.svg` from Anthropic's press kit
   (https://www.anthropic.com/press-kit, which serves
@@ -338,6 +339,15 @@ endorsed by any of them.
   cube.
 - Droid: the pinwheel mark of Factory, from https://factory.ai. Portals is not affiliated
   with or endorsed by Factory.
+
+- OpenCode: the OpenCode logo, from the brand assets OpenCode gives for download on its
+  brand guidelines page (https://opencode.ai/brand, "Resources and assets to help you
+  work with the OpenCode brand"): https://opencode.ai/opencode-brand-assets.zip, the
+  files `OpenCode Brand Assets/Logo/opencode-logo-light.svg` and, for dark mode,
+  `opencode-logo-dark.svg`. The page states no licence. Those files are taller than
+  wide and wrap the mark in a mask and clip path the size of the file, which draw
+  nothing; the bundled ones keep the mark's two paths and colours, unchanged, in a
+  square viewBox centred on the mark.
 
 ## Codex's protocol types
 

@@ -23,6 +23,22 @@ import { closeCode, createThread, mintTicket, password, socketURL, startTestBrid
 const main = fileURLToPath(new URL("../src/main.ts", import.meta.url));
 const trouble = fileURLToPath(new URL("./lifetime-trouble.ts", import.meta.url));
 
+test("the bridge keeps its 8000ms default with no live owned provider and follows a live ownership hint", async () => {
+  class Agent extends FakeProvider {
+    owned = false;
+    get stopDeadlineMs(): number | undefined { return this.owned ? 16_000 : undefined; }
+  }
+  const agent = new Agent({ directory: realpathSync(tmpdir()), delayMs: 1 });
+  const bridge = await startTestBridge({ providers: new Map([["fake", agent]]) });
+  try {
+    assert.equal(bridge.stopDeadlineMs, 8000);
+    agent.owned = true;
+    assert.equal(bridge.stopDeadlineMs, 16_000);
+    agent.owned = false;
+    assert.equal(bridge.stopDeadlineMs, 8000);
+  } finally { await bridge.dispose(); }
+});
+
 async function until<T>(check: () => T | undefined | null | false, timeoutMs = 5000): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -135,7 +151,7 @@ async function bridgeProcess(t: TestContext, kind: string): Promise<BridgeProces
       port: 0,
       auth: { username, passwordHash: await hashPassword(password) },
       generalFolder: realpathSync(tmpdir()),
-      providers: { claude: false, codex: false, pi: false, cursor: false, droid: false, hermes: false, fake: true },
+      providers: { claude: false, codex: false, pi: false, cursor: false, droid: false, hermes: false, opencode: false, fake: true },
       fake: { delayMs: 1 },
       push: { relay: null },
       relay: { enabled: false },
@@ -220,4 +236,16 @@ test("an agent that never closes holds a stop up for eight seconds, after which 
   assert.ok(took >= 7900 && took < 11_000, `it exited after ${took} ms`);
   assert.equal(bridge.said(), `closed ${thread}\n`);
   assert.ok(logged(bridge.log(), "warn", "the bridge had not closed after 8 seconds; it stops without waiting for the rest"));
+});
+
+test("SIGINT reads an owned-process deadline before close clears ownership, allowing native cleanup beyond eight seconds", async (t) => {
+  const bridge = await bridgeProcess(t, "slow-owned-agent");
+  const began = Date.now();
+  bridge.kill("SIGINT");
+  const code = await Promise.race([bridge.exited, new Promise((resolve) => setTimeout(() => resolve("still running"), 18_000))]);
+  const took = Date.now() - began;
+  assert.equal(code, 0);
+  assert.ok(took >= 8900 && took < 15_000, `it exited after ${took} ms`);
+  assert.equal(bridge.said(), "agent closed\n");
+  assert.equal(logged(bridge.log(), "warn", "the bridge had not closed after 8 seconds; it stops without waiting for the rest"), undefined);
 });

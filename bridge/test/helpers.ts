@@ -88,7 +88,7 @@ export async function startTestBridge(options: TestBridgeOptions = {}): Promise<
       fake: { delayMs: 1 },
       ...options.config,
       providers: {
-        claude: false, codex: false, pi: false, cursor: false, droid: false, hermes: false, fake: true,
+        claude: false, codex: false, pi: false, cursor: false, droid: false, hermes: false, opencode: false, fake: true,
         ...(options.config?.providers as Record<string, boolean> | undefined),
       },
       push: { relay: null, ...(options.config?.push as Record<string, unknown> | undefined) },
@@ -103,6 +103,7 @@ export async function startTestBridge(options: TestBridgeOptions = {}): Promise<
   const bridge = await startBridge({ home, logCapacity: options.logCapacity, providers: options.providers, temporaryFolders: options.temporaryFolders, userHome: options.userHome, held: options.held, noticeRetries: options.noticeRetries, updates: options.updates, disk: { statfs: roomyDisk, ...options.disk } });
   return {
     ...bridge,
+    get stopDeadlineMs() { return bridge.stopDeadlineMs; },
     async dispose() {
       await bridge.close();
       if (!options.keepHome) rmSync(home, { recursive: true, force: true });

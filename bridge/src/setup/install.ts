@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Paths } from "../config.ts";
@@ -30,15 +30,25 @@ export function readManifest(root = packageRoot): Manifest {
   return JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as Manifest;
 }
 
-/** The installed bridge's package.json: what it needs to run, the peer SDK included. */
-export function appManifest(manifest: Manifest): Record<string, unknown> {
+export interface InstallOptions {
+  /** OpenCode 2 was found, or the provider was explicitly enabled. */
+  opencode?: boolean;
+}
+
+/** The installed bridge's package.json: the peer SDKs it needs on this host. */
+export function appManifest(manifest: Manifest, options: InstallOptions = {}): Record<string, unknown> {
+  const dependencies = { ...manifest.dependencies, ...manifest.peerDependencies };
+  const client = dependencies["@opencode/client"];
+  if (!options.opencode) delete dependencies["@opencode/client"];
   return {
     name: manifest.name,
     version: manifest.version,
     description: manifest.description,
     private: true,
     type: "module",
-    dependencies: { ...manifest.dependencies, ...manifest.peerDependencies },
+    dependencies,
+    // Keep its version available when setup runs from this installed copy later.
+    ...(client ? { peerDependencies: { "@opencode/client": client }, peerDependenciesMeta: { "@opencode/client": { optional: true } } } : {}),
     ...(manifest.overrides ? { overrides: manifest.overrides } : {}),
   };
 }
@@ -56,14 +66,10 @@ export function findNpm(system: System): string | null {
  * packages there. The copy is made beside the old one and swapped in only once npm
  * has finished, so a failed install leaves the running bridge as it was.
  */
-export async function installApp(system: System, paths: Paths, root = packageRoot): Promise<{ version: string }> {
+export async function installApp(system: System, paths: Paths, root = packageRoot, options: InstallOptions = {}): Promise<{ version: string }> {
   const manifest = readManifest(root);
   if (!existsSync(join(root, "dist", "main.js"))) {
     throw new InstallError(`${root} has no dist/main.js. Build it first: npm run build`);
-  }
-  if (existsSync(paths.app) && realpathSync(paths.app) === realpathSync(root)) {
-    // Running from the installed copy itself: it is already there.
-    return { version: manifest.version };
   }
   const npm = findNpm(system);
   if (!npm) throw new InstallError("npm was not found. It comes with Node: https://nodejs.org");
@@ -75,7 +81,7 @@ export async function installApp(system: System, paths: Paths, root = packageRoo
   for (const file of ["README.md"]) {
     if (existsSync(join(root, file))) cpSync(join(root, file), join(next, file));
   }
-  writeFileSync(join(next, "package.json"), JSON.stringify(appManifest(manifest), null, 2) + "\n");
+  writeFileSync(join(next, "package.json"), JSON.stringify(appManifest(manifest, options), null, 2) + "\n");
 
   const result = await system.run(npm, ["install", "--omit=dev", "--omit=optional", "--no-audit", "--no-fund", "--loglevel=error"], {
     cwd: next,
