@@ -28,8 +28,16 @@ import { createThread, isEvent, mintTicket, socketURL, startTestBridge, TestClie
 const isPollNow = (frame: Frame) => isEvent(frame, "poll.now");
 const told = (client: TestClient) => client.frames.filter(isPollNow);
 
-/** Longer than the wait, and some: a move that was told has been told by then. */
-const settled = () => sleep(pollNowWaitMs + 250);
+/**
+ * Longer than the wait, and some: a move that was told has been told by then, for the
+ * bridge's timers are this process's. Then an answer on each of `clients`' connections,
+ * which comes after what the bridge sent them before it: a process too loaded to run
+ * between those timers has not read its sockets yet.
+ */
+async function settled(...clients: TestClient[]): Promise<void> {
+  await sleep(pollNowWaitMs + 250);
+  await Promise.all(clients.map((client) => client.call("sessions.activity")));
+}
 
 /** The list's id and revision as threads.json has them now. */
 function savedList(bridge: TestBridge): { id: string; revision: number } {
@@ -68,14 +76,14 @@ test("a device that asks is told once a change is saved, by one event with no se
   assert.deepEqual(Object.keys(event.params), ["type", "payload"]);
   assert.deepEqual(event.params.payload, { thread_list: savedList(bridge), net: savedNet(bridge) });
   assert.deepEqual(event.params.payload.thread_list, (await asking.call("sessions.activity")).thread_list);
-  await settled();
+  await settled(asking);
   assert.equal(told(asking).length, 1);
 
   // A pin from another device: one more, with the revision its answer has.
   const pinned = await other.call("thread.mark", { thread, pinned: true });
   await asking.next((frame) => isPollNow(frame) && frame.params.payload.thread_list.revision === pinned.thread.revision);
   assert.deepEqual(told(asking).at(-1).params.payload, { thread_list: savedList(bridge), net: savedNet(bridge) });
-  await settled();
+  await settled(asking, other);
   assert.equal(told(asking).length, 2);
   // The one that did not ask was told nothing.
   assert.equal(told(other).length, 0);
@@ -85,15 +93,15 @@ test("the event that tells of a turn's end comes after its message.complete, say
   const { bridge, asking, other } = await setUp(t);
   // The asking device follows the thread, as a device with it open does.
   const thread = await createThread(asking);
-  await settled();
+  await settled(asking);
   const from = asking.frames.length;
   // A question holds the turn open until it is answered: its start and its end are apart.
   await asking.call("prompt.submit", { session_id: thread, text: "ask me first", profile: "fake" });
   const question = await asking.nextRequest();
-  await settled();
+  await settled(asking);
   asking.answer(question.id, { answers: { q0: "Swift" } });
   const complete = await asking.from(from, (frame) => isEvent(frame, "message.complete", thread));
-  await settled();
+  await settled(asking, other);
   const end = savedList(bridge).revision;
   const frames = asking.frames.slice(from);
   const completeAt = frames.indexOf(complete);
@@ -112,20 +120,20 @@ test("the event that tells of a turn's end comes after its message.complete, say
 test("a change threads.json could not take sends nothing; saved once it can, it is told", async (t) => {
   const { bridge, asking, other } = await setUp(t);
   const thread = await createThread(other);
-  await settled();
+  await settled(asking);
   const before = told(asking).length;
   // threads.json cannot be replaced.
   const path = pathsFor(bridge.home).threads;
   renameSync(path, `${path}.aside`);
   mkdirSync(join(path, "in-the-way"), { recursive: true });
   await assert.rejects(other.call("thread.mark", { thread, pinned: true }), (error: { code: number }) => error.code === -32603);
-  await settled();
+  await settled(asking);
   assert.equal(told(asking).length, before);
 
   rmSync(path, { recursive: true, force: true });
   renameSync(`${path}.aside`, path);
   await other.call("thread.mark", { thread, pinned: true });
-  await settled();
+  await settled(asking);
   assert.equal(told(asking).length, before + 1);
   assert.deepEqual(told(asking).at(-1).params.payload, { thread_list: savedList(bridge), net: savedNet(bridge) });
 });
@@ -136,7 +144,7 @@ test("a change no listing shows, or one that changes nothing, sends nothing", as
   await other.call("thread.mark", { thread, pinned: true });
   await other.call("look.set", { profile: "fake", shape: 1, face: 2, tint: 3 });
   await other.call("order.set", { agents: ["fake"] });
-  await settled();
+  await settled(asking);
   const before = told(asking).length;
   const revision = savedList(bridge).revision;
 
@@ -147,7 +155,7 @@ test("a change no listing shows, or one that changes nothing, sends nothing", as
   await other.call("order.set", { agents: ["fake"] });
   // A seen for a thread that is not unseen.
   await other.call("thread.mark", { thread, unseen: false, revision });
-  await settled();
+  await settled(asking);
   assert.equal(savedList(bridge).revision, revision);
   assert.equal(told(asking).length, before);
 });
@@ -157,10 +165,10 @@ test("the agents' looks and the sidebar's order moving are told too, the list wh
   const list = savedList(bridge);
   const net = savedNet(bridge);
   await other.call("look.set", { profile: "fake", shape: 4, face: 5, tint: 6 });
-  await settled();
+  await settled(asking);
   assert.equal(told(asking).length, 1);
   await other.call("order.set", { folders: ["/Users/dev/notes"] });
-  await settled();
+  await settled(asking);
   assert.equal(told(asking).length, 2);
   for (const event of told(asking)) assert.deepEqual(event.params.payload, { thread_list: list, net });
 });
@@ -168,7 +176,7 @@ test("the agents' looks and the sidebar's order moving are told too, the list wh
 test("a connection that did not ask, a link between Macs and the portals command are never told", async (t) => {
   const { bridge, asking, other } = await setUp(t);
   const thread = await createThread(other);
-  await settled();
+  await settled(asking);
   const before = told(asking).length;
   // As a link and the command call: gateway.ready, one call, hang up; no client.capabilities.
   const recording = (open: () => WebSocket, frames: Frame[]) => () => {
@@ -185,7 +193,7 @@ test("a connection that did not ask, a link between Macs and the portals command
     10_000,
   );
   await link;
-  await settled();
+  await settled(asking);
   const commandFrames: Frame[] = [];
   const socketPath = pathsFor(bridge.home).socket;
   await callOnce(
@@ -194,7 +202,7 @@ test("a connection that did not ask, a link between Macs and the portals command
     { thread, text: "from the command", wait: true },
     10_000,
   );
-  await settled();
+  await settled(asking, other);
   // The list moved while each waited: the device that asked was told, they were not.
   assert.ok(told(asking).length >= before + 2, `${told(asking).length - before} events`);
   assert.equal(linkFrames.filter(isPollNow).length, 0);
@@ -207,13 +215,13 @@ test("a device that says it no longer asks, or closes, is told nothing more; the
   const { bridge, asking, other } = await setUp(t);
   const leaving = await TestClient.open(bridge, { capabilities: { poll_now: true } });
   const thread = await createThread(other);
-  await settled();
+  await settled(asking, leaving);
   assert.equal(told(asking).length, 1);
   assert.equal(told(leaving).length, 1);
 
   await leaving.call("client.capabilities", { server_requests: true });
   await other.call("thread.mark", { thread, pinned: true });
-  await settled();
+  await settled(asking, leaving);
   assert.equal(told(leaving).length, 1);
   assert.equal(told(asking).length, 2);
 
@@ -221,7 +229,7 @@ test("a device that says it no longer asks, or closes, is told nothing more; the
   await leaving.call("client.capabilities", { server_requests: true, poll_now: true });
   await leaving.close();
   await other.call("thread.mark", { thread, pinned: false });
-  await settled();
+  await settled(asking);
   assert.equal(told(asking).length, 3);
 });
 

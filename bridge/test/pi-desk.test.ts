@@ -629,6 +629,8 @@ test("Pi: a session is not continued while a Pi runs in a terminal in its folder
   await client.from(start, (frame) => isEvent(frame, "message.delta", id));
   terminals.add(at("projects/app"));
   assert.equal((await client.call("prompt.submit", { session_id: id, text: "and this", profile: "pi" })).status, "steered");
+  // Once Pi has it: one that reached Pi after the run ended would begin a run of its own, and the thread would still be at work below.
+  await until(() => pi.sentTo(id, "prompt").some((sent) => sent.message === "and this"));
   pi.release("desk-1");
   assert.equal((await client.from(start, (frame) => isEvent(frame, "message.complete", id), 5000)).params.payload.status, "complete");
   assert.equal(pi.starts(id).length, 5);

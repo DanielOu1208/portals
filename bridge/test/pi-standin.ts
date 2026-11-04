@@ -43,6 +43,8 @@ export interface Standin {
   release(gate: string): void;
   /** Makes every thread's process answer nothing until `gate` opens; null lets them answer again. */
   holdStarts(gate: string | null): void;
+  /** Makes every process answer `get_state` only once `gate` opens; null lets them answer again. */
+  holdState(gate: string | null): void;
   /** Makes a Pi with no session fail as it starts, or start again. */
   breakCatalog(broken: boolean): void;
   /** Takes the program away, as a `pi` that was uninstalled, or puts it back. */
@@ -118,6 +120,7 @@ export function standin(settings?: Record<string, unknown>): Standin {
     alive,
     release: (gate) => writeFileSync(join(agentDir, "release", gate), ""),
     holdStarts: (gate) => flag("hold-start", gate),
+    holdState: (gate) => flag("hold-state", gate),
     breakCatalog: (broken) => flag("broken", broken ? "broken" : null),
     install: (there) => {
       if (there) writeFileSync(path, script, { mode: 0o755 });

@@ -53,6 +53,7 @@ after(async () => {
 
 afterEach(async () => {
   pi.holdStarts(null);
+  pi.holdState(null);
   pi.breakCatalog(false);
   pi.install(true);
   pi.version(null);
@@ -100,8 +101,8 @@ async function turn(session: string, text: string, on = client): Promise<Frame[]
 }
 
 /** The next event of one kind for a thread, from `start` on. */
-async function event(session: string, start: number, type: string, on = client): Promise<Frame> {
-  return (await on.from(start, (frame) => isEvent(frame, type, session))).params;
+async function event(session: string, start: number, type: string, on = client, timeoutMs = 5000): Promise<Frame> {
+  return (await on.from(start, (frame) => isEvent(frame, type, session), timeoutMs)).params;
 }
 
 /** Waits for the ring to say `used`: Pi is asked after each answer, and answers when it does. */
@@ -233,8 +234,8 @@ test("a turn with tools: the rows, their results and a diff, as the app reads th
   );
   assert.equal(rows[1].duration_s, 0.021);
   assert.equal(events.at(-1).payload.text, "Updated `hello.txt`, ran both commands, and wrote `done` to `done.txt`.");
-  // The ring was asked for after each answer of the run.
-  assert.ok(pi.sentTo(session, "get_session_stats").length >= 6);
+  // The ring was asked for after each answer of the run: the last ask may still be on its way to the stand-in.
+  await until(() => pi.sentTo(session, "get_session_stats").length >= 6);
 });
 
 test("other recorded runs: thinking streams as reasoning, a provider's refusal fails the turn, Pi's own compaction is marked, a script is one row", async () => {
@@ -429,8 +430,8 @@ async function submit(session: string, text: string, on = client): Promise<strin
 }
 
 /** The turns' ends from `start` on, once there are `count` of them. */
-async function ends(session: string, start: number, count: number, on = client): Promise<Frame[]> {
-  await on.from(start, () => turnEvents(session, start, on).filter((entry) => entry.type === "message.complete").length >= count || undefined!);
+async function ends(session: string, start: number, count: number, on = client, timeoutMs = 5000): Promise<Frame[]> {
+  await on.from(start, () => turnEvents(session, start, on).filter((entry) => entry.type === "message.complete").length >= count || undefined!, timeoutMs);
   return turnEvents(session, start, on).filter((entry) => entry.type === "message.complete").map((entry) => entry.payload);
 }
 
@@ -907,19 +908,33 @@ for (const mode of ["ask", "plan"] as const) {
   });
 }
 
+/**
+ * Commands of `impatient`'s have `ms` from now on, for a test that waits that time out. Not from
+ * the start: a loaded Mac may take longer than that to start the stand-in, and a process
+ * already up keeps the time it was started with for what it asks.
+ */
+function impatientFromNow(impatient: PiProvider, ms: number): void {
+  (impatient as { callTimeoutMs: number }).callTimeoutMs = ms;
+}
+
+/** Long enough for a loaded Mac to start the stand-in and play a test's turns. */
+const loadedMs = 30_000;
+
 test("a message Pi takes and then never begins to answer fails its turn, when the time a command has is up", async () => {
-  const impatient = piProvider(pi, { folder: cwd, callTimeoutMs: 1500 });
+  const impatient = piProvider(pi, { folder: cwd });
   const own = await startTestBridge({ providers: new Map([["pi", impatient]]), config: { generalFolder: cwd } });
   const phone = await TestClient.open(own);
   try {
     const session = await createThread({}, phone);
+    await turn(session, "hello", phone);
+    impatientFromNow(impatient, 1500);
     // Pi answers `started`; its run does not begin until the gate opens.
     const start = await send(session, "slowstart stuck-1 hello", phone);
-    const done = await completed(session, start, phone);
+    const done = await completed(session, start, phone, loadedMs);
     assert.deepEqual([done.payload.status, done.payload.text], ["error", "Pi took the message and then did not begin to answer it. Send it again."]);
     // Should it begin after all, that is a run of Pi's own.
     pi.release("stuck-1");
-    const [, late] = await ends(session, start, 2, phone);
+    const [, late] = await ends(session, start, 2, phone, loadedMs);
     assert.deepEqual([late.status, late.text], ["complete", "Working. You said: slowstart stuck-1 hello"]);
   } finally {
     await phone.close();
@@ -928,22 +943,26 @@ test("a message Pi takes and then never begins to answer fails its turn, when th
 });
 
 test("a message Pi never answers, and is not at work on, is said again in a turn of its own, and the messages after it are not held up", async () => {
-  const impatient = piProvider(pi, { folder: cwd, callTimeoutMs: 1000 });
+  const impatient = piProvider(pi, { folder: cwd });
   const own = await startTestBridge({ providers: new Map([["pi", impatient]]), config: { generalFolder: cwd } });
   const phone = await TestClient.open(own);
   try {
     const session = await createThread({}, phone);
     const start = await send(session, "hold lost-1 lose-late", phone);
-    await event(session, start, "message.delta", phone);
+    await event(session, start, "message.delta", phone, loadedMs);
+    impatientFromNow(impatient, 1000);
     // Handed to the run as it settles, Pi takes it and never answers (an extension compacting at `agent_settled`).
     assert.equal(await submit(session, "the lost one", phone), "steered");
     await until(() => pi.sentTo(session, "prompt").length === 2);
+    // Pi is found at rest only once the next message is sent, so that it comes first however long that takes.
+    pi.holdState("lost-1-looks");
     pi.release("lost-1");
-    const [first] = await ends(session, start, 1, phone);
+    const [first] = await ends(session, start, 1, phone, loadedMs);
     assert.equal(first.text, "Working. You said: hold lost-1 lose-late");
     // Before, the next message waited for that answer for good.
     await submit(session, "the next one", phone);
-    const [, second, third] = await ends(session, start, 3, phone);
+    pi.release("lost-1-looks");
+    const [, second, third] = await ends(session, start, 3, phone, loadedMs);
     assert.deepEqual([second.status, second.text], ["complete", "Working. You said: the next one"]);
     assert.deepEqual([third.status, third.text], ["complete", "Working. You said: the lost one"]);
     // Pi was asked how it was, twice at rest, before the message was taken as not sent.

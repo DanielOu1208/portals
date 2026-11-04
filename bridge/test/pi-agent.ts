@@ -57,8 +57,9 @@ import type permissions from "../src/providers/pi/permission-extension.ts";
 //
 // A gate opens when the file `<agent dir>/release/<gate>` exists. While
 // `<agent dir>/hold-start` exists, a thread's process answers nothing until the gate
-// that file names has opened; while `<agent dir>/broken` exists, a process with no
-// session fails to start. Everything a process is started with and is sent goes to
+// that file names has opened; while `<agent dir>/hold-state` exists, `get_state` is
+// answered only once the gate that file names has opened; while `<agent dir>/broken`
+// exists, a process with no session fails to start. Everything a process is started with and is sent goes to
 // `<agent dir>/standin.log`, one JSON value per line, for the tests to read. Asked for
 // its version it says 1.1.0, or what `<agent dir>/version` holds.
 
@@ -815,6 +816,7 @@ async function handle(command: Json): Promise<void> {
     case "compact":
       return compact(command);
     case "get_state":
+      if (existsSync(join(agentDir!, "hold-state"))) await released(readFileSync(join(agentDir!, "hold-state"), "utf8").trim());
       return answer(id, "get_state", {
         model: state.model,
         thinkingLevel: state.level,
