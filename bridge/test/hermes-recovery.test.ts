@@ -442,6 +442,103 @@ test("a message sent while Hermes still runs a stopped turn is not sent, and fai
   } finally { await core.close(); }
 });
 
+for (const when of ["in the replay", "after it"] as const) {
+  test(`a replay that lost events while the connection was down (truncated) has the turn's reply taken from Hermes's stored copy once it ends ${when}`, async () => {
+    const record: ThreadRecord = { id: "stored", agent: "hermes", cwd: "/tmp", title: null, ...settings, createdAt: 0, updatedAt: 0, origin: "phone", ongoing: true };
+    const core = new Session(record, { has: () => false } as unknown as Registry);
+    const hello = { role: "user", text: "hello", timestamp: 0 } as const;
+    const loaded: Loaded = { session_id: "runtime", running: true, messages: [hello], inflight: { user: "hello", assistant: "" } };
+    const written: Loaded = { session_id: "runtime", running: false, messages: [hello, { role: "assistant", text: "ABCDE", timestamp: 1 }] };
+    let ended = false;
+    const host: HermesHost = {
+      call: async <T>(method: string) => {
+        if (method === "session.resume") return (ended ? written : loaded) as T;
+        if (method === "session.events.since") {
+          const end = when === "in the replay" ? [{ type: "message.complete", seq: 6, payload: { status: "complete", text: "ABCDE" } }] : [];
+          ended = end.length > 0;
+          return { events: [delta(5, "E"), ...end], latest_seq: 5 + end.length, truncated: true, open_requests: [] } as T;
+        }
+        return {} as T;
+      },
+      bind() {}, forget() {}, respond() {}, respondError() {},
+      // Where the stored copy stands does not move: it is the gap that has it read again.
+      botChatMark: async () => "mark",
+    };
+    const adapter = new HermesSession({ id: "stored", cwd: "/tmp", settings, ongoing: true }, "default", core.sink, host, loaded, "mark");
+    await core.attach(adapter);
+    await step();
+    const replies = () => core.messages.filter((message) => message.role === "assistant").map((message) => message.text);
+    try {
+      adapter.event("message.delta", 1, { text: "A" });
+      adapter.connectionLost();
+      await adapter.reconnected(true);
+      if (when === "after it") {
+        adapter.event("message.complete", 6, { status: "complete", text: "ABCDE" });
+        ended = true;
+        // Hermes writes the turn down and says its store changed.
+        await step();
+        adapter.mayHaveChangedElsewhere();
+      }
+      for (let tries = 0; tries < 100 && replies()[0] !== "ABCDE"; tries++) await new Promise((resolve) => setTimeout(resolve, 5));
+      assert.equal(core.isRunning, false);
+      assert.deepEqual(replies(), ["ABCDE"]);
+    } finally { await core.close(); }
+  });
+}
+
+test("a replay that lost the turn's end (truncated) while Hermes is at rest ends the turn, and the reply is taken from Hermes's stored copy", async () => {
+  const record: ThreadRecord = { id: "stored", agent: "hermes", cwd: "/tmp", title: null, ...settings, createdAt: 0, updatedAt: 0, origin: "phone", ongoing: true };
+  const core = new Session(record, { has: () => false } as unknown as Registry);
+  const hello = { role: "user", text: "hello", timestamp: 0 } as const;
+  const loaded: Loaded = { session_id: "runtime", running: true, messages: [hello], inflight: { user: "hello", assistant: "" } };
+  const written: Loaded = { session_id: "runtime", running: false, messages: [hello, { role: "assistant", text: "ABCDE", timestamp: 1 }] };
+  const host: HermesHost = {
+    call: async <T>(method: string) => {
+      if (method === "session.resume") return written as T;
+      // The turn's end is among what Hermes no longer keeps.
+      if (method === "session.events.since") return { events: [delta(5, "E")], latest_seq: 5, truncated: true, open_requests: [] } as T;
+      return {} as T;
+    },
+    bind() {}, forget() {}, respond() {}, respondError() {},
+    botChatMark: async () => "mark",
+  };
+  const adapter = new HermesSession({ id: "stored", cwd: "/tmp", settings, ongoing: true }, "default", core.sink, host, loaded, "mark");
+  await core.attach(adapter);
+  await step();
+  const replies = () => core.messages.filter((message) => message.role === "assistant").map((message) => message.text);
+  try {
+    adapter.event("message.delta", 1, { text: "A" });
+    adapter.connectionLost();
+    await adapter.reconnected(true);
+    for (let tries = 0; tries < 100 && replies()[0] !== "ABCDE"; tries++) await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(core.isRunning, false);
+    assert.deepEqual(replies(), ["ABCDE"]);
+  } finally { await core.close(); }
+});
+
+test("a message sent while the connection is down is still sent when the replay before it lost events (truncated) and Hermes is at rest", async () => {
+  const { core, adapter, setCall } = await fixture();
+  const sent: string[] = [];
+  setCall(async (method, params) => {
+    if (method === "session.resume") return { session_id: "runtime", running: false, messages: [] };
+    if (method === "session.events.since") return { events: [], latest_seq: 9, truncated: true, open_requests: [] };
+    if (method === "prompt.submit") sent.push(params.text);
+    return {};
+  });
+  try {
+    adapter.event("message.complete", 2, { status: "complete", text: "A" });
+    adapter.connectionLost();
+    core.submit("next").begin?.();
+    for (let tries = 0; tries < 100 && sent.length === 0; tries++) await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.deepEqual(sent, ["next"]);
+    assert.equal(core.isRunning, true, "the message Hermes was not given yet is no turn Hermes ended");
+    adapter.event("message.start", 10, {});
+    adapter.event("message.complete", 11, { status: "complete", text: "Next reply" });
+    assert.equal(core.isRunning, false);
+    assert.ok(core.messages.some((message) => message.role === "assistant" && message.text === "Next reply"));
+  } finally { await core.close(); }
+});
+
 test("a turn Hermes ends with a status the bridge does not know keeps what was said, and is not told as finished; one that says none still is", async () => {
   const { core, adapter } = await fixture();
   try {
@@ -559,3 +656,32 @@ test("a message sent after the Stop deadline but before Hermes ends the stopped 
     assert.deepEqual(core.messages.filter((message) => message.role === "assistant").map((message) => message.text), ["A", "New reply"]);
   } finally { stop.resolve({}); await core.close(); }
 });
+
+for (const when of ["live while the replay is asked for", "in the replay"] as const) {
+  test(`a turn Hermes begins after an at-rest resume, ${when}, is not ended by that resume's truncated replay`, async () => {
+    const { core, adapter, setCall } = await fixture();
+    const replay = deferred<unknown>(), asked = deferred<void>();
+    const newer = [{ type: "message.start", seq: 10, payload: {} }, delta(11, "B")];
+    setCall(async (method) => {
+      // Hermes was at rest when resumed: the open turn ended among the events it lost.
+      if (method === "session.resume") return { session_id: "runtime", running: false, messages: [{ role: "user", text: "hello", timestamp: 0 }, { role: "assistant", text: "AZ", timestamp: 1 }] };
+      if (method === "session.events.since") { asked.resolve(); return replay.promise; }
+      return {};
+    });
+    try {
+      adapter.connectionLost();
+      const resumed = adapter.reconnected(true);
+      await asked.promise;
+      // Then it began another turn, after the resume's snapshot.
+      if (when === "in the replay") replay.resolve({ events: newer, latest_seq: 11, truncated: true, open_requests: [] });
+      else {
+        for (const event of newer) adapter.event(event.type, event.seq, event.payload);
+        replay.resolve({ events: [], latest_seq: 9, truncated: true, open_requests: [] });
+      }
+      await resumed;
+      assert.equal(core.isRunning, true, "the turn begun after the at-rest snapshot is still running");
+      adapter.event("message.complete", 12, { status: "complete", text: "BC" });
+      assert.equal(core.isRunning, false);
+    } finally { replay.resolve({ events: [], open_requests: [] }); await core.close(); }
+  });
+}
