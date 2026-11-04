@@ -33,12 +33,12 @@ public final class SidebarMessageSearch {
     }
 
     /// Called by a view task, so leaving search or changing its query cancels the wait and requests.
-    public func search(_ text: String, hosts: [Host], onFailure: @escaping @Sendable () -> Void = {}) async {
+    public func search(_ text: String, hosts: [Host], isVisible: Bool = true, onFailure: @escaping @Sendable () -> Void = {}) async {
         generation += 1
         let current = generation
         searchedText = text
         pages = [:]
-        guard let query = Self.query(for: text), !hosts.isEmpty else { return }
+        guard isVisible, let query = Self.query(for: text), !hosts.isEmpty else { return }
         do { try await Task.sleep(for: .milliseconds(300)) } catch { return }
         guard !Task.isCancelled, generation == current else { return }
         await withTaskGroup(of: (HostID, ThreadSearchPage?).self) { group in

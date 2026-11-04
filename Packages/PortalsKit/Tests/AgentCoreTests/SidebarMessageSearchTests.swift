@@ -6,6 +6,7 @@ import Testing
     private actor Searcher: ThreadSearching {
         var searchesThreads: Bool? = true
         var calls: [ThreadSearchQuery] = []
+        var cancellations = 0
         let page: ThreadSearchPage
         let slowQuery: String?
         let fails: Bool
@@ -20,7 +21,9 @@ import Testing
         func searchThreads(_ query: ThreadSearchQuery, cursor: String?) async throws -> ThreadSearchPage {
             #expect(cursor == nil)
             calls.append(query)
-            if query.text == slowQuery { try? await Task.sleep(for: .milliseconds(800)) }
+            if query.text == slowQuery {
+                do { try await Task.sleep(for: .milliseconds(800)) } catch { cancellations += 1 }
+            }
             if fails { throw ThreadSearchError.unavailable }
             var answer = page
             if slowQuery != nil, !answer.threads.isEmpty, !answer.threads[0].hits.isEmpty {
@@ -114,4 +117,39 @@ import Testing
         await task.value
         #expect(search.matches(for: "deploy", in: [record("a", host: north)], excluding: []).isEmpty)
     }
+
+    @Test func hidingDuringDebounceDoesNotAskAndReopeningResumes() async throws {
+        let search = SidebarMessageSearch(), backend = Searcher()
+        let hosts = [SidebarMessageSearch.Host(id: north, backend: backend)]
+        let visible = Task { await search.search("deploy", hosts: hosts) }
+        try await Task.sleep(for: .milliseconds(40))
+        visible.cancel()
+        await search.search("deploy", hosts: hosts, isVisible: false)
+        await visible.value
+        #expect(await backend.calls.isEmpty)
+        await search.search("deploy", hosts: hosts)
+        #expect(await backend.calls.map(\.text) == ["deploy"])
+    }
+
+    @Test func hidingCancelsAnAnswerAndHostChangesStayHidden() async throws {
+        let search = SidebarMessageSearch(), backend = Searcher([result("a", at: 10)], slowQuery: "deploy")
+        let hosts = [SidebarMessageSearch.Host(id: north, backend: backend)]
+        let visible = Task { await search.search("deploy", hosts: hosts) }
+        for _ in 0..<100 {
+            if await !backend.calls.isEmpty { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await backend.calls.count == 1)
+        visible.cancel()
+        await search.search("deploy", hosts: hosts, isVisible: false)
+        await visible.value
+        #expect(await backend.cancellations == 1)
+        #expect(await backend.calls.count == 1)
+        #expect(search.matches(for: "deploy", in: [record("a", host: north)], excluding: []).isEmpty)
+        let joined = Searcher()
+        await search.search("another query", hosts: hosts + [.init(id: south, backend: joined)], isVisible: false)
+        #expect(await backend.calls.count == 1)
+        #expect(await joined.calls.isEmpty)
+    }
+
 }

@@ -116,7 +116,7 @@ struct MainScreen: View {
                         if !isWide { showsSidebar = false }
                     },
                     onShowHosts: onShowHosts,
-                    fadesIntoChat: isWide
+                    fadesIntoChat: isWide, isVisible: isOut
                 )
                 .frame(width: width)
                 // Beside the chat the sidebar is over it, its far edge fading out over

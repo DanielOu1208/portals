@@ -54,6 +54,8 @@ struct AgentSidebar: View {
     /// Beside the chat, the sidebar's background fades out toward its far edge, over the
     /// chat's wash, which runs on under it there (`WindowLayout.sidebarEdgeFade`).
     var fadesIntoChat = false
+    /// Whether the sidebar is open; false as soon as closing starts.
+    var isVisible = true
 
     @State private var query = DebugLaunch.sidebarSearch ?? ""
     @FocusState private var isSearching: Bool
@@ -578,7 +580,7 @@ struct AgentSidebar: View {
         let matches = SidebarSections.search(query, in: threads)
         return SidebarMessageMatches(
             query: query, fleet: fleet, threads: threads, titles: Set(matches.map(\.key)),
-            showsEmpty: matches.isEmpty && drafts.isEmpty
+            showsEmpty: matches.isEmpty && drafts.isEmpty, isVisible: isVisible
         ) {
             if !drafts.isEmpty {
                 RecoverableDraftsSection(

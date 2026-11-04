@@ -8,10 +8,12 @@ struct SidebarMessageMatches<Content: View, Row: View>: View {
     let threads: [ThreadRecord]
     let titles: Set<ThreadKey>
     let showsEmpty: Bool
+    let isVisible: Bool
     @ViewBuilder var content: () -> Content
     @ViewBuilder var row: (ThreadRecord, ThreadSearchHit) -> Row
     @State private var search = SidebarMessageSearch()
     @State private var hover = RowHover()
+    @Environment(\.isOutOfSight) private var isOutOfSight
 
     private var hosts: [SidebarMessageSearch.Host] {
         var machines: Set<String> = []
@@ -25,10 +27,12 @@ struct SidebarMessageMatches<Content: View, Row: View>: View {
     private struct Request: Equatable {
         var query: String
         var hosts: [HostID]
+        var isVisible: Bool
     }
 
     var body: some View {
-        let hosts = hosts
+        let isVisible = self.isVisible && !isOutOfSight
+        let hosts = isVisible ? self.hosts : []
         ScrollView {
             LazyVStack(alignment: .leading, spacing: RowMetrics.spacing) {
                 content()
@@ -43,8 +47,8 @@ struct SidebarMessageMatches<Content: View, Row: View>: View {
         }
         .scrollDismissesKeyboard(.immediately)
         .frame(maxHeight: .infinity, alignment: .top)
-        .task(id: Request(query: query, hosts: hosts.map(\.id))) {
-            await search.search(query, hosts: hosts) {
+        .task(id: Request(query: query, hosts: hosts.map(\.id), isVisible: isVisible)) {
+            await search.search(query, hosts: hosts, isVisible: isVisible) {
                 AppLog.chat.error("Message search failed")
             }
         }
