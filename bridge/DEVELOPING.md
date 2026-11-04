@@ -1438,7 +1438,7 @@ OpenCode session, and the thread id is OpenCode's session id. A turn is OpenCode
 execution: it begins with `session.execution.started` and ends with exactly one of
 `succeeded`, `failed` or `interrupted`, whoever sent the message, so a turn sent from
 OpenCode's terminal on the same server shows on the phone too
-(`src/providers/opencode/`; the plan behind it is in `docs/providers-plan.md`).
+(`src/providers/opencode/`).
 
 **One server.** OpenCode 2 runs one background service per user, which its terminal,
 desktop and web apps share, and says where in `$XDG_STATE_HOME/opencode/service.json`
