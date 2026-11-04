@@ -890,6 +890,7 @@ export const methods: Record<string, MethodSpec> = {
       try {
         return await context.gateway.sessions.undoFiles(source, context.caller, params.preview_id as string, context.afterReply);
       } catch (error) {
+        if (error instanceof FileUndoRefused && error.reason === "files_changed") throw new RpcError(ErrorCode.invalidParams, error.message, { reason: error.reason });
         if (error instanceof DeskRefused || error instanceof FileUndoRefused) throw invalidParams(error.message);
         throw error;
       }

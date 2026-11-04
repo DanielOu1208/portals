@@ -220,8 +220,9 @@ struct TurnDiffPanel: View {
 }
 
 /// A changed file in the list: what happened to it, its name and folder, its counts.
-private struct TurnDiffFileRow: View {
+struct TurnDiffFileRow: View {
     let file: TurnDiff.File
+    var showsDisclosure = true
 
     var body: some View {
         HStack(spacing: Theme.grid * 1.5) {
@@ -246,9 +247,11 @@ private struct TurnDiffFileRow: View {
                 ChangeCounts(added: file.added, removed: file.removed)
                     .font(.app.caption)
             }
-            Image(systemName: "chevron.right")
-                .font(.app.caption2.weight(.semibold))
-                .foregroundStyle(.tertiary)
+            if showsDisclosure {
+                Image(systemName: "chevron.right")
+                    .font(.app.caption2.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
         }
         .padding(.horizontal, Theme.grid * 1.5)
         .padding(.vertical, Theme.grid * 1.25)

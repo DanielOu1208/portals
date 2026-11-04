@@ -1,140 +1,175 @@
 import AgentCore
 import SwiftUI
 
-/// A host preview is reviewed here, then confirmed in a separate explicit step.
+/// One compact confirmation of the host's authoritative preview.
 struct FileUndoSheet: View {
     let canUndo: Bool
+    var workingDirectory: String? = nil
+    var turnDiff: TurnDiff? = nil
     let onDone: () -> Void
     let onPreview: () async throws -> TurnFileUndoPreview
     let onUndo: (TurnFileUndoPreview) async throws -> TurnFileUndoResult
 
-    @State private var preview: TurnFileUndoPreview?
-    @State private var isLoading = false
-    @State private var isConfirming = false
-    @State private var isApplying = false
-    @State private var problem: String?
+    @State private var review = FileUndoReviewState()
+    @State private var detailsHeight: CGFloat = 44
+    @State private var fittedHeight: CGFloat = 280
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
-    private var canConfirm: Bool { canUndo && !isLoading && !isApplying && preview?.canConfirm() == true }
+    private var detailsLimit: CGFloat {
+        if horizontalSizeClass == .compact { return verticalSizeClass == .compact ? 120 : 340 }
+        return 380
+    }
+
+    private var canConfirm: Bool { canUndo && review.canConfirm() }
 
     var body: some View {
-        PanelChrome(
-            title: isConfirming ? "Confirm undo" : "Undo files",
-            doneIdentifier: "file-undo-cancel", cancels: true,
-            onDone: { if !isApplying { onDone() } },
-            action: Button(role: isConfirming ? .destructive : nil) {
-                if isConfirming { apply() } else { isConfirming = true }
-            } label: {
-                if isApplying { ProgressView() } else { Text(isConfirming ? "Undo files" : "Continue…") }
+        VStack(alignment: .leading, spacing: Theme.grid * 2) {
+            HStack(spacing: Theme.grid * 2) {
+                Text("Undo changes")
+                    .font(.app.headline)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: Theme.grid)
+                Button("Cancel", action: onDone)
+                    .buttonStyle(.borderedCapsule)
+                    .keyboardShortcut(.cancelAction)
+                    .disabled(review.isApplying)
+                    .accessibilityIdentifier("file-undo-cancel")
             }
-            .disabled(!canConfirm)
-            .accessibilityIdentifier(isConfirming ? "file-undo-confirm" : "file-undo-review")
-        ) {
+            Text("Puts these files back as they were before Claude’s last turn. The chat is kept.")
+                .font(.app.subheadline)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             ScrollView {
-                VStack(alignment: .leading, spacing: Theme.grid * 2) {
-                    Text("Restore tracked files to before the latest Claude turn. The conversation stays unchanged. Untracked files and changes made by shell commands may remain.")
-                    Label(isConfirming
-                          ? "Restore the files listed below? This can overwrite subsequent or manual edits. Stop other tools working in this folder before choosing Undo files."
-                          : "This can overwrite subsequent or manual edits. Stop other tools working in this folder before continuing.",
-                          systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(isConfirming ? .red : .secondary)
-                        .accessibilityIdentifier("file-undo-warning")
-                    if isLoading { ProgressView("Fetching file preview…") }
-                    if let preview {
-                        if preview.files.isEmpty {
-                            Text("The host found no file changes to restore.")
-                                .accessibilityIdentifier("file-undo-empty")
-                        } else {
-                            Text("\(preview.files.count) file(s)")
-                                .font(.app.headline)
-                            if preview.insertions != nil || preview.deletions != nil {
-                                HStack {
-                                    if let additions = preview.insertions { Text("+\(additions) additions") }
-                                    if let deletions = preview.deletions { Text("−\(deletions) deletions") }
-                                }
-                                .font(.app.footnote.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                            }
-                            ForEach(Array(preview.files.enumerated()), id: \.offset) { _, path in
-                                Text(path)
-                                    .font(.app.body.monospaced())
-                                    .textSelection(.enabled)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .accessibilityIdentifier("file-undo-path")
-                            }
-                        }
-                    }
-                    if let problem {
-                        Label(problem, systemImage: "exclamationmark.circle")
-                            .foregroundStyle(.red)
-                            .accessibilityIdentifier("file-undo-error")
-                    }
-                    if !canUndo && !isApplying {
-                        Text("This turn, its connection, or work in the folder changed. Wait until the folder is idle, then refresh the preview.")
-                            .foregroundStyle(.secondary)
-                    }
-                    if !isApplying {
-                        Button("Refresh preview", systemImage: "arrow.clockwise") { Task { await refresh() } }
-                            .disabled(!canUndo || isLoading)
-                            .accessibilityIdentifier("file-undo-refresh")
-                    }
-                }
-                .font(.app.body)
-                .padding(Theme.grid * 2)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                details
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { detailsHeight = $0 }
             }
+            .scrollBounceBehavior(.basedOnSize)
+            .frame(height: min(detailsHeight, detailsLimit))
+            Button(role: .destructive, action: apply) {
+                HStack(spacing: Theme.grid) {
+                    if review.isApplying { ProgressView().tint(.white) }
+                    Text("Undo Changes")
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .font(.app.body.weight(.semibold))
+            .buttonStyle(.borderedProminent)
+            .tint(.red)
+            .controlSize(.large)
+            .disabled(!canConfirm)
+            .accessibilityIdentifier("file-undo-confirm")
         }
-        .presentationDetents([.large])
-        .interactiveDismissDisabled(isApplying)
-        .task { await refresh() }
-        .task(id: preview?.expiresAt) {
-            guard let expires = preview?.expiresAt else { return }
+        .padding(Theme.grid * 2)
+        .frame(idealWidth: 440, alignment: .topLeading)
+        // Measure the natural header, bounded list and action, independently of the
+        // sheet's current detent. Short previews never acquire an empty tall frame.
+        .fixedSize(horizontal: false, vertical: true)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { fittedHeight = $0 }
+        .background(Theme.pageBackground)
+        .modifier(FileUndoPresentation(height: fittedHeight))
+        .presentationBackground(Theme.pageBackground)
+        .interactiveDismissDisabled(review.isApplying)
+        .task { await loadPreview() }
+        .task(id: review.preview?.expiresAt) {
+            guard let expires = review.preview?.expiresAt else { return }
             try? await Task.sleep(for: .seconds(max(0, expires.timeIntervalSinceNow)))
-            guard !Task.isCancelled, !isApplying else { return }
-            invalidate(TurnFileUndoError.stalePreview.localizedDescription)
+            guard !Task.isCancelled, !review.isApplying else { return }
+            review.invalidate("Preview expired. Close and reopen to check the latest changes.")
         }
         .onChange(of: canUndo) { _, allowed in
-            if !allowed && !isLoading && !isApplying { invalidate(TurnFileUndoError.stalePreview.localizedDescription) }
+            if !allowed && !review.isLoading && !review.isApplying {
+                review.invalidate("The folder or connection changed. Close and reopen to check the latest changes.")
+            }
         }
     }
 
-    private func invalidate(_ message: String) {
-        preview = nil
-        isConfirming = false
-        problem = message
+    private var details: some View {
+        VStack(alignment: .leading, spacing: Theme.grid * 1.5) {
+            if review.isLoading { ProgressView("Checking changes…") }
+            if let preview = review.shownPreview {
+                let list = FileUndoFileList(preview: preview, workingDirectory: workingDirectory, turnDiff: turnDiff)
+                if list.files.isEmpty {
+                    Text("No file changes to undo.")
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("file-undo-empty")
+                } else {
+                    HStack(spacing: Theme.grid) {
+                        Text(list.filesLine)
+                        if let counts = list.aggregate {
+                            if let added = counts.added { Text("+\(added)").foregroundStyle(Color.green) }
+                            if let removed = counts.removed { Text("−\(removed)").foregroundStyle(Color.red) }
+                        }
+                    }
+                    .font(.app.subheadline)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    VStack(spacing: 0) {
+                        ForEach(Array(list.files.enumerated()), id: \.offset) { index, file in
+                            if index > 0 { Divider().padding(.leading, Theme.grid * 5.5) }
+                            TurnDiffFileRow(file: file, showsDisclosure: false)
+                                .accessibilityIdentifier("file-undo-path")
+                        }
+                    }
+                    .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+            }
+            if let message = review.message {
+                Text(message)
+                    .font(.app.footnote)
+                    .foregroundStyle(review.requiresFolderReview ? Color.red : Color.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("file-undo-error")
+            }
+            if !canUndo && !review.isApplying && review.message == nil {
+                Text("Wait until the folder is idle and connected.")
+                    .font(.app.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 
-    private func refresh() async {
-        guard canUndo, !isLoading, !isApplying else { return }
-        preview = nil
-        isConfirming = false
-        problem = nil
-        isLoading = true
-        defer { isLoading = false }
+    private func loadPreview() async {
+        guard canUndo, review.beginPreview() else { return }
         do {
             let fetched = try await onPreview()
             guard !Task.isCancelled else { return }
-            guard canUndo else { return invalidate(TurnFileUndoError.stalePreview.localizedDescription) }
-            preview = fetched
+            guard canUndo else { return review.previewFailed("The folder or connection changed. Close and reopen to check the latest changes.") }
+            review.receivedPreview(fetched)
         } catch {
-            if !Task.isCancelled { invalidate(error.localizedDescription) }
+            if !Task.isCancelled { review.previewFailed(error.localizedDescription) }
         }
     }
 
     private func apply() {
-        guard canConfirm, isConfirming, let reviewed = preview else { return }
-        preview = nil
-        isConfirming = false
-        isApplying = true
-        problem = nil
+        guard canUndo, let reviewed = review.beginRestore() else { return }
         Task {
             do {
                 let result = try await onUndo(reviewed)
-                isApplying = false
-                if result.isComplete { onDone() } else { invalidate(result.message) }
+                review.restored(result)
+                if result.isComplete { onDone() }
             } catch {
-                isApplying = false
-                invalidate("\(error.localizedDescription) If a restore was attempted, some files may have changed. Review the folder before continuing.")
+                if review.restoreFailed(error) { await loadPreview() }
             }
+        }
+    }
+}
+
+
+private struct FileUndoPresentation: ViewModifier {
+    let height: CGFloat
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if horizontalSizeClass == .compact {
+            content
+                .presentationDetents([.height(height)])
+                .presentationSizing(.fitted)
+        } else {
+            content.presentationSizing(.fitted)
         }
     }
 }

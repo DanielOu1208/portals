@@ -3,7 +3,14 @@ import { constants, closeSync, fstatSync, lstatSync, openSync, readSync, realpat
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { FileRewindResult } from "../providers/types.ts";
 
-export class FileUndoRefused extends Error {}
+export class FileUndoRefused extends Error {
+  readonly reason: "files_changed" | undefined;
+
+  constructor(message: string, reason?: "files_changed") {
+    super(message);
+    this.reason = reason;
+  }
+}
 
 interface Preview {
   id: string;
@@ -53,7 +60,7 @@ export class FileUndo {
     const fresh = await rewind(preview.checkpoint, true);
     const files = this.files(fresh, cwd);
     if (!equal(files, preview.files) || count(fresh.insertions) !== preview.insertions || count(fresh.deletions) !== preview.deletions || !equal(signatures(files, cwd), preview.signatures)) {
-      throw new FileUndoRefused("The files changed after this preview. Refresh it and review the changes again.");
+      throw new FileUndoRefused("The files changed after this preview. Review the updated changes.", "files_changed");
     }
     const result = await rewind(preview.checkpoint, false);
     const skipped = count(result.skippedLinks) ?? 0;

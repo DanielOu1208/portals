@@ -38,10 +38,16 @@ extension HermesBackend: TurnFileUndoing {
         // only lead to a fresh preview and fresh confirmation, never a repeated restore.
         guard let permit = fileUndoPreviews.removeValue(forKey: preview.id), permit.thread == thread.id,
               permit.preview == preview, preview.canConfirm(), (try? peer()) === permit.peer else { throw TurnFileUndoError.stalePreview }
-        let answer: BridgeWire.SessionFilesUndoResult = try await permit.peer.call(
-            BridgeWire.Method.sessionFilesUndo,
-            BridgeWire.SessionFilesUndoParams(sessionID: thread.id.rawValue, previewID: preview.previewID), timeout: .seconds(120)
-        )
+        let answer: BridgeWire.SessionFilesUndoResult
+        do {
+            answer = try await permit.peer.call(
+                BridgeWire.Method.sessionFilesUndo,
+                BridgeWire.SessionFilesUndoParams(sessionID: thread.id.rawValue, previewID: preview.previewID), timeout: .seconds(120)
+            )
+        } catch let error as JSONRPCError where error.code == JSONRPCError.invalidParamsCode && error.data?["reason"]?.stringValue == "files_changed" {
+            // Only this host refusal proves that the native restore never began.
+            throw TurnFileUndoError.filesChangedBeforeRestore
+        }
         guard (try? peer()) === permit.peer else { throw TurnFileUndoError.stalePreview }
         return try answer.result()
     }

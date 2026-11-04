@@ -16,6 +16,7 @@ async function setup(t: TestContext) {
   let reached!: () => void;
   const restoringStarted = new Promise<void>((resolve) => { reached = resolve; });
   let actualCalls = 0;
+  let actualFailure: Error | undefined;
   const started = new Map<string, string[]>();
   const sinks = new Map<string, SessionSink>();
   const provider: Provider = {
@@ -41,6 +42,7 @@ async function setup(t: TestContext) {
         actualCalls += 1;
         writeFileSync(file, "before\n");
         restored = true;
+        if (actualFailure) throw actualFailure;
         return { canRewind: true, skippedLinks: 0 };
       },
     };
@@ -50,7 +52,7 @@ async function setup(t: TestContext) {
   t.after(async () => { await client.close(); await bridge.dispose(); rmSync(root, { recursive: true, force: true }); });
   await client.call("folders.add", { path: root });
   const source = await createThread(client);
-  return { root, child, file, bridge, client, source, started, sinks, restoringStarted, actualCalls: () => actualCalls, hold: (wait: Promise<void>) => { restoring = wait; } };
+  return { root, child, file, bridge, client, source, started, sinks, restoringStarted, actualCalls: () => actualCalls, hold: (wait: Promise<void>) => { restoring = wait; }, failActual: (error: Error) => { actualFailure = error; } };
 }
 
 test("file undo requires explicit confirmation, original connection and one unexpired preview", async (t) => {
@@ -84,6 +86,25 @@ test("known active threads in an overlapping parent folder prevent file restorat
   assert.equal(response.error.code, -32602);
   assert.match(response.error.message, /every thread using this folder/);
   assert.equal(run.actualCalls(), 0);
+});
+
+test("only a proven pre-restore file change gets a refreshable refusal", async (t) => {
+  const run = await setup(t);
+  const preview = await run.client.call("session.files.preview", { session_id: run.source, checkpoint_id: "native-user" });
+  writeFileSync(run.file, "manual edit\n");
+  const changed = await run.client.request("session.files.undo", { session_id: run.source, preview_id: preview.preview_id, confirmed: true });
+  assert.equal(changed.error.code, -32602);
+  assert.deepEqual(changed.error.data, { reason: "files_changed" });
+  assert.equal(run.actualCalls(), 0);
+  const repeated = await run.client.request("session.files.undo", { session_id: run.source, preview_id: preview.preview_id, confirmed: true });
+  assert.equal(repeated.error.data, undefined);
+  const fresh = await run.client.call("session.files.preview", { session_id: run.source, checkpoint_id: "native-user" });
+  run.failActual(new Error("The files changed after this preview."));
+  const uncertain = await run.client.request("session.files.undo", { session_id: run.source, preview_id: fresh.preview_id, confirmed: true });
+  assert.equal(uncertain.error.code, -32602);
+  assert.equal(uncertain.error.data, undefined);
+  assert.match(uncertain.error.message, /could not be confirmed complete/);
+  assert.equal(run.actualCalls(), 1);
 });
 
 test("a legacy follower receives the restore result before reconnecting for invalidation", async (t) => {

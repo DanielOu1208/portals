@@ -698,6 +698,34 @@ import Testing
         await #expect(throws: TurnFileUndoError.stalePreview) { try await backend.undoFiles(thread, preview: beforeDisconnect) }
     }
 
+    @Test func onlyTypedPreRestoreFileChangesCanRequestANewPreview() async throws {
+        let (backend, transport) = try await connect(ready: Self.fileUndoReady)
+        let thread = ThreadRef(id: .init(rawValue: "stored"), agent: claude)
+        let cases: [(Int, JSONValue?, Bool)] = [
+            (JSONRPCError.invalidParamsCode, ["reason": "files_changed"], true),
+            (JSONRPCError.invalidParamsCode, nil, false),
+            (-32603, ["reason": "files_changed"], false),
+            (JSONRPCError.invalidParamsCode, ["reason": "other"], false),
+        ]
+        for (code, data, mayRefresh) in cases {
+            let preview = try await fileUndoPreview(on: backend, transport: transport, thread: thread)
+            let applying = Task { try await backend.undoFiles(thread, preview: preview) }
+            let request = try #require(await transport.nextSentRequest())
+            var error: [String: JSONValue] = ["code": .number(Double(code)), "message": "Files changed after this preview."]
+            if let data { error["data"] = data }
+            transport.deliver(["jsonrpc": "2.0", "id": try #require(request["id"]), "error": .object(error)])
+            do {
+                _ = try await applying.value
+                Issue.record("Expected a refused restore")
+            } catch {
+                if mayRefresh { #expect(error as? TurnFileUndoError == .filesChangedBeforeRestore) }
+                else { #expect((error as? JSONRPCError)?.code == code) }
+            }
+            await #expect(throws: TurnFileUndoError.stalePreview) { try await backend.undoFiles(thread, preview: preview) }
+        }
+        await backend.disconnect()
+    }
+
     @Test func aRejectedRestoreConsumesThePreviewAndRequiresFreshReview() async throws {
         let (backend, transport) = try await connect(ready: Self.fileUndoReady)
         let thread = ThreadRef(id: .init(rawValue: "stored"), agent: claude)

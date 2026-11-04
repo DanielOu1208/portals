@@ -49,10 +49,11 @@ public protocol TurnFileUndoing: Sendable {
 }
 
 public enum TurnFileUndoError: LocalizedError, Hashable, Sendable {
-    case unavailable, busy, stalePreview, invalidPreview
+    case unavailable, busy, stalePreview, invalidPreview, filesChangedBeforeRestore
 
     public var errorDescription: String? {
         switch self {
+        case .filesChangedBeforeRestore: "The files changed before the undo began. Review the updated preview."
         case .unavailable: "File undo is unavailable for this turn."
         case .busy: "Wait until this thread and other tools in its folder are idle and connected."
         case .stalePreview: "This preview is no longer valid. Refresh it and review the files again."
