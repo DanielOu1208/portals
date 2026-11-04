@@ -1,10 +1,10 @@
 import { accessSync, constants } from "node:fs";
 import { delimiter, isAbsolute, join } from "node:path";
 import { expandHome } from "../../config.ts";
-import { machineWord } from "../../platform.ts";
 import type { ContentBlock } from "../acp/protocol.ts";
 import type { Quirks } from "../acp/tools.ts";
 import { programVersion } from "../program.ts";
+import { notSignedIn } from "../signIn.ts";
 import type { ThreadMode } from "../types.ts";
 
 // What is fixed about Cursor as the bridge runs it: the release it was tested with,
@@ -71,12 +71,19 @@ export const cursorQuirks: Quirks = {
   diffHeaderScraps: true,
 };
 
-/** The end of "Cursor is not signed in on this Mac." */
-export const signInHint = "Run `cursor-agent login` in a terminal there.";
-export const notSignedInText = `${cursorName} is not signed in on this ${machineWord()}. ${signInHint}`;
+export const notSignedInText = notSignedIn("cursor");
 
 /** The last piece of a reply from a session whose sign-in has gone, in a turn Cursor ends as complete. */
 export const signInReply = "Please sign in to continue";
+
+/**
+ * Whether a piece of reply is Cursor saying the sign-in has gone: `signInReply`, or the
+ * error it gives when its backend refuses the sign-in ("Error: [unauthenticated] Backend
+ * rejected authentication…", 2026.10.22), which only a new process gets past too.
+ */
+export function saysSignedOut(piece: string): boolean {
+  return piece.trim() === signInReply || turnFailure(piece)?.startsWith("[unauthenticated]") === true;
+}
 
 /** What Cursor says, as the last piece of a turn's reply, of a turn its plan or settings stopped (with the sign-in's, `signInReply`). */
 const stoppedByAccount = new Set([signInReply, "Upgrade your plan to continue", "Add a payment method to continue", "Check your settings to continue"]);
@@ -100,15 +107,6 @@ export function turnFailure(piece: string): string | null {
 
 /** Why a chat of Cursor's terminal is not continued or read, only forked (./desk.ts). */
 export const chatForkedOnlyText = `${cursorName} opens a chat from its terminal here only as a copy: fork it to go on in a new thread.`;
-
-/**
- * What a fork of a terminal chat says as its first turn starts, when Cursor keeps Run
- * Everything in the chat's store (`keepsRunEverything`): the copy keeps it too, and Cursor
- * searches the web and fetches pages for the thread without asking, whatever its mode.
- * The store is Cursor's, and left alone: saying so is enough.
- */
-export const keptFullAccessText =
-  "Cursor keeps part of Full access for this thread: it will go on searching the web and fetching pages without asking, also after a restart and in forks of this thread.";
 
 /** One of Cursor's own slash commands that is left out: it writes the Mac's clipboard. */
 export const hiddenCommands = new Set(["copy-request-id"]);
@@ -142,6 +140,19 @@ export const cursorModeMeanings: Partial<Record<Exclude<ThreadMode, "default">, 
   ask: "is in Cursor's Ask mode, for reading and answering: Cursor is told to edit no files and run no commands",
   full: "runs with Cursor's Run Everything: it edits files, runs commands and searches the web without asking, unless your team does not allow it",
 };
+
+/**
+ * What a thread says when Cursor keeps Run Everything in its session's own store
+ * (`isRunEverything`, seen with 2026.10.22): as it leaves Full access, once Cursor has run
+ * its session so, and as the first turn of a fork of a terminal chat whose store keeps it
+ * starts (`keepsRunEverything`, ./desk.ts). From then on Cursor searches the web and
+ * fetches pages for it without asking, on a Cursor not run with `--force` too, after a
+ * restart, and in a fork, which copies the store. Commands and edits it decides by how its
+ * process was started, so they follow the thread's mode. The store is Cursor's, and left
+ * alone: saying so is enough.
+ */
+export const keptFullAccessText =
+  "Cursor keeps part of Full access for this thread: it will go on searching the web and fetching pages without asking, also after a restart and in forks of this thread.";
 
 /**
  * Why a thinking level chosen for a thread on `default` is refused: nothing is set for

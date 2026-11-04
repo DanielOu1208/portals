@@ -299,14 +299,17 @@ test("a question about a call keeps the kind the call was told with, and says wh
   assert.equal(stream.asked({ toolCallId: "nobody", title: "Fetch a page", kind: "fetch", status: "pending" }).announced, false);
 });
 
-test("updates the stream has no use for are passed over: a change of mode, a kind it does not know", () => {
-  const stream = new AcpStream({ cwd });
+test("updates the stream has no use for are passed over: a change of mode, a kind it does not know, which is told of once for the log", () => {
+  const seen: string[] = [];
+  const stream = new AcpStream({ cwd, unknown: (kind) => seen.push(kind) });
   assert.deepEqual(stream.map({ sessionUpdate: "current_mode_update", currentModeId: "plan" }), []);
   assert.deepEqual(stream.map({ sessionUpdate: "session_info_update", title: "A title" }), []);
   assert.deepEqual(stream.map({ sessionUpdate: "something_a_later_agent_sends", detail: 1 } as unknown as SessionUpdate), []);
+  assert.deepEqual(stream.map({ sessionUpdate: "something_a_later_agent_sends", detail: 2 } as unknown as SessionUpdate), []);
   // A tool call with no id cannot be a row.
   assert.deepEqual(stream.map({ sessionUpdate: "tool_call", status: "in_progress" } as unknown as SessionUpdate), []);
   assert.deepEqual(stream.endTurn(), []);
+  assert.deepEqual(seen, ["something_a_later_agent_sends"]);
 });
 
 test("agents that number their messages get each closed off when the next begins", () => {

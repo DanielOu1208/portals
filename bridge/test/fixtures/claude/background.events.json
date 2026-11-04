@@ -1,7 +1,7 @@
 [
  {
   "type": "tool.start",
-  "id": "toolu_01Fz3yCD67r2j9swSASvrS6R",
+  "id": "toolu_01LdUEucrA2juxEETWfAAxtj",
   "name": "terminal",
   "args": {
    "command": "sleep 3"
@@ -9,45 +9,45 @@
  },
  {
   "type": "tool.end",
-  "id": "toolu_01Fz3yCD67r2j9swSASvrS6R",
+  "id": "toolu_01LdUEucrA2juxEETWfAAxtj",
   "name": "terminal",
   "args": {
    "command": "sleep 3"
   },
   "result": {
-   "output": "Command running in background with ID: bx62fxigm. Output is being written to: /private/tmp/claude-501/-private-tmp-portals-night-scratch-bugs-record-claude-background/0dda0568-f1a2-487d-8d47-2cedadb6a7c6/tasks/bx62fxigm.output. You will be notified when it completes. To check interim output, use Read on that file path.",
+   "output": "Command running in background with ID: bgcofk3za. Output is being written to: /private/tmp/claude-501/-private-tmp-portals-prs-claude-sdk-rec-background/23ee74ee-5380-4d31-9625-62d6267a6aec/tasks/bgcofk3za.output. You will be notified when it completes. To check interim output, use Read on that file path.",
    "exit_code": 0
   },
   "durationSeconds": 0
  },
  {
   "type": "text",
-  "text": "The background sleep is running (task bx62fxigm); I'm not waiting on it.",
-  "pieces": 9
+  "text": "Started `sleep 3` in the background; I'm not waiting on it.",
+  "pieces": 8
  },
  {
   "type": "turn.end",
   "status": "complete",
   "usage": {
-   "used": 27438,
+   "used": 28468,
    "max": 1000000
   },
   "spent": {
-   "tokens": 52911
+   "tokens": 53433
   }
  },
  {
   "type": "turn.begin",
-  "user": "Background command \"Sleep for 3 seconds in background\" completed (exit code 0)",
+  "user": "Background command \"Sleep 3 seconds in background\" completed (exit code 0)",
   "host": {
    "kind": "process_complete",
-   "text": "Background command \"Sleep for 3 seconds in background\" completed (exit code 0)"
+   "text": "Background command \"Sleep 3 seconds in background\" completed (exit code 0)"
   }
  },
  {
   "type": "usage",
   "usage": {
-   "used": 27829,
+   "used": 28846,
    "max": 1000000
   }
  },
@@ -60,11 +60,11 @@
   "type": "turn.end",
   "status": "complete",
   "usage": {
-   "used": 27841,
+   "used": 28864,
    "max": 1000000
   },
   "spent": {
-   "tokens": 27841
+   "tokens": 28864
   }
  }
 ]

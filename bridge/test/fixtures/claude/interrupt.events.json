@@ -1,18 +1,18 @@
 [
  {
   "type": "text",
-  "text": "1",
+  "text": "1\n2\n3\n4",
   "pieces": 1
  },
  {
   "type": "turn.end",
   "status": "interrupted",
   "usage": {
-   "used": 25351,
+   "used": 24851,
    "max": 1000000
   },
   "spent": {
-   "tokens": 25351
+   "tokens": 24851
   }
  }
 ]

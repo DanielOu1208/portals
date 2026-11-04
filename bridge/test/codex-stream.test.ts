@@ -2,9 +2,11 @@ import "./environment.ts";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { test } from "node:test";
+import { machineWord } from "../src/platform.ts";
 import { CodexStream, rateLimitNotices, windowName } from "../src/providers/codex/stream.ts";
+import { notSignedIn } from "../src/providers/signIn.ts";
 import type { ProviderEvent } from "../src/providers/types.ts";
-import { fixture, fixtureCwd, joined, recordedHistory, replayStream } from "./codex-fixtures.ts";
+import { fixture, fixtureCwd, joined, recordedHistory, recordedThread, replayStream } from "./codex-fixtures.ts";
 
 // Golden tests: real Codex streams (test/fixtures/codex, recorded with
 // scripts/record-codex.ts) through the mapper, with no Codex running. Each
@@ -45,9 +47,9 @@ test("commentary streams, then closes as an interim piece; the command is a term
   assert.deepEqual(end.result, { output: "hello.txt\n", exit_code: 0 });
   // Only the text after the last closed piece is the reply.
   const after = events.slice(events.indexOf(end));
-  assert.equal(text(after), "I saw `hello.txt`; 221 is not prime because 221 = 13 × 17.");
+  assert.equal(text(after), "I saw `hello.txt`; 221 is not prime (13 × 17).");
   // What it spent: how far the thread's tokens rose in it (two requests), and Codex's time for it.
-  assert.deepEqual(events.at(-1), { type: "turn.end", status: "complete", usage: { used: 24843, max: 258_400 }, spent: { tokens: 49_635, seconds: 6.234 }, agentTurn: "01a13a1f-4c5a-7443-94b3-016867640993" });
+  assert.deepEqual(events.at(-1), { type: "turn.end", status: "complete", usage: { used: 22952, max: 258_400 }, spent: { tokens: 45_857, seconds: 8.315 }, agentTurn: "01a1a5d8-b56d-7760-a906-7c4eb706a9b2" });
 });
 
 test("a file change is an edit row with a whole unified diff; a new file is a write row", () => {
@@ -88,7 +90,7 @@ test("an interrupted turn ends interrupted with what streamed before it", () => 
   const events = replayStream("interrupt");
   assert.equal(text(events), "1\n");
   // Stopped before Codex said any tokens: its time alone.
-  assert.deepEqual(events.at(-1), { type: "turn.end", status: "interrupted", spent: { seconds: 3.482 } });
+  assert.deepEqual(events.at(-1), { type: "turn.end", status: "interrupted", spent: { seconds: 2.167 } });
 });
 
 test("an item that started before the stream listened is reported whole when it completes, never from the middle", () => {
@@ -180,6 +182,24 @@ test("a failed turn ends with Codex's error; one Codex retries is a passing stat
   ]);
 });
 
+test("a turn Codex could not sign in for ends with what to run on the host, not the HTTP error, and can be tried again", () => {
+  const signedOut = notSignedIn("codex");
+  assert.equal(signedOut, `Codex is not signed in on this ${machineWord()}. Run \`codex login\` in a terminal there, then try again.`);
+  // As Codex 0.166.0 ends a turn with no sign-in.
+  const stream = new CodexStream({ cwd: "/w" });
+  stream.beginTurn("t1");
+  const error = { message: "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses", codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 401 } }, additionalDetails: null };
+  assert.deepEqual(stream.map("turn/completed", { turn: { id: "t1", status: "failed", error, items: [] } }), [{ type: "turn.end", status: "error", error: signedOut, retryable: true }]);
+  // Said by the error before a turn that names none, and as `unauthorized`.
+  stream.beginTurn("t2");
+  stream.map("error", { turnId: "t2", willRetry: false, error: { message: "401 Unauthorized", codexErrorInfo: "unauthorized" } });
+  assert.deepEqual(stream.map("turn/completed", { turn: { id: "t2", status: "failed", error: null, items: [] } }), [{ type: "turn.end", status: "error", error: signedOut, retryable: true }]);
+  // Another status is Codex's own error.
+  stream.beginTurn("t3");
+  const busy = { message: "unexpected status 503", codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 503 } }, additionalDetails: null };
+  assert.deepEqual(stream.map("turn/completed", { turn: { id: "t3", status: "failed", error: busy, items: [] } }), [{ type: "turn.end", status: "error", error: "unexpected status 503", retryable: true }]);
+});
+
 test("plan updates are to-do rows; a thread name is the title", () => {
   const stream = new CodexStream({ cwd: "/w" });
   stream.beginTurn("t1");
@@ -235,18 +255,20 @@ test("usage limits at 80% or more are warned about once per window and reset", (
   assert.equal(windowName(43_200), "30-day");
 });
 
-test("/compact is a turn of its own: a passing status, then the mark with the context used before it, which then falls", () => {
+test("/compact is a turn of its own: a passing status, then the mark with the context used before it, and the context Codex counts after it", () => {
   const events = replayStream("compact");
   const ends = ofType(events, "turn.end");
   assert.equal(ends.length, 2);
   assert.deepEqual(events.slice(events.indexOf(ends[0]) + 1), [
     { type: "status", text: "Compacting the conversation…" },
-    { type: "usage", usage: { used: 15254, max: 258_400 } },
+    // Codex's own count after compacting. On a thread this short its summary can be the
+    // larger (codex-cli 0.166.0 counted 30,449 after 25,862), so it need not fall.
+    { type: "usage", usage: { used: 30449, max: 258_400 } },
     { type: "status", text: "" },
     // Asked for: the turn has no message of the user's.
-    { type: "compacted", trigger: "manual", tokensBefore: 24706 },
+    { type: "compacted", trigger: "manual", tokensBefore: 25862 },
     // The compaction did not move the thread's tokens: it spent none Codex counts.
-    { type: "turn.end", status: "complete", usage: { used: 15254, max: 258_400 }, spent: { seconds: 0.858 } },
+    { type: "turn.end", status: "complete", usage: { used: 30449, max: 258_400 }, spent: { seconds: 0.207 } },
   ]);
 });
 
@@ -375,6 +397,72 @@ test("a running command's output streams as its row's live output, at most four 
   // Output of a call not open (another turn's, an unknown id) is not shown.
   stream.map("item/commandExecution/outputDelta", { turnId: "turn-1", itemId: "exec-9", delta: "stray\n" });
   assert.equal(progress.length, count);
+});
+
+test("a plan streams into its row as Codex writes it (the recorded plan's deltas), and its row then has the whole", async () => {
+  const progress: ProviderEvent[] = [];
+  let clock = 0;
+  const stream = new CodexStream({ cwd: fixtureCwd, now: () => clock, progress: (event) => progress.push(event) });
+  const thread = recordedThread("plan");
+  const entries = fixture("plan").filter((entry) => entry.kind === "notification" && entry.params?.threadId === thread);
+  const turn = entries.find((entry) => entry.method === "turn/started")!.params.turn.id;
+  stream.beginTurn(turn);
+  const plan = entries.find((entry) => entry.method === "item/completed" && entry.params.item.type === "plan")!.params.item;
+  let ended: ProviderEvent[] = [];
+  for (const entry of entries) {
+    if (entry.method === "turn/completed") break;
+    // Far enough apart that each piece goes out, as four a second allows.
+    clock += 1000;
+    const events = stream.map(entry.method!, entry.params);
+    if (entry.method === "item/completed" && entry.params.item.type === "plan") ended = events;
+  }
+  const shown = progress.filter((event) => event.type === "tool.progress" && event.id === plan.id).map((event) => (event as { output: string }).output);
+  assert.ok(shown.length > 10, "the plan comes a piece at a time");
+  // The first piece as the recording has it (a recording on another release may start differently).
+  assert.equal(shown[0], entries.find((entry) => entry.method === "item/plan/delta")!.params.delta);
+  assert.ok(shown.every((output, index) => index === 0 || output.startsWith(shown[index - 1])), "each piece follows on from the last");
+  // All that was written (Codex says the pieces need not add up to the plan it ends with)…
+  assert.equal(shown.at(-1), entries.filter((entry) => entry.method === "item/plan/delta").map((entry) => entry.params.delta).join(""));
+  // …then the plan as it ended.
+  assert.deepEqual(ofType(ended, "tool.end")[0].args, { content: plan.text });
+});
+
+test("Codex waiting is a Wait row saying for how long", () => {
+  const stream = new CodexStream({ cwd: "/w", now: () => 0 });
+  stream.beginTurn("t1");
+  // As Codex 0.166 sends its `clock.sleep`.
+  const sleep = { type: "sleep", id: "call_1", durationMs: 2000 };
+  assert.deepEqual(stream.map("item/started", { turnId: "t1", item: sleep }), [{ type: "tool.start", id: "call_1", name: "wait", args: {}, context: "2 seconds" }]);
+  assert.deepEqual(stream.map("item/completed", { turnId: "t1", item: sleep }), [
+    { type: "tool.end", id: "call_1", name: "wait", args: {}, context: "2 seconds", result: {}, durationSeconds: 2 },
+  ]);
+});
+
+test("a review is one row from its start to its end, saying what it reviewed; its commands are rows between, and its findings are the reply after it", () => {
+  let clock = 0;
+  const stream = new CodexStream({ cwd: "/w", now: () => clock });
+  stream.beginTurn("review");
+  const entered = { type: "enteredReviewMode", id: "entered", review: "current changes" };
+  assert.deepEqual(
+    [...stream.map("item/started", { turnId: "review", item: entered }), ...stream.map("item/completed", { turnId: "review", item: entered })],
+    [{ type: "tool.start", id: "entered", name: "review", args: {}, context: "current changes" }],
+  );
+  const command = { type: "commandExecution", id: "exec-1", command: "git diff", cwd: "/w", processId: null, status: "completed", commandActions: [], aggregatedOutput: "", exitCode: 0, durationMs: 5 };
+  assert.deepEqual(ofType(stream.map("item/completed", { turnId: "review", item: command }), "tool.end").map((event) => event.name), ["terminal"]);
+  clock = 24_000;
+  const exited = { type: "exitedReviewMode", id: "exited", review: "No issues." };
+  assert.deepEqual(stream.map("item/started", { turnId: "review", item: exited }), []);
+  assert.deepEqual(stream.map("item/completed", { turnId: "review", item: exited }), [
+    { type: "tool.end", id: "entered", name: "review", args: {}, context: "current changes", result: {}, durationSeconds: 24 },
+  ]);
+  // Its end alone (the bridge joined late) is a row of its own.
+  stream.beginTurn("later");
+  assert.deepEqual(ofType(stream.map("item/completed", { turnId: "later", item: { ...exited, id: "exited-2" } }), "tool.end")[0].name, "review");
+  // One the turn's end cuts short is stopped.
+  stream.beginTurn("cut");
+  stream.map("item/started", { turnId: "cut", item: { ...entered, id: "entered-3" } });
+  const end = stream.complete({ id: "cut", status: "interrupted" } as never);
+  assert.deepEqual(ofType(end, "tool.end")[0], { type: "tool.end", id: "entered-3", name: "review", args: {}, context: "current changes", result: { status: "error", error: "Stopped before it finished." } });
 });
 
 test("a command still running when Codex completes its turn runs on in the background: its row closes with its output so far, not as stopped", () => {

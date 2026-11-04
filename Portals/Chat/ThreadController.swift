@@ -3,6 +3,14 @@ import Foundation
 import Observation
 import os
 
+enum MessageEditError: LocalizedError {
+    case missingAttachments
+
+    var errorDescription: String? {
+        "An original attachment is no longer available on this portal."
+    }
+}
+
 /// The files the messages sent from this device mentioned, by message, in every thread
 /// while the app runs (`SentMentions`): sent again with one on "Try again", and the note on
 /// a chip of a file its agent may not have read in whole. Not a thread's controller's own,
@@ -25,6 +33,18 @@ final class SentMentionsMemory {
 /// (`.detached`), and the thread is reopened when it is next on screen or used.
 @Observable
 final class ThreadController: Identifiable {
+    struct MessageEdit {
+        let checkpoint: MessageCheckpoint
+        let previous: ComposerDraft
+    }
+
+    private(set) var editingMessage: MessageEdit?
+    private(set) var isPreparingMessageEdit = false
+    private(set) var isSendingMessageEdit = false
+    var keepsDraftInMemory: Bool {
+        editingMessage != nil || !composer.images.isEmpty || !composer.files.isEmpty || !composer.mentions.isEmpty
+    }
+
     /// The agent, as the host last described it (its name can change there).
     private(set) var agent: Agent
     private(set) var thread: ThreadRef? {
@@ -39,7 +59,7 @@ final class ThreadController: Identifiable {
     /// controller is.
     var composer = ComposerDraft() {
         didSet {
-            if composer.text != oldValue.text { ComposerDrafts.shared.set(composer.text, for: draftKey) }
+            if editingMessage == nil, composer.text != oldValue.text { ComposerDrafts.shared.set(composer.text, for: draftKey) }
         }
     }
     let localID: UUID
@@ -127,6 +147,18 @@ final class ThreadController: Identifiable {
     /// The host takes the files a message mentions beside its text (a bridge's
     /// `file_mentions`), as far as it has said (`checkHost`).
     private(set) var takesFileMentions = false
+    /// Message-level forks are offered only by a host that explicitly lists them.
+    private(set) var offersMessageFork = false
+    private(set) var offersTurnFileUndo = false
+    var fileUndoTurn: Turn? {
+        guard offersTurnFileUndo, agent.kind == "claude", thread?.isReadOnly == false else { return nil }
+        return state.transcript.latestFileUndoTurn
+    }
+    var hasFileWork: Bool {
+        isAtWork || isSending || !state.pending.isEmpty || !state.queued.isEmpty || state.subagents.contains(where: \.isWorking)
+    }
+    var fileUndoFolder: String? { thread?.workingDirectory ?? folder?.path }
+    var canForkMessage: Bool { isAtRest && !isSending && !isLoadingHistory && !isClosed }
     /// Counts what was sent from here (a message, a command, a retry): the chat keeps to its
     /// end from each, to show what it becomes (`ChatScreen`).
     private(set) var sentHere = 0
@@ -236,12 +268,14 @@ final class ThreadController: Identifiable {
             state.model = ModelSetting(model: model.model, provider: model.provider, level: options.thinkingLevel)
         }
         composer.text = ComposerDrafts.shared.text(for: draftKey)
+        GivenBackMessages.shared.opened(self)
+        takeWaitingGivenBack()
         closesCommandAnswers(with: commandAnswers)
         noteRunChanges()
     }
 
     /// Where its composer's words are kept (`ComposerDrafts.key`).
-    private var draftKey: String {
+    var draftKey: String {
         ComposerDrafts.key(thread: thread, agent: agent.id, folder: folder)
     }
 
@@ -260,6 +294,7 @@ final class ThreadController: Identifiable {
             if ComposerDrafts.shared.text(for: old) == composer.text { ComposerDrafts.shared.set("", for: old) }
             ComposerDrafts.shared.set(composer.text, for: new)
         }
+        takeWaitingGivenBack()
     }
 
     /// A session from the host's desk taken up only to read: it takes no messages.
@@ -335,8 +370,66 @@ final class ThreadController: Identifiable {
     /// the command's row comes back from the host's list (`subagent.list`) as it is then,
     /// its output so far and its Stop with it, and follows the command on from there.
     var isAtRest: Bool {
+        atRest(allowingCalls: 0)
+    }
+
+    private func atRest(allowingCalls: Int) -> Bool {
         thread != nil && !isAtWork && pendingRequest == nil && state.pending.isEmpty && state.queued.isEmpty
-            && connecting == nil && !isRetrying && commandInProgress == nil && callsOut == 0 && unstagedPayloads.isEmpty
+            && connecting == nil && !isRetrying && commandInProgress == nil && callsOut == allowingCalls && unstagedPayloads.isEmpty
+    }
+
+    /// Uses the same local attachment copies as retrying a sent message.
+    func editMessage(_ message: UserMessage, at checkpoint: MessageCheckpoint) async throws {
+        guard checkpoint.canEdit, canForkMessage, !isPreparingMessageEdit, !isSendingMessageEdit else { throw MessageForkError.busy }
+        isPreparingMessageEdit = true
+        callsOut += 1
+        defer { isPreparingMessageEdit = false; callsOut -= 1 }
+        let expected = composer
+        let previous = editingMessage?.previous ?? composer
+        var images: [UUID: ImageAttachment] = [:], files: [UUID: FileAttachment] = [:]
+        for staged in unstagedPayloads.values {
+            for image in staged.images { images[image.id] = image }
+            for file in staged.files { files[file.id] = file }
+        }
+        for file in message.files where files[file.id] == nil {
+            if let data = sentFiles.data(for: file.id) { files[file.id] = FileAttachment(id: file.id, data: data, filename: file.filename) }
+        }
+        let unreadImages = message.images.filter { images[$0.id] == nil }
+        let unreadFiles = message.files.filter { files[$0.id] == nil }
+        let read = await submissionStore.attachmentsInBackground(images: unreadImages, files: unreadFiles, in: localID, copies: imageStore)
+        for image in read.images { images[image.id] = image }
+        for file in read.files { files[file.id] = file }
+        guard !isClosed, atRest(allowingCalls: 1), !isSending, !isLoadingHistory, composer == expected else { throw MessageForkError.busy }
+        guard message.images.allSatisfy({ images[$0.id] != nil }), message.files.allSatisfy({ files[$0.id] != nil }) else {
+            throw MessageEditError.missingAttachments
+        }
+        let opener = turns.flatMap(\.items).first { item in
+            if case let .user(user) = item.content { return user.checkpoint?.id == checkpoint.id }
+            return false
+        }
+        let original = opener.flatMap { item in savedConversation?.submissions.first { $0.id == item.id } }
+        let mentions = original?.mentions ?? opener.map { SentMentionsMemory.shared.sent.paths(of: $0.id) } ?? []
+        editingMessage = MessageEdit(checkpoint: checkpoint, previous: previous)
+        composer = ComposerDraft(text: message.text, images: message.images.compactMap { images[$0.id] }, files: message.files.compactMap { files[$0.id] }, mentions: mentions)
+    }
+
+    func cancelMessageEdit() {
+        guard !isSendingMessageEdit, let editing = editingMessage else { return }
+        composer = editing.previous
+        editingMessage = nil
+    }
+
+    func beginMessageEditSend(at checkpoint: MessageCheckpoint) throws {
+        guard editingMessage?.checkpoint == checkpoint, canForkMessage, !isSendingMessageEdit else { throw MessageForkError.busy }
+        isSendingMessageEdit = true
+        callsOut += 1
+    }
+
+    func finishMessageEditSend(sent: Bool) {
+        guard isSendingMessageEdit else { return }
+        isSendingMessageEdit = false
+        callsOut -= 1
+        if sent { cancelMessageEdit() }
     }
 
     /// Whether "Try again" can be offered: not during a run, nor while something sent
@@ -581,6 +674,8 @@ final class ThreadController: Identifiable {
 
     /// Asks the host what it takes, once it is connected: files of any kind, or images only.
     func checkHost() async {
+        offersTurnFileUndo = await (backend as? any TurnFileUndoing)?.offersTurnFileUndo ?? false
+        offersMessageFork = await (backend as? any MessageForking)?.offersMessageFork ?? false
         takesFiles = await (backend as? any FileAttaching)?.attachesFiles ?? false
         readsFiles = await (backend as? any FileReading)?.readsFiles ?? false
         searchesFiles = await (backend as? any FileSearching)?.searchesFiles ?? false
@@ -869,6 +964,10 @@ final class ThreadController: Identifiable {
         if thread != nil { onPersist?(self) }
     }
 
+    func fileUndoFinished(_ result: TurnFileUndoResult) {
+        say(result.message, result.isComplete ? .info : .warning)
+    }
+
     /// A line of the app's own in the transcript.
     private func say(_ text: String, _ level: Notice.Level = .info) {
         applyHeldPieces()
@@ -1032,17 +1131,8 @@ final class ThreadController: Identifiable {
         if original == nil, asked.images.isEmpty, asked.files.isEmpty, SlashInput(asked.text) != nil {
             return submit(asked.text, images: [], files: [], announced: true)
         }
-        // What this device holds in memory goes at once: bytes still being written to
-        // the journal, and the files sent lately (`SentFileBytes`).
-        var images: [UUID: ImageAttachment] = [:], files: [UUID: FileAttachment] = [:]
-        for staged in unstagedPayloads.values {
-            for image in staged.images { images[image.id] = image }
-            for file in staged.files { files[file.id] = file }
-        }
-        for file in asked.files where files[file.id] == nil {
-            // Under its own id: a Mac that has it waiting already from a send that failed half way does not take it twice.
-            if let data = sentFiles.data(for: file.id) { files[file.id] = FileAttachment(id: file.id, data: data, filename: file.filename) }
-        }
+        // What this device holds in memory goes at once.
+        let (images, files) = heldAttachments(of: asked)
         let unread = (images: asked.images.filter { images[$0.id] == nil }, files: asked.files.filter { files[$0.id] == nil })
         guard !unread.images.isEmpty || !unread.files.isEmpty else {
             return resend(asked, original: original, mentions: mentions, images: images, files: files)
@@ -1062,6 +1152,92 @@ final class ThreadController: Identifiable {
             for file in read.files { files[file.id] = file }
             resend(asked, original: original, mentions: mentions, images: images, files: files)
         }
+    }
+
+    /// What this device holds in memory of what was attached to `asked`, by id: bytes still
+    /// being written to the journal, and the files sent lately (`SentFileBytes`). The rest
+    /// is on disk (`SubmissionStore.attachmentsInBackground`).
+    private func heldAttachments(of asked: UserMessage) -> (images: [UUID: ImageAttachment], files: [UUID: FileAttachment]) {
+        var images: [UUID: ImageAttachment] = [:], files: [UUID: FileAttachment] = [:]
+        for staged in unstagedPayloads.values {
+            for image in staged.images { images[image.id] = image }
+            for file in staged.files { files[file.id] = file }
+        }
+        for file in asked.files where files[file.id] == nil {
+            // Under its own id: a Mac that has it waiting already from a send that failed half way does not take it twice.
+            if let data = sentFiles.data(for: file.id) { files[file.id] = FileAttachment(id: file.id, data: data, filename: file.filename) }
+        }
+        return (images, files)
+    }
+
+    /// A message of this device's steered into a run that a Stop took back before the
+    /// agent read it (a bridge's `steer_withdrawn`): it goes back to the composer, ahead of
+    /// anything written there since, with what was attached to it that this device still
+    /// has, so nothing typed is lost. `asked`: the message as the transcript showed it, when
+    /// it still did; else `stored`, its words as the host keeps them, are all there is.
+    private func giveBack(_ asked: UserMessage?, id: UUID, stored: String) {
+        let original = savedConversation?.submissions.first { $0.id == id }
+        let words = original?.text ?? asked?.text ?? SentText.parse(stored).text
+        let mentions = original?.mentions ?? []
+        guard let asked, !asked.images.isEmpty || !asked.files.isEmpty else {
+            return putBack(words, mentions: mentions, images: [], files: [], whole: true)
+        }
+        let held = heldAttachments(of: asked)
+        let unread = (images: asked.images.filter { held.images[$0.id] == nil }, files: asked.files.filter { held.files[$0.id] == nil })
+        // In the order they were attached.
+        func given(_ images: [UUID: ImageAttachment], _ files: [UUID: FileAttachment]) {
+            let found = (images: asked.images.compactMap { images[$0.id] }, files: asked.files.compactMap { files[$0.id] })
+            putBack(words, mentions: mentions, images: found.images, files: found.files,
+                    whole: found.images.count == asked.images.count && found.files.count == asked.files.count)
+        }
+        guard !unread.images.isEmpty || !unread.files.isEmpty else { return given(held.images, held.files) }
+        // The rest from disk, off the main thread. The message goes back only then, words
+        // and attachments at once: never its words alone, to be sent without them, nor its
+        // attachments later into whatever the composer holds by then. To wherever the
+        // thread's draft is by then: this controller may have been closed meanwhile, and
+        // another opened on the thread in its place (`GivenBackMessages`).
+        let key = draftKey
+        Task {
+            let read = await submissionStore.attachmentsInBackground(images: unread.images, files: unread.files, in: localID, copies: imageStore)
+            var images = held.images, files = held.files
+            for image in read.images { images[image.id] = image }
+            for file in read.files { files[file.id] = file }
+            let found = (images: asked.images.compactMap { images[$0.id] }, files: asked.files.compactMap { files[$0.id] })
+            GivenBackMessages.shared.give(
+                GivenBack(words: words, mentions: mentions, images: found.images, files: found.files,
+                          whole: found.images.count == asked.images.count && found.files.count == asked.files.count),
+                to: key
+            )
+        }
+    }
+
+    /// Puts a message given back (`giveBack`) in the composer in one change, ahead of what
+    /// is there. `whole`: all that was attached to it is with it.
+    private func putBack(_ words: String, mentions: [String], images: [ImageAttachment], files: [FileAttachment], whole: Bool) {
+        var draft = composer
+        draft.text = GivenBack.text(words, before: draft.text)
+        draft.mentions = mentions + draft.mentions.filter { !mentions.contains($0) }
+        draft.images = images + draft.images.filter { image in !images.contains { $0.id == image.id } }
+        draft.files = files + draft.files.filter { file in !files.contains { $0.id == file.id } }
+        composer = draft
+        say("Stopped before the agent read your message. It is back in the composer.")
+        if !whole { say("This device no longer has all that was attached to it. Attach it again, then send.", .warning) }
+    }
+
+    /// Messages given back to this thread's draft while no composer was open on it: their
+    /// words are in the draft kept on this device already, their attachments join them now.
+    private func takeWaitingGivenBack() {
+        for message in GivenBackMessages.shared.waiting(for: draftKey) {
+            putBack("", mentions: message.mentions, images: message.images, files: message.files, whole: message.whole)
+        }
+    }
+
+    /// The message with `id` as the transcript shows it, the latest turns first.
+    private func shownMessage(_ id: UUID) -> UserMessage? {
+        for turn in state.transcript.turns.reversed() {
+            if let item = turn.items.first(where: { $0.id == id }), case let .user(message) = item.content { return message }
+        }
+        return nil
     }
 
     /// Sends again what `asked` carried, with the bytes found for it, by id.
@@ -1100,6 +1276,13 @@ final class ThreadController: Identifiable {
                 say("It was not stopped: \(error.localizedDescription)", .warning)
             }
         }
+    }
+
+    /// What one subagent did, its own messages as turns; nil from a host that cannot say,
+    /// or for one that cannot be read. Read again at each call: one at work has done more.
+    var readsSubagents: ((Subagent.ID) async throws -> Transcript?)? {
+        guard let thread, let host = backend as? any SubagentReading else { return nil }
+        return { id in try await host.subagentTranscript(id, in: thread.id) }
     }
 
     // MARK: Messages waiting
@@ -1157,6 +1340,7 @@ final class ThreadController: Identifiable {
     /// flight for it is saved once it has been closed.
     func close() {
         isClosed = true
+        GivenBackMessages.shared.closed(self)
         mcpAuth.clear()
         threadCommands.cancel()
         eventsTask?.cancel()
@@ -1489,6 +1673,9 @@ final class ThreadController: Identifiable {
     /// Applies one event the thread's stream brought.
     private func take(_ event: ThreadEvent, from thread: ThreadRef) {
             let wasRunning = state.isRunning
+            // A message of this device's that a Stop took back, as shown, before the state lets go of it.
+            var withdrawn: UserMessage?
+            if case let .ownMessageWithdrawn(id, _) = event { withdrawn = shownMessage(id) }
             state.apply(event)
             if case let .turnListed(turn) = event { endedTurn = turn } else if !wasRunning, state.isRunning { endedTurn = nil }
             switch event {
@@ -1538,6 +1725,9 @@ final class ThreadController: Identifiable {
                 // The host's word that it took a message of this device's settles its
                 // submission, also when the send's answer was lost.
                 if savedConversation?.hostTook(id) == true { onPersist?(self) }
+            case let .ownMessageWithdrawn(id, text):
+                giveBack(withdrawn, id: id, stored: text)
+                onPersist?(self)
             default:
                 break
             }
@@ -1589,5 +1779,13 @@ final class ThreadController: Identifiable {
 private extension ThreadEvent {
     var endsTurn: Bool {
         if case .turnFinished = self { true } else { false }
+    }
+}
+
+extension ThreadController: GivenBackTaking {
+    /// A message given back (`giveBack`) whose attachments were read after the controller
+    /// that asked for them was closed, or by this one.
+    func take(_ message: GivenBack) {
+        putBack(message.words, mentions: message.mentions, images: message.images, files: message.files, whole: message.whole)
     }
 }

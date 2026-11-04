@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { realpathSync } from "node:fs";
+import { isAbsolute, relative, sep } from "node:path";
 import { performance } from "node:perf_hooks";
 import { counters } from "../counters.ts";
 import { threadRepo } from "../git.ts";
@@ -8,7 +10,7 @@ import { DeskRefused, type AdoptMode, type OngoingThread, type Provider, type Se
 import { providerModeOptions } from "../providers/modes.ts";
 import type { DiffStore } from "./keptDiffs.ts";
 import { lastPreview } from "./preview.ts";
-import type { Peer, SessionListener, ThreadActivity } from "./session.ts";
+import type { Peer, SessionListener, SessionOptions, ThreadActivity } from "./session.ts";
 import { Session } from "./session.ts";
 import type { Registry, StartedBy, ThreadChanges, ThreadRecord } from "./registry.ts";
 import type { SpentStore } from "./spent.ts";
@@ -50,6 +52,14 @@ export class UnknownThreadError extends Error {}
 /** A thread that cannot be taken off the list now (`remove`). The message is for the user. */
 export class RemoveRefused extends Error {}
 
+function overlappingFolders(left: string, right: string): boolean {
+  const contains = (parent: string, child: string) => {
+    const path = relative(parent, child);
+    return path === "" || (!isAbsolute(path) && path !== ".." && !path.startsWith(`..${sep}`));
+  };
+  return contains(left, right) || contains(right, left);
+}
+
 export class SessionManager {
   private readonly registry: Registry;
   private readonly providers: Map<string, Provider>;
@@ -57,6 +67,7 @@ export class SessionManager {
   private readonly waiting: WaitingStore | undefined;
   private readonly spent: SpentStore | undefined;
   private readonly diffs: DiffStore | undefined;
+  private readonly disk: SessionOptions["disk"];
   /** Closing with the bridge: nothing waiting is sent any more. */
   private closing = false;
   private readonly listeners: SessionListener[] = [];
@@ -68,6 +79,7 @@ export class SessionManager {
     activityChanged: (id) => this.tell((listener) => listener.activityChanged?.(id)),
   };
   private readonly live = new Map<string, Session>();
+  private readonly fileRestores = new Set<string>();
   private readonly loading = new Map<string, Promise<Session>>();
   /** Desk sessions being taken up, by id. */
   private readonly adopting = new Map<string, Promise<Session>>();
@@ -87,7 +99,7 @@ export class SessionManager {
 
   constructor(options: {
     registry: Registry; providers: Map<string, Provider>; logCapacity?: number; listener?: SessionListener; waiting?: WaitingStore; spent?: SpentStore;
-    diffs?: DiffStore; heldFor?: number;
+    diffs?: DiffStore; heldFor?: number; disk?: SessionOptions["disk"];
   }) {
     this.held = new HeldElsewhere((threads) => {
       for (const id of threads) this.tell((listener) => listener.activityChanged?.(id));
@@ -98,6 +110,7 @@ export class SessionManager {
     this.waiting = options.waiting;
     this.spent = options.spent;
     this.diffs = options.diffs;
+    this.disk = options.disk;
     if (options.listener) this.listeners.push(options.listener);
   }
 
@@ -149,6 +162,14 @@ export class SessionManager {
   /** How many sessions are loaded. */
   get loaded(): number {
     return this.live.size;
+  }
+
+  /**
+   * The host's disk began to run low on space (src/disk.ts): each thread at work is told
+   * now, once; the others as they start a turn.
+   */
+  diskLow(): void {
+    for (const session of this.live.values()) if (session.activity) session.tellDiskLow();
   }
 
   /**
@@ -221,6 +242,86 @@ export class SessionManager {
     const provider = this.provider(options.agent);
     if (provider.ongoingThread) return this.ongoing(provider, options);
     return this.make(provider, options, (await provider.newThread?.({ cwd: options.cwd, settings: options.settings })) ?? randomUUID());
+  }
+
+  /** Copy a completed native turn's conversation, retaining the source's policy. */
+  async fork(source: Session, checkpointId: string, before: boolean): Promise<Session> {
+    if (this.folderLocked(source.record.cwd)) throw new DeskRefused("Wait for this folder's file action to finish before forking a thread.");
+    if (this.closing || this.live.get(source.id) !== source) throw new DeskRefused("Open this thread again before forking it.");
+    const provider = this.provider(source.record.agent);
+    if (!provider.forkAt) throw new DeskRefused("This agent does not support forking from a message.");
+    return source.forkAt(checkpointId, before, async () => {
+      const policy = { ...source.record };
+      const adoption = await provider.forkAt!(source.id, checkpointId, before, policy.cwd);
+      if (adoption.cwd !== policy.cwd) throw new DeskRefused("The agent's folder changed. Open the thread again before forking it.");
+      if (adoption.id === source.id || this.registry.get(adoption.id) || this.registry.removedRecord(adoption.id) || this.adopting.has(adoption.id) || this.loading.has(adoption.id)) throw new DeskRefused("The agent did not create an available new thread.");
+      if (this.closing) throw new DeskRefused("The host is closing. Open the fork from the sessions list after reconnecting.");
+      const now = Math.floor(Date.now() / 1000);
+      const record: ThreadRecord = {
+        id: adoption.id, agent: policy.agent, cwd: policy.cwd,
+        title: `${policy.title ?? "Thread"} (fork)`,
+        model: policy.model, provider: policy.provider, reasoningEffort: policy.reasoningEffort,
+        createdAt: now, updatedAt: now, origin: "phone",
+      };
+      if (policy.mode) record.mode = policy.mode;
+      if (policy.modeBeforePlan) record.modeBeforePlan = policy.modeBeforePlan;
+      if (policy.modeReset) record.modeReset = true;
+      const taking = this.keepFork(provider, record);
+      this.adopting.set(record.id, taking);
+      try { return await taking; }
+      finally { this.adopting.delete(record.id); }
+    });
+  }
+
+  async previewFileUndo(source: Session, owner: Peer, checkpointId: string) {
+    return this.withFileFolder(source, () => source.previewFileUndo(owner, checkpointId));
+  }
+
+  async undoFiles(source: Session, owner: Peer, previewId: string, afterReply: (action: () => void) => void) {
+    return this.withFileFolder(source, () => source.undoFiles(owner, previewId, afterReply));
+  }
+
+  private async withFileFolder<T>(source: Session, work: () => Promise<T>): Promise<T> {
+    if (this.closing || this.live.get(source.id) !== source) throw new DeskRefused("Open this thread again before restoring files.");
+    const folder = realpathSync(source.record.cwd);
+    if (this.folderLocked(source.record.cwd)) throw new DeskRefused("Wait for this folder's current file action to finish.");
+    const sessions = [...this.live.values()].filter((session) => {
+      try { return overlappingFolders(realpathSync(session.record.cwd), folder); } catch { return session === source; }
+    });
+    if (sessions.some((session) => !session.atRest || session.hasBackgroundWork)) throw new DeskRefused("Wait until every thread using this folder has finished before restoring files.");
+    this.fileRestores.add(folder);
+    try {
+      for (const session of sessions) if (await session.stopping()) throw new DeskRefused("An agent is still working in this folder. Wait before restoring files.");
+      if (sessions.some((session) => !session.atRest || session.hasBackgroundWork || session.isRetired)) throw new DeskRefused("A thread changed while its folder was checked. Review a fresh file preview.");
+      return await work();
+    } finally {
+      this.fileRestores.delete(folder);
+      for (const session of this.live.values()) {
+        try { if (overlappingFolders(realpathSync(session.record.cwd), folder) && !this.folderLocked(session.record.cwd)) session.folderAvailable(); }
+        catch { /* A removed folder has no waiting work to resume here. */ }
+      }
+    }
+  }
+
+  private folderLocked(cwd: string): boolean {
+    if (this.fileRestores.size === 0) return false;
+    try { return [...this.fileRestores].some((folder) => overlappingFolders(realpathSync(cwd), folder)); } catch { return true; }
+  }
+
+  private async keepFork(provider: Provider, record: ThreadRecord): Promise<Session> {
+    const session = this.session(record);
+    try {
+      await session.attach(await provider.resumeSession(this.sessionOptions(record), session.sink));
+      if (this.closing) throw new DeskRefused("The host is closing. Reconnect before opening the fork.");
+      record.preview = lastPreview(session.messages);
+      noteRepo(record);
+      this.registry.add(record);
+      this.live.set(record.id, session);
+      return session;
+    } catch (error) {
+      await session.close();
+      throw error;
+    }
   }
 
   /** A new thread `id` (the agent's session id: Codex's own, else the bridge's choice). */
@@ -619,7 +720,8 @@ export class SessionManager {
 
   /** A session for `record`, numbering its events on past the last one of this thread in this run. */
   private session(record: ThreadRecord): Session {
-    return new Session(record, this.registry, { modeOptions: providerModeOptions(this.provider(record.agent)), logCapacity: this.logCapacity, listener: this.listener, lastSeq: this.lastSeq.get(record.id), waiting: this.waiting, spent: this.spent, diffs: this.diffs, lastQueueID: this.lastQueueID.get(record.id) });
+    const provider = this.provider(record.agent);
+    return new Session(record, this.registry, { folderLocked: () => this.folderLocked(record.cwd), modeOptions: providerModeOptions(provider), agentName: provider.profile.displayName, logCapacity: this.logCapacity, listener: this.listener, lastSeq: this.lastSeq.get(record.id), waiting: this.waiting, spent: this.spent, diffs: this.diffs, lastQueueID: this.lastQueueID.get(record.id), disk: this.disk });
   }
 
   /** Lets go of a loaded session; it is loaded again from the registry when next asked for. */
@@ -673,6 +775,7 @@ export class SessionManager {
         continue;
       }
       const session = this.live.get(id);
+      if (session?.historyOperationInProgress) throw new RemoveRefused("Wait for this thread's fork to finish before removing it.");
       if (!session && provider?.liveThreads && (await this.stillOpen(provider, id))) {
         await this.load(id);
         continue;
@@ -681,6 +784,7 @@ export class SessionManager {
       if (session?.hasBackgroundWork) throw inBackground();
       // The agent was asked meanwhile: the step is taken only on what holds now.
       if (this.registry.get(id) !== record || this.live.get(id) !== session || this.loading.has(id) || this.adopting.has(id)) continue;
+      if (session?.historyOperationInProgress) throw new RemoveRefused("Wait for this thread's fork to finish before removing it.");
       if (session?.isAtWork) throw atWork();
       if (session?.hasBackgroundWork) throw inBackground();
       // The record first: when its files cannot be written, nothing else changes.

@@ -136,7 +136,7 @@ export async function setup(options: SetupOptions, context: Context): Promise<nu
     if (fresh || options.claude || (raw.providers.claude === false && (await ui.confirm("Claude Code is off on this host. Set it up now?", false)))) {
       await chooseClaude(raw, claude, options.claude, context);
     } else {
-      ui.say(`Claude Code ${raw.providers.claude === false ? "is off" : raw.claude.apiKey ? "uses the API key in config.json" : "uses your own Claude login"}. Change it in ${paths.config}.`);
+      ui.say(`Claude Code ${raw.providers.claude === false ? "is off" : raw.claude.apiKey ? "uses the API key in config.json" : raw.claude.oauthToken ? "uses the token in config.json" : "uses your own Claude login"}. Change it in ${paths.config}.`);
     }
   } else if (fresh) {
     raw.providers.claude = false;
@@ -450,6 +450,8 @@ async function chooseClaude(raw: RawConfig, claude: FoundAgent, wanted: ClaudeMo
   raw.providers.claude = true;
   if (mode === "login") {
     raw.claude.apiKey = null;
+    // A token from `claude setup-token` would be used over the login, so it goes too.
+    raw.claude.oauthToken = null;
     if (claude.signedIn === false) ui.warn("Claude Code is not signed in. Run claude once and sign in.");
     else ui.ok("Claude Code uses your own login, as in your terminal.");
     ui.say(termsNote);
@@ -725,7 +727,7 @@ export async function status(context: Context): Promise<number> {
   const agent = await serviceFor(system, state.label, context.plistFolder, os).state();
   const up = await answers(config.port, 1);
   const agents = [
-    config.providers.claude ? `Claude Code (${config.claude.apiKey ? "API key" : "own login"})` : null,
+    config.providers.claude ? `Claude Code (${config.claude.apiKey ? "API key" : config.claude.oauthToken ? "token" : "own login"})` : null,
     config.providers.codex ? "Codex" : null,
     config.providers.pi ? "Pi" : null,
     config.providers.cursor && cursorProgram(config.cursor.path) ? "Cursor" : null,

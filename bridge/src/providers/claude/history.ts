@@ -1,5 +1,5 @@
 import { claudeTokens, TurnTokens } from "../spent.ts";
-import type { CompactionTrigger, StoredMessage } from "../types.ts";
+import type { CompactionTrigger, MessageCheckpoint, StoredMessage } from "../types.ts";
 import { noteFor, notified } from "./background.ts";
 import { ClaudeTodos } from "./todos.ts";
 import { gatewayResult, gatewayTool } from "./tools.ts";
@@ -92,7 +92,7 @@ function commandOutput(content: unknown): string | null {
   return output ? output[1].trim() || null : null;
 }
 
-export function historyFromSession(messages: readonly unknown[], cwd: string): StoredMessage[] {
+export function historyFromSession(messages: readonly unknown[], cwd: string, checkpoints?: ReadonlyMap<string, MessageCheckpoint>): StoredMessage[] {
   const stored: StoredMessage[] = [];
   const tools = new Map<string, { name: string; input: Record<string, unknown> }>();
   /** The to-do list Claude kept with its task tools, as it went. */
@@ -247,7 +247,10 @@ export function historyFromSession(messages: readonly unknown[], cwd: string): S
     markCompaction("auto");
     flush();
     spent.close(stored);
-    stored.push({ role: "user", text: user, timestamp: at });
+    // Native history alone cannot distinguish later bridge openers from steers.
+    // The first real input can always be edited into an empty new session.
+    const checkpoint = checkpoints?.get(entry.uuid) ?? (raw === messages[0] && typeof entry.uuid === "string" && !entry.isMeta && !entry.origin && !user.startsWith("/") ? { id: entry.uuid, can_fork: false, can_edit: true } : undefined);
+    stored.push({ role: "user", text: user, timestamp: at, ...(checkpoint ? { checkpoint } : {}) });
   }
   markCompaction("auto");
   flush();

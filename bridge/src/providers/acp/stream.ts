@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { LiveOutput } from "../liveOutput.ts";
 import type { ContextUsage, ProviderEvent } from "../types.ts";
+import { Unknowns } from "../unknowns.ts";
 import type { SessionUpdate, ToolCallFields } from "./protocol.ts";
 import { blockText, contentText, gatewayResult, gatewayTool, isFinished, merged, planTool, type GatewayTool, type Quirks, type ToolCall, type Unfinished } from "./tools.ts";
 
@@ -26,7 +27,20 @@ export interface StreamOptions {
   now?: () => number;
   /** A running command's output as the agent tells it in the call's updates (`tool.progress`), sent apart from `map`'s answer. */
   progress?: (event: ProviderEvent) => void;
+  /** Called once for each kind of update the stream does not know, for the log. */
+  unknown?: (kind: string) => void;
 }
+
+/** The updates the protocol has (`SessionUpdate`) that make no event: the session reads the ones it needs itself. */
+const quiet = new Set([
+  "user_message_chunk",
+  "available_commands_update",
+  "config_option_update",
+  "current_mode_update",
+  "session_info_update",
+  "subagent_spawned",
+  "subagent_state_update",
+]);
 
 interface Row {
   call: ToolCall;
@@ -58,6 +72,7 @@ export class AcpStream {
   private readonly now: () => number;
   private readonly rows = new Map<string, Row>();
   private readonly live: LiveOutput;
+  private readonly unknowns: Unknowns;
   /** The message being streamed, for agents that number theirs, and its text so far. */
   private message: string | null = null;
   private text = "";
@@ -68,6 +83,7 @@ export class AcpStream {
     this.newID = options.newID ?? randomUUID;
     this.now = options.now ?? Date.now;
     this.live = new LiveOutput(options.progress ?? (() => {}), { now: this.now });
+    this.unknowns = new Unknowns(options.unknown ?? (() => {}), quiet);
   }
 
   map(update: SessionUpdate): ProviderEvent[] {
@@ -104,6 +120,7 @@ export class AcpStream {
         this.usage = { used: update.used, max: update.size };
         return [{ type: "usage", usage: this.usage }];
       default:
+        this.unknowns.note((update as { sessionUpdate?: unknown }).sessionUpdate);
         return [];
     }
   }

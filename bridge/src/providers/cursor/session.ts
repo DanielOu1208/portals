@@ -38,10 +38,11 @@ import {
   type ThreadMode,
 } from "../types.ts";
 import { cursorID, levelAt, levelSetting, levelsOf, modelAt, type CursorModel } from "./models.ts";
-import { cursorMode, cursorName, cursorQuirks, goAheadText, keptFullAccessText, levelLeftToCursorText, noSuchModeText, notSignedInText, portalsNote, runsEverything, signInReply, turnFailure } from "./options.ts";
+import { cursorMode, cursorName, cursorQuirks, goAheadText, keptFullAccessText, levelLeftToCursorText, noSuchModeText, notSignedInText, portalsNote, runsEverything, saysSignedOut, signInReply, turnFailure } from "./options.ts";
 import { askQuestion, createPlan, mergedTodos, permissionCard, permissionOutcome, planCard, planOutcome, questionCard, questionOutcome, todoRow, unplacedAnswer, updateTodos, type Todo } from "./requests.ts";
 import { CursorSubagents } from "./subagents.ts";
 import { cursorTools } from "./tools.ts";
+import { outOfSpace } from "../../disk.ts";
 
 // One thread of Cursor's. Its id is the id of the Cursor session it was made with
 // (`session/new`); the session it talks to now is `sessionID`, which differs only once
@@ -126,8 +127,11 @@ export interface CursorHost {
   model(id: string): CursorModel | undefined;
   /** Cursor has listed its models at some time. */
   modelsKnown(): boolean;
-  /** Keeps a thread: its conversation, its Cursor session when that is not the thread's id, whether Cursor was told of `portals`, and its to-do list. */
-  save(id: string, kept: KeptThread): void;
+  /**
+   * Keeps a thread: its conversation, its Cursor session when that is not the thread's id,
+   * whether Cursor was told of `portals`, and its to-do list. Whether it could be written.
+   */
+  save(id: string, kept: KeptThread): { kept: true } | { kept: false; error: unknown };
   /** The thread talks to another Cursor session from now on. */
   rerouted(session: CursorSession, from: string, to: string): void;
   /**
@@ -184,6 +188,20 @@ export function errorText(error: unknown): string {
   return detail && detail !== error.message ? `${error.message} (${detail})` : error.message;
 }
 
+/** Why a turn Cursor stopped short of its end did not finish, as a sentence, from its reason for stopping. */
+function stoppedShort(reason: string): string {
+  switch (reason) {
+    case "refusal":
+      return `${cursorName}'s model declined to go on.`;
+    case "max_tokens":
+      return `${cursorName}'s model stopped at the most it may write in one reply.`;
+    case "max_turn_requests":
+      return `${cursorName} stopped at the most model requests one turn may make.`;
+    default:
+      return `${cursorName} stopped the turn for a reason Portals does not know ("${reason}").`;
+  }
+}
+
 /** Asks Cursor for a new session in `cwd`, and returns it with its id checked. */
 export async function newSession(process: CursorProcess, cwd: string): Promise<SessionState & { sessionId: string }> {
   let state: SessionState | null;
@@ -216,6 +234,12 @@ export class CursorSession implements ProviderSession {
   private threadMode: ThreadMode;
   /** The run of Cursor the thread last ran on; a stopped one counts for nothing. */
   private process: CursorProcess | null;
+  /**
+   * Cursor has had the thread's session on a run with `--force`, and so keeps Run
+   * Everything in it (`keptFullAccessText`): in this run of the bridge, or, for a thread
+   * that comes up in Full access with a conversation, most likely in an earlier one.
+   */
+  private ranEverything: boolean;
   private loading: Promise<CursorProcess> | null = null;
   /** Cursor is sending the conversation again (`session/load`): it is already kept. */
   private replaying = false;
@@ -270,6 +294,8 @@ export class CursorSession implements ProviderSession {
   private readonly answers = new Map<string, string[]>();
   /** Cursor's session for the thread got the note on the `portals` command. */
   private told: boolean;
+  /** The thread was told its conversation could not be saved, and no save has worked since (`save`). */
+  private toldUnsaved = false;
   /** Cursor keeps Run Everything in the thread's session, which the thread says as its next turn starts (`KeptThread.runsEverything`). */
   private keptEverything: boolean;
   /** The subagents Cursor has told of in this run of the thread. */
@@ -283,7 +309,12 @@ export class CursorSession implements ProviderSession {
     this.sink = sink;
     this.host = host;
     this.own = cursorTools(this.answers);
-    this.stream = new AcpStream({ cwd: options.cwd, quirks: { ...cursorQuirks, own: this.own }, progress: (event) => this.sink.emit(event) });
+    this.stream = new AcpStream({
+      cwd: options.cwd,
+      quirks: { ...cursorQuirks, own: this.own },
+      progress: (event) => this.sink.emit(event),
+      unknown: (kind) => log.info(`${cursorName} sent an update the bridge does not know`, { session: this.id, kind }),
+    });
     this.subagents = new CursorSubagents(this.own);
     this.transcript = new Transcript(start.stored);
     this.sessionID = start.session;
@@ -291,6 +322,7 @@ export class CursorSession implements ProviderSession {
     // A mode Cursor has none for cannot have been kept; a thread from before is in its own.
     this.threadMode = options.mode && cursorMode(options.mode) ? options.mode : "default";
     this.process = start.process;
+    this.ranEverything = start.process?.forced === true || (this.threadMode === "full" && start.stored.length > 0);
     this.title = options.title ?? null;
     this.titleFixed = this.title !== null;
     this.told = start.told;
@@ -525,6 +557,7 @@ export class CursorSession implements ProviderSession {
   /** Cursor reads the mode as it takes a prompt, so it is only kept here, and goes with the thread's next message. */
   async setMode(mode: ThreadMode): Promise<void> {
     if (cursorMode(mode) === null) throw new SettingRefused(noSuchModeText);
+    if (this.threadMode === "full" && mode !== "full" && this.ranEverything) this.sink.emit({ type: "notice", level: "warn", text: keptFullAccessText });
     this.threadMode = mode;
   }
 
@@ -671,7 +704,9 @@ export class CursorSession implements ProviderSession {
   /**
    * How the turn ended, from why Cursor says it stopped. It only ever says `end_turn`
    * or `cancelled`: a turn it could not finish ends complete, with what went wrong as
-   * text. The one such text acted on is that it is not signed in.
+   * text. The one such text acted on is that it is not signed in. Any other reason (ACP
+   * has `refusal`, `max_tokens` and `max_turn_requests`, which Cursor has not been seen to
+   * send) is a turn stopped short, not a finished one.
    */
   private ending(stopReason: string | undefined, process: CursorProcess): TurnEnd {
     const usage = this.stream.usage ? { usage: this.stream.usage } : {};
@@ -687,13 +722,13 @@ export class CursorSession implements ProviderSession {
       this.held = null;
       return { type: "turn.end", status: "error", error: failure, retryable: true, ...usage };
     }
+    if (stopReason !== undefined && stopReason !== "end_turn") return { type: "turn.end", status: "error", error: stoppedShort(stopReason), retryable: true, ...usage };
     return { type: "turn.end", status: "complete", ...usage };
   }
 
   /** The open turn's reply ended with Cursor saying its sign-in has gone: the model never ran. */
   private signInGone(): boolean {
-    const held = this.heldText();
-    return (held ?? this.lastPiece).trim() === signInReply;
+    return saysSignedOut(this.heldText() ?? this.lastPiece);
   }
 
   /** Why the open turn failed, as Cursor said it as the turn's last piece of reply; null when it did not. */
@@ -745,8 +780,13 @@ export class CursorSession implements ProviderSession {
     if (keep && (event.type === "tool.end" || event.type === "turn.end")) this.save();
   }
 
+  /**
+   * Keeps the conversation, the only copy the thread is shown from after a restart. One
+   * that cannot be written (a full disk) is told in the thread, once until a save works
+   * again: its history may come back short.
+   */
   private save(): void {
-    this.host.save(this.id, {
+    const saved = this.host.save(this.id, {
       messages: this.transcript.messages,
       cwd: this.cwd,
       ...(this.sessionID === this.id ? {} : { session: this.sessionID }),
@@ -755,6 +795,13 @@ export class CursorSession implements ProviderSession {
       ...(this.turnOpen ? { open: true } : {}),
       ...(this.keptEverything ? { runsEverything: true } : {}),
     });
+    if (saved.kept || this.toldUnsaved) {
+      this.toldUnsaved = !saved.kept;
+      return;
+    }
+    this.toldUnsaved = true;
+    const said = "could not save this conversation. Its history may come back short.";
+    this.emit({ type: "notice", level: "warn", text: outOfSpace(saved.error) ? `The disk is full, so Portals ${said}` : `Portals ${said}` }, false);
   }
 
   /** The message as Cursor takes it: the text, then each image it can read. */
@@ -798,6 +845,7 @@ export class CursorSession implements ProviderSession {
     }
     const before = this.process;
     this.process = process;
+    if (process.forced) this.ranEverything = true;
     // Moved to the other of the folder's processes (its mode went to or from Full access):
     // the one it leaves holds what it had of the conversation, which this turn will make
     // old, so it is loaded afresh should the thread come back while that one still runs.

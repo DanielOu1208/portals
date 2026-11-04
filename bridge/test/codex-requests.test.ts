@@ -45,6 +45,35 @@ test("without a list of decisions every choice is offered, always only with a pr
   assert.deepEqual(approvalResponse("item/commandExecution/requestApproval", withRule, "always"), { decision: { acceptWithExecpolicyAmendment: { execpolicy_amendment: ["rm", "-rf"] } } });
 });
 
+test("a command's approval to reach a host names the host, and always allows that host from then on", () => {
+  const method = "item/commandExecution/requestApproval";
+  // As Codex 0.166 asks for a host its network policy does not allow yet.
+  const allow = { applyNetworkPolicyAmendment: { network_policy_amendment: { host: "registry.npmjs.org", action: "allow" } } };
+  const deny = { applyNetworkPolicyAmendment: { network_policy_amendment: { host: "registry.npmjs.org", action: "deny" } } };
+  const params = {
+    kind: "command", threadId: "t", turnId: "u", itemId: "i", startedAtMs: 1, environmentId: null, command: null,
+    networkApprovalContext: { host: "registry.npmjs.org", protocol: "https" },
+    availableDecisions: ["accept", "acceptForSession", allow, deny, "cancel"],
+  };
+  assert.deepEqual(approvalRequest(method, params, "/w", undefined), {
+    kind: "approval",
+    command: "registry.npmjs.org",
+    description: "Codex wants to reach registry.npmjs.org",
+    choices: ["once", "session", "always", "deny"],
+  });
+  assert.deepEqual(approvalResponse(method, params, "always"), { decision: allow });
+  assert.deepEqual(approvalResponse(method, params, "deny"), { decision: "decline" });
+  // With the command that reaches it, and Codex's reason, which gets the host when it does not name it.
+  const install = { ...params, command: "/bin/zsh -lc 'npm install'", reason: "Installs the packages" };
+  assert.deepEqual(approvalRequest(method, install, "/w", undefined), {
+    kind: "approval", command: "npm install", description: "Installs the packages (registry.npmjs.org)", choices: ["once", "session", "always", "deny"],
+  });
+  assert.equal((approvalRequest(method, { ...install, reason: "npm needs registry.npmjs.org" }, "/w", undefined) as { description: string }).description, "npm needs registry.npmjs.org");
+  // Without a list of decisions, always is the amendment Codex proposes to allow it.
+  const { availableDecisions: _offered, ...proposed } = { ...params, proposedNetworkPolicyAmendments: [{ host: "registry.npmjs.org", action: "allow" }] };
+  assert.deepEqual(approvalResponse(method, proposed, "always"), { decision: allow });
+});
+
 test("a file change approval reads Edit <path> and the diff, and never offers always", () => {
   const params = recordedRequest("tools", "item/fileChange/requestApproval");
   const item = fixture("tools").find((entry) => entry.method === "item/started" && entry.params.item.id === params.itemId)!.params.item;
@@ -66,6 +95,42 @@ test("a file change approval reads Edit <path> and the diff, and never offers al
   ]);
 });
 
+test("an MCP tool Codex asks about is an approval card offering what its persist allows, answered as Codex reads an elicitation's answer", () => {
+  const method = "mcpServer/elicitation/request";
+  // As Codex 0.166 asks in /mode ask.
+  const params = {
+    threadId: "t", turnId: "u", serverName: "scratch", mode: "form",
+    _meta: {
+      codex_approval_kind: "mcp_tool_call", persist: ["session", "always"], tool_description: "Says the text back in capitals.",
+      tool_params: { text: "hi" }, tool_params_display: [{ name: "text", value: "hi", display_name: "text" }],
+    },
+    message: 'Allow the scratch MCP server to run tool "shout"?',
+    requestedSchema: { type: "object", properties: {} },
+  };
+  assert.deepEqual(approvalRequest(method, params, "/w", undefined), {
+    kind: "approval",
+    command: 'scratch {"text":"hi"}',
+    description: 'Allow the scratch MCP server to run tool "shout"?',
+    choices: ["once", "session", "always", "deny"],
+  });
+  assert.deepEqual(approvalResponse(method, params, "once"), { action: "accept", content: null, _meta: null });
+  assert.deepEqual(approvalResponse(method, params, "session"), { action: "accept", content: null, _meta: { persist: "session" } });
+  assert.deepEqual(approvalResponse(method, params, "always"), { action: "accept", content: null, _meta: { persist: "always" } });
+  assert.deepEqual(approvalResponse(method, params, "deny"), { action: "decline", content: null, _meta: null });
+  // One remembered for the thread only, named by the tool, with no arguments.
+  const named = { ...params, _meta: { codex_approval_kind: "mcp_tool_call", persist: "session", tool_name: "shout", tool_params: {} } };
+  const card = approvalRequest(method, named, "/w", undefined);
+  assert.deepEqual(card.kind === "approval" ? [card.command, card.choices] : [], ["scratch/shout", ["once", "session", "deny"]]);
+  // Stop cancels it; a sub-agent's taken back as the turn ended is a no.
+  assert.deepEqual(responseFor(method, params, { kind: "withdrawn", reason: "interrupted" }), { action: "cancel", content: null, _meta: null });
+  assert.deepEqual(responseFor(method, params, { kind: "withdrawn", reason: "withdrawn" }, true), { action: "decline", content: null, _meta: null });
+  assert.equal(responseFor(method, params, { kind: "withdrawn", reason: "withdrawn" }), null);
+  assert.equal(requestKey(method, params), 'mcpServer/elicitation/request|t|u|scratch||Allow the scratch MCP server to run tool "shout"?|{"text":"hi"}');
+  // A sub-agent's, or another tool's, with the same turn id and arguments is another request.
+  assert.notEqual(requestKey(method, { ...params, threadId: "child" }), requestKey(method, params));
+  assert.notEqual(requestKey(method, named), requestKey(method, { ...named, _meta: { ...named._meta, tool_name: "whisper" } }));
+});
+
 test("requestUserInput is a clarify card, answered by question id; dismissing it answers nothing", () => {
   const params = recordedRequest("clarify", "item/tool/requestUserInput");
   assert.deepEqual(clarifyRequest(params), {
@@ -77,7 +142,7 @@ test("requestUserInput is a clarify card, answered by question id; dismissing it
         choices: ["Python", "Swift"],
         multiSelect: false,
         header: "Language",
-        descriptions: { Python: "Choose Python as your preferred language.", Swift: "Choose Swift as your preferred language." },
+        descriptions: { Python: "Choose Python.", Swift: "Choose Swift." },
       },
     ],
   });
@@ -219,6 +284,13 @@ test("other work items are rows too: MCP tools keep their name, web searches and
   assert.deepEqual(gatewayTool({ type: "collabAgentToolCall", id: "c", tool: "spawnAgent", prompt: "Review it", model: "gpt-6-luna" })?.name, "delegate_task");
   assert.equal(gatewayTool({ type: "agentMessage", id: "a", text: "hi" }), null);
   assert.deepEqual(gatewayResult({ type: "commandExecution", id: "c", status: "failed", aggregatedOutput: "no such file\n", exitCode: 1 }, "/w"), { output: "no such file\n", exit_code: 1 });
+  // Codex waiting, in words and singular or plural; a review, with what it reviews; neither has output (the findings are the reply after the review).
+  assert.deepEqual(gatewayTool({ type: "sleep", id: "s", durationMs: 1000 }), { name: "wait", args: {}, context: "1 second" });
+  assert.deepEqual(gatewayTool({ type: "sleep", id: "s", durationMs: 400 })?.context, "under a second");
+  assert.deepEqual(gatewayTool({ type: "sleep", id: "s", durationMs: 300_000 })?.context, "5 minutes");
+  assert.deepEqual(gatewayTool({ type: "enteredReviewMode", id: "e", review: "changes against 'main'" }), { name: "review", args: {}, context: "changes against 'main'" });
+  assert.deepEqual(gatewayResult({ type: "exitedReviewMode", id: "x", review: "No issues." }, "/w"), {});
+  assert.deepEqual(gatewayResult({ type: "sleep", id: "s", durationMs: 1000 }, "/w"), {});
 });
 
 test("a new thread's title is its first message's first line, cut short", () => {

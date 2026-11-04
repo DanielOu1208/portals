@@ -2,6 +2,7 @@ import { execFile, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
+import type { RecentFolder } from "../../folders.ts";
 import { log } from "../../log.ts";
 import { machineWord } from "../../platform.ts";
 import type { CommandAccess } from "../../portals/access.ts";
@@ -9,7 +10,7 @@ import type { ChildExit } from "../child.ts";
 import { nameFromText, titleInstructions, titlePrompt } from "../codex/naming.ts";
 import { WarmPool } from "../pool.ts";
 import { titleSource } from "../titles.ts";
-import { reportVersion } from "../program.ts";
+import { VersionCheck } from "../program.ts";
 import {
   DeskRefused,
   type AdoptMode,
@@ -18,6 +19,7 @@ import {
   type DeskAdoption,
   type DeskSession,
   type ModelCatalog,
+  type ModeOption,
   type Provider,
   type ProviderSession,
   type SessionOptions,
@@ -30,14 +32,13 @@ import { cancelled } from "./dialogs.ts";
 import { findSessionFile, readHistory, type PiHistory } from "./history.ts";
 import type { SearchFile } from "../../search/readers.ts";
 import { RememberedFiles } from "../../search/locate.ts";
-import { appLevel, catalogArguments, forkArguments, titleArguments, forkId, isForkId, modelLevels, olderThan, piEnvironment, piLevel, piVersion, testedPiVersion } from "./options.ts";
+import { appLevel, catalogArguments, forkArguments, titleArguments, forkId, isForkId, modelLevels, minimumPiVersion, piEnvironment, piLevel, piVersion, testedPiVersions } from "./options.ts";
 import type { PiCommandInfo, PiModel, PiState } from "./protocol.ts";
 import { PiSession, type PiHost } from "./session.ts";
 
 // Pi as an agent of the bridge (`pi` in profiles.list). It runs the installed `pi` in its
 // RPC mode, one process per thread in use, with the user's own settings, extensions,
-// skills and sign-ins. Pi does not ask before it runs a command or edits a file, and
-// through the bridge it does the same.
+// skills and sign-ins. Its permission modes use a small extension loaded per thread.
 //
 // Which models Pi can run and which commands it has is only known from a running Pi, so
 // the bridge asks a short-lived one that has no session (`pi --mode rpc --no-session`)
@@ -172,6 +173,26 @@ export function piCommands(listed: PiCommandInfo[]): AgentCommand[] {
 }
 
 export class PiProvider implements Provider, PiHost {
+  readonly supportsModes = true;
+  readonly modesWaitForTurn = true;
+  readonly modeOptions = [
+    { id: "default", label: "Default", description: "Runs without asking, as Pi does in a terminal. Your own extensions still apply." },
+    { id: "ask", label: "Ask", description: "Asks before bash, write and edit in this Pi. Subagents are outside the gate; this is not a security boundary." },
+    { id: "edits", label: "Accept edits", description: "Allows write and edit; asks before bash in this Pi. Subagents are outside the gate; this is not a security boundary." },
+    { id: "plan", label: "Plan", description: "Allows only read, grep, find and ls in this Pi. Other extensions and subagents are outside the gate; this is not a security boundary." },
+    { id: "full", label: "Full access", description: "Runs without asking. Your own extensions still apply." },
+  ] satisfies ModeOption[];
+  readonly modeMeanings = {
+    ask: "asks before bash, write and edit in this Pi. Subagents are outside the gate; this is not a security boundary",
+    edits: "allows edits and asks before bash in this Pi. Subagents are outside the gate; this is not a security boundary",
+    plan: "allows only read, grep, find and ls in this Pi. Other extensions and subagents are outside the gate; this is not a security boundary",
+    full: "runs without asking; your own extensions still apply",
+  };
+
+  defaultMode(): "full" {
+    return "full";
+  }
+
   readonly piPath: string;
   readonly instructions: string | null;
   readonly pool: WarmPool;
@@ -181,6 +202,8 @@ export class PiProvider implements Provider, PiHost {
   private readonly env: NodeJS.ProcessEnv;
   private readonly now: () => number;
   private readonly checking: boolean;
+  /** Which Pi is installed, as `pi --version` said at the bridge's start, and again while it was too old. */
+  readonly version: VersionCheck;
   /** The last check of the installed version: why no turn can run on it, or null. */
   private checked: Promise<string | null> = Promise.resolve(null);
   private readonly sessions = new Set<PiSession>();
@@ -207,6 +230,7 @@ export class PiProvider implements Provider, PiHost {
     this.env = options.env ?? process.env;
     this.now = options.now ?? Date.now;
     this.checking = options.checkVersion ?? true;
+    this.version = new VersionCheck({ name: "Pi", tested: testedPiVersions, minimum: minimumPiVersion, update: "pi update", path: this.piPath, setting: "pi.path" });
     this.pool = new WarmPool({ maxWarm: options.settings.maxWarm, idleMs: options.settings.idleMinutes * 60_000, now: options.now });
     this.interruptGraceMs = options.interruptGraceMs ?? 15_000;
     this.callTimeoutMs = options.callTimeoutMs ?? 30_000;
@@ -219,7 +243,7 @@ export class PiProvider implements Provider, PiHost {
       name: "pi",
       kind: "pi",
       displayName: "Pi",
-      description: `Pi on this ${machineWord()}, with your own settings, extensions and sign-ins. It does not ask before it acts.`,
+      description: `Pi on this ${machineWord()}, with your own settings, extensions and sign-ins. Pick a mode to ask before commands and edits. Subagents are outside the gate.`,
       model: this.catalog?.models.model ?? "",
       provider: this.catalog?.models.provider ?? "",
     };
@@ -238,18 +262,13 @@ export class PiProvider implements Provider, PiHost {
 
   /**
    * Logs which Pi is installed, and resolves with the sentence a turn fails with when it
-   * is older than the tested release: such a Pi lacks records a turn ends by, so a turn
-   * on it could run for ever. Null for any other, and for none (a turn then fails with
-   * its own sentence, which names `pi.path`).
+   * is older than the minimum: such a Pi lacks records a turn ends by, so a turn on it
+   * could run for ever. Null for any other, and for none (a turn then fails with its own
+   * sentence, which names `pi.path`).
    */
   private async checkVersion(): Promise<string | null> {
-    const version = await piVersion(this.piPath, this.environment(null));
-    if (version === null || !olderThan(version, testedPiVersion)) {
-      reportVersion({ name: "Pi", version, tested: testedPiVersion, path: this.piPath, setting: "pi.path" });
-      return null;
-    }
-    log.error(`Pi is ${version}, which is too old for this bridge: it needs ${testedPiVersion} or newer. No Pi thread runs until it is updated (pi update).`);
-    return `Pi ${version} is too old for the bridge, which needs ${testedPiVersion} or newer. Update it on the ${machineWord()} (pi update), then send the message again.`;
+    this.version.installedIs(await piVersion(this.piPath, this.environment(null)));
+    return this.version.refusal();
   }
 
   /** Why no turn can run on the installed Pi; null when one can. Checked again while it is too old, so an update is seen without a restart. */
@@ -394,6 +413,11 @@ export class PiProvider implements Provider, PiHost {
       log.warn("could not ask the Mac whether Pi runs in a terminal", { error: (error as Error).message });
       throw new Error(`Portals could not check whether Pi is running in a terminal on the ${machineWord()} (${(error as Error).message}), so nothing was sent to this session. Send the message again.`);
     }
+  }
+
+  /** Where Pi's sessions ran, at the desk and here alike, from the headers of its session files. */
+  async recentFolders(): Promise<RecentFolder[]> {
+    return this.stored.folders();
   }
 
   /** Pi's sessions, newest first, each `open` while a Pi runs in a terminal in its folder. The bridge's own threads are among them: the bridge leaves those out. */
