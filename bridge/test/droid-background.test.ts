@@ -8,6 +8,15 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { backgroundProcesses, DroidBackground, type BackgroundProcess } from "../src/providers/droid/background.ts";
 import type { ProviderEvent, SubagentInfo } from "../src/providers/types.ts";
 
+/** Waits until `check` holds. */
+async function until(check: () => boolean, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!check()) {
+    if (Date.now() > deadline) assert.fail("timed out");
+    await sleep(5);
+  }
+}
+
 function rows(events: ProviderEvent[], id?: string): SubagentInfo[] {
   return events.flatMap((event) => (event.type === "subagent" && (!id || event.subagent.id === id) ? [event.subagent] : []));
 }
@@ -47,10 +56,9 @@ test("a background command Droid lists is a command row with a Stop, its output 
       startedAt: process.startedAtMs, background: true, stoppable: true,
     });
     assert.equal(r.background.target("toolu_1#4242"), "toolu_1", "stopped by Droid's id for it");
-    await sleep(60);
+    await until(() => r.last("toolu_1#4242")!.summary === "tick 1");
     appendFileSync(file, "tick 2\n");
-    await sleep(60);
-    assert.equal(r.last("toolu_1#4242")!.summary, "tick 2");
+    await until(() => r.last("toolu_1#4242")!.summary === "tick 2");
     // The same list again (another command's start or end) changes nothing.
     const count = r.events.length;
     r.background.list([{ ...process, outputFile: file }]);
@@ -60,7 +68,8 @@ test("a background command Droid lists is a command row with a Stop, its output 
     r.background.finished("toolu_1", "failed");
     assert.equal(r.last("toolu_1#4242")!.status, "running");
     r.background.list([]);
-    await sleep(30);
+    // Its row says so once the file's end has been read.
+    await until(() => r.last("toolu_1#4242")!.status !== "running");
     const last = r.last("toolu_1#4242")!;
     assert.equal(last.status, "failed");
     assert.equal(last.stoppable, false);
@@ -106,7 +115,7 @@ test("a Droid command that left the list before Droid said how it ended waits fo
   r.background.list([listed("toolu_2", 2)]);
   r.background.list([]);
   atWork = false;
-  await sleep(80);
+  await until(() => r.last("toolu_2#2")!.status !== "running");
   assert.equal(r.last("toolu_2#2")!.status, "completed");
 });
 

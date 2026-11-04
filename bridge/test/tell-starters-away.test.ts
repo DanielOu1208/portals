@@ -133,12 +133,16 @@ test("a notice whose answer was lost, its starter's bridge restarted before the 
       const notice = method === "thread.send" && String(params.text).includes("Notice from the bridge");
       const answer = await call(name, method, params, ...rest);
       if (notice && !lost) {
-        lost = true;
         await toA1.close();
         await a1.close();
+        // Only now: a restart begins once the bridge before it has stopped, and one begun
+        // sooner reads the fake agent's conversation from before that bridge kept the notice.
+        lost = true;
         throw new Error("Could not reach mac-a: the connection closed");
       }
-      if (notice && a2) takenAfterRestart = true;
+      // A has stopped: a try that is answered was taken by the bridge after it, also one
+      // that came while that bridge was still starting.
+      if (notice) takenAfterRestart = true;
       return answer;
     };
     const parent = await createThread(toA1);

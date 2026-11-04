@@ -1,9 +1,10 @@
+import { realHome } from "./environment.ts";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, utimesSync, writeFileSync } from "node:fs";
 import { open, type FileHandle } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, sep } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { temporaryRoots } from "../src/folders.ts";
@@ -27,6 +28,23 @@ let elsewhere: string;
 let other: string;
 let home: string;
 let reader: FileReader;
+
+/** A new folder in the first of `places` that can take one and that none of the `temporary` folders holds; undefined when none does. */
+function folderOutside(temporary: string[], places: string[]): string | undefined {
+  const roots = temporary.map((folder) => realpathSync(folder));
+  for (const place of places) {
+    let made: string;
+    try {
+      made = realpathSync(mkdtempSync(join(place, ".file-read-")));
+    } catch {
+      // Not there, or not to be written to.
+      continue;
+    }
+    if (!roots.some((root) => made.startsWith(root + sep))) return made;
+    rmSync(made, { recursive: true, force: true });
+  }
+  return undefined;
+}
 
 before(() => {
   root = realpathSync(mkdtempSync(join(tmpdir(), "file-read-")));
@@ -76,13 +94,32 @@ test("an image anywhere on the Mac is given: a temporary folder, another thread'
   assert.equal(((await reader.read({ cwd: work, path: `${work}-two/a.png`, purpose: "image" })) as any).kind, "image");
 });
 
-test("a file outside every temporary folder is given, an image as an image and text as text", async () => {
+test("a folder for a fixture outside every temporary folder is made in the first place that is, or nowhere", () => {
+  const places = join(root, "places");
+  const held = join(places, "temporary", "checkout");
+  const free = join(places, "free");
+  for (const folder of [held, free]) mkdirSync(folder, { recursive: true });
+  const temporary = [join(places, "temporary")];
+  const missing = join(places, "not-there");
+
+  const made = folderOutside(temporary, [missing, held, free]);
+  assert.equal(made === undefined ? undefined : dirname(made), free);
+  assert.deepEqual(readdirSync(held), [], "nothing is left where it would not do");
+  assert.ok(existsSync(made!));
+  assert.equal(folderOutside(temporary, [missing, held]), undefined);
+  assert.deepEqual(readdirSync(held), []);
+});
+
+test("a file outside every temporary folder is given, an image as an image and text as text", async (t) => {
   // Every other fixture is under the temporary folder, where images were given before too:
-  // this one is in the bridge's node_modules (ignored by git), which no temporary folder holds.
-  const away = realpathSync(mkdtempSync(fileURLToPath(new URL("../node_modules/.file-read-", import.meta.url))));
+  // this one is in the bridge's node_modules (ignored by git), or, for a checkout in a
+  // temporary folder, in the home this test run came with: it is taken away again below.
+  const away = folderOutside([...temporaryRoots, tmpdir()].filter((folder) => existsSync(folder)), [fileURLToPath(new URL("../node_modules/", import.meta.url)), realHome]);
+  if (away === undefined) {
+    t.skip("Nowhere to put a file outside every temporary folder: both this checkout and the home are in one, or cannot be written to.");
+    return;
+  }
   try {
-    const temporary = [...temporaryRoots, tmpdir()].map((folder) => realpathSync(folder));
-    assert.ok(!temporary.some((folder) => away.startsWith(folder + sep)), away);
     writeFileSync(join(away, "shot.png"), png);
     writeFileSync(join(away, "notes.txt"), "away\n");
     for (const cwd of [work, home, "/"]) {
