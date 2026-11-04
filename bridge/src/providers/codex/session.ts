@@ -22,7 +22,7 @@ import type {
   TurnUsage,
 } from "../types.ts";
 import { CodexError } from "./client.ts";
-import { compactCommand, historyFromThread, subagentsCalledIn, userInputText } from "./history.ts";
+import { commandOf, compactCommand, historyFromThread, reviewCommand, subagentsCalledIn, userInputText } from "./history.ts";
 import { codexEffort, collaborationMode, policyFor, settledDefaults, threadModeFor, type DesktopDefaults, type WorkMode } from "./options.ts";
 import {
   approvalRequest,
@@ -60,6 +60,11 @@ import type { AskForApproval, FileUpdateChange, RateLimitSnapshot, RequestId, Sa
 //   with `thread/compact/start`: Codex summarises the thread in a turn of its own, which
 //   has no message in it, gets its id from `turn/started`, and takes no message sent
 //   meanwhile (they wait for it to end).
+// - `/review` is carried out with `review/start`, on the thread itself: Codex reviews the
+//   uncommitted changes, or what follows the command. The review's turn has no message of
+//   the user's and takes none in meanwhile; it opens with its start (`enteredReviewMode`),
+//   also one begun at the desk, whose `turn/started` names the review's own turn, not it.
+// - A message "/name …" whose name is one of Codex's skills carries the skill (./skills.ts).
 // - `/mode plan` is Codex's own plan mode (`collaborationMode`), in which Codex may ask
 //   questions and ends its turn with a plan. The plan is put to the person as a plan
 //   card while the app's turn goes on: Start carries it out in a turn of Codex's default
@@ -108,6 +113,8 @@ export interface CodexHost {
   readonly timeZone?: string;
   /** Names the thread after its first message, `message`, as Codex's own apps name theirs. */
   nameThread(thread: string, message: string): void;
+  /** The skill a message in `cwd` runs ("/name …"), if it names one of Codex's (./skills.ts); throws when Codex cannot list them. */
+  skill(cwd: string, text: string): Promise<{ name: string; path: string } | null>;
   forget(session: CodexSession): void;
 }
 
@@ -148,6 +155,17 @@ type Held =
  */
 function isCompact(prompt: Prompt): boolean {
   return prompt.images.length === 0 && (prompt.files?.length ?? 0) === 0 && new RegExp(`^/${compactCommand}(\\s|$)`).test(prompt.text.trim());
+}
+
+/** A message that is `/review`, with what to review after it, if anything; one with images or files is words. */
+function isReview(prompt: Prompt): boolean {
+  return prompt.images.length === 0 && (prompt.files?.length ?? 0) === 0 && new RegExp(`^/${reviewCommand}(\\s|$)`).test(prompt.text.trim());
+}
+
+/** What `review/start` reviews for "/review …": what follows the command, else the uncommitted changes. */
+export function reviewTarget(text: string): { type: "uncommittedChanges" } | { type: "custom"; instructions: string } {
+  const instructions = text.trim().slice(reviewCommand.length + 1).trim();
+  return instructions ? { type: "custom", instructions } : { type: "uncommittedChanges" };
 }
 
 /** Why a message waiting for the bridge to catch up with a thread fails (`unreachable`). */
@@ -263,6 +281,8 @@ export class CodexSession implements ProviderSession {
   private closed = false;
   /** The running turn is a `/compact`, which Codex takes no message into (`turn/steer`). */
   private compacting = false;
+  /** The running turn is a `/review`, which takes no message in either. */
+  private reviewing = false;
   /** A turn Codex began without the bridge (at the desk), until its user message arrives. */
   private external: string | null = null;
   private runningUser: string | null = null;
@@ -556,7 +576,8 @@ export class CodexSession implements ProviderSession {
     this.turnID = null;
     this.starting = true;
     this.compacting = isCompact(prompt);
-    void (this.compacting ? this.compact() : this.begin(prompt));
+    this.reviewing = !this.compacting && isReview(prompt);
+    void (this.compacting ? this.compact() : this.reviewing ? this.review(prompt) : this.begin(prompt));
   }
 
   steer(prompt: Prompt): Promise<boolean | "refused"> {
@@ -564,7 +585,7 @@ export class CodexSession implements ProviderSession {
   }
 
   steerable(): boolean {
-    return !this.compacting && this.planCard === null && !this.policyPending();
+    return !this.compacting && !this.reviewing && this.planCard === null && !this.policyPending();
   }
 
   /** A steer cannot change the running turn's policy; only the next turn/start can. */
@@ -785,6 +806,31 @@ export class CodexSession implements ProviderSession {
   }
 
   /**
+   * `/review`. Codex answers with the review's turn, which runs on the thread with the
+   * settings Codex has for it (`review/start` takes no others).
+   */
+  private async review(prompt: Prompt): Promise<void> {
+    if (this.closed) return;
+    const beginning = this.beginning = {};
+    try {
+      await this.subscribe();
+      if (this.beginning !== beginning) return;
+      const result = await this.host.client.call("review/start", { threadId: this.id, target: reviewTarget(prompt.text), delivery: "inline" });
+      if (this.beginning !== beginning) return;
+      if (this.turnOpen && this.turnID === null && this.starting && typeof result?.turn?.id === "string") this.adopt(result.turn.id);
+    } catch (error) {
+      if (this.beginning !== beginning) return;
+      this.starting = false;
+      this.endTurn({ type: "turn.end", status: "error", error: `Codex could not start the review: ${(error as Error).message}`, retryable: true });
+    } finally {
+      if (this.beginning === beginning) {
+        this.beginning = null;
+        this.starting = false;
+      }
+    }
+  }
+
+  /**
    * What the thread's next turn is to run with, where Codex has it otherwise. `reset`:
    * the thread is back in `default` from another mode, whose policy is undone.
    */
@@ -814,10 +860,19 @@ export class CodexSession implements ProviderSession {
     return out;
   }
 
-  /** The message as Codex takes it: the text, then each image as a file in the bridge's folder. */
+  /**
+   * The message as Codex takes it: the text, the skill it runs ("/name …") if any, then
+   * each image as a file in the bridge's folder.
+   */
   private async input(prompt: Prompt): Promise<UserInput[]> {
     const input: UserInput[] = [];
     if (prompt.text !== "") input.push({ type: "text", text: prompt.text, text_elements: [] });
+    const skill = prompt.text.startsWith("/") ? await this.host.skill(this.cwd, prompt.text).catch((error: Error) => {
+      // Sent as words: Codex reads the skill's name, if not its instructions.
+      log.warn("Codex did not list its skills for a message that may run one", { session: this.id, error: error.message });
+      return null;
+    }) : null;
+    if (skill) input.push({ type: "skill", name: skill.name, path: skill.path });
     let skipped = 0;
     for (const image of prompt.images) {
       if (!imageType(image.data)) {
@@ -923,6 +978,7 @@ export class CodexSession implements ProviderSession {
     this.turnID = null;
     this.runningUser = null;
     this.compacting = false;
+    this.reviewing = false;
     this.planning = false;
     this.proposed = null;
     this.stopAsked = false;
@@ -1062,8 +1118,9 @@ export class CodexSession implements ProviderSession {
         // One begun elsewhere counts as heard of once it shows (its message, or its
         // compaction): until then, a reconnect still looks for it (`joinMissed`).
         if (this.turnOpen) {
-          // The answer to turn/start may come after the turn's first notifications.
-          if (this.turnID === null && this.starting) this.adopt(id);
+          // The answer to turn/start may come after the turn's first notifications. A
+          // review's own turn works for the one `review/start` answers with (its root).
+          if (this.turnID === null && this.starting) this.adopt(this.reviewing && typeof params.turn.rootTurnId === "string" ? params.turn.rootTurnId : id);
           else if (this.planCard && this.turnID === null) {
             // Begun at the desk while the plan card waits: the thread has gone on without
             // it, so the card closes and the app's turn ends; the desk's turn shows as its own.
@@ -1104,6 +1161,21 @@ export class CodexSession implements ProviderSession {
           this.external = null;
           this.compacting = true;
           this.runningUser = `/${compactCommand}`;
+          this.sink.emit({ type: "turn.begin", user: this.runningUser, command: true });
+          if (!this.subscribed) {
+            this.subscribe(true).catch((error: Error) => log.warn("could not follow a Codex thread a turn began in", { session: this.id, error: error.message }));
+          }
+        }
+        // A review begun at the desk: no `turn/started` names its turn (the one that comes
+        // is the review's own, under it), and its start opens it, as a `/review`.
+        if (item.type === "enteredReviewMode" && method === "item/started" && !this.turnOpen && typeof params.turnId === "string" && params.turnId !== this.lastEnded) {
+          this.turnOpen = true;
+          this.turnID = params.turnId;
+          this.heard(params.turnId);
+          this.external = null;
+          this.reviewing = true;
+          this.runningUser = `/${reviewCommand}`;
+          this.stream.beginTurn(params.turnId);
           this.sink.emit({ type: "turn.begin", user: this.runningUser, command: true });
           if (!this.subscribed) {
             this.subscribe(true).catch((error: Error) => log.warn("could not follow a Codex thread a turn began in", { session: this.id, error: error.message }));
@@ -1768,7 +1840,7 @@ export class CodexSession implements ProviderSession {
       // told from it, once it has one (until then, its message is still to come).
       const begun = turns.findIndex((turn) => turn.id === this.external);
       const turn = turns[begun];
-      const shows = (turn?.items as Params[] | undefined)?.some((item) => item.type === "userMessage" || item.type === "contextCompaction");
+      const shows = (turn?.items as Params[] | undefined)?.some((item) => item.type === "userMessage" || item.type === "contextCompaction" || item.type === "enteredReviewMode");
       if (!turn || (turn.status === "inProgress" && !shows)) return;
       this.external = null;
       // Not past turns missed before it (in an earlier drop, whose reading failed).
@@ -1843,17 +1915,17 @@ export class CodexSession implements ProviderSession {
     return heardClears(this.reading, turn) ?? [];
   }
 
-  /** A turn that ended while the connection was down: told whole, opened by its message, or as a `/compact`. */
+  /** A turn that ended while the connection was down: told whole, opened by its message, or as a `/compact` or a `/review`. */
   private tellWhole(turn: Turn): void {
     const opener = (turn.items as Params[]).find((item) => item.type === "userMessage");
-    // Neither said anything nor compacted: nothing to tell.
-    if (!opener && !(turn.items as Params[]).some((item) => item.type === "contextCompaction")) return;
+    // Neither said anything, compacted nor reviewed: nothing to tell.
+    if (!opener && !(turn.items as Params[]).some((item) => item.type === "contextCompaction" || item.type === "enteredReviewMode")) return;
     this.turnOpen = true;
     this.turnID = turn.id;
     this.stream.beginTurn(turn.id);
     // Its message opens it; any after it were steered in.
     if (opener) this.stream.known([opener]);
-    this.sink.emit({ type: "turn.begin", user: opener ? userInputText(opener.content) : `/${compactCommand}`, clears: this.clearsFor(turn.id), command: !opener });
+    this.sink.emit({ type: "turn.begin", user: opener ? userInputText(opener.content) : commandOf(turn.items as Params[]), clears: this.clearsFor(turn.id), command: !opener });
     // Told in the thread's order, after any shown since the drop: the latest shown now.
     this.lastShownTurn = turn.id;
     this.reportEnd(this.stream.reconcile(turn), turn.status);
@@ -1869,15 +1941,17 @@ export class CodexSession implements ProviderSession {
     const items = turn.items as Params[];
     const opener = items.find((item) => item.type === "userMessage");
     const compaction = !opener && items.some((item) => item.type === "contextCompaction");
+    const review = !opener && items.some((item) => item.type === "enteredReviewMode");
     this.stream.beginTurn(turn.id, true);
-    if (!opener && !compaction) {
+    if (!opener && !compaction && !review) {
       this.external = turn.id;
       return;
     }
     this.turnOpen = true;
     this.turnID = turn.id;
-    this.runningUser = opener ? userInputText(opener.content) : `/${compactCommand}`;
-    this.compacting = compaction;
+    this.runningUser = opener ? userInputText(opener.content) : commandOf(items);
+    this.compacting = compaction && !review;
+    this.reviewing = review;
     if (opener) this.stream.known([opener]);
     for (const item of items) {
       if (item.type === "fileChange" && Array.isArray(item.changes)) this.changes.set(item.id, item.changes);

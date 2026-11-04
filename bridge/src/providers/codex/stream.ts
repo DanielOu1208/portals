@@ -26,7 +26,11 @@ import type { RateLimitSnapshot, RateLimitWindow, Turn } from "./types/index.ts"
 //   streaming when the connection dropped takes no more pieces once it is back (some
 //   were lost meanwhile): the rest of it comes whole when it completes.
 // - A command's output streams as it runs (`item/commandExecution/outputDelta`), as its
-//   row's live output (`tool.progress`, through `progress`, at most four a second).
+//   row's live output (`tool.progress`, through `progress`, at most four a second). So
+//   does a plan as Codex writes it (`item/plan/delta`), before its row has the whole.
+// - A review (`review/start`, or `/review` at the desk) is one row, from the item that
+//   starts it (`enteredReviewMode`) to the one that ends it (`exitedReviewMode`), with
+//   the review's commands as rows of their own between them.
 // - `turn/completed` ends the turn. A command still running then was left running in
 //   the background (a background terminal, which goes on printing and completes later):
 //   its row closes with the output so far, and `background` is told of it.
@@ -94,6 +98,8 @@ export class CodexStream {
   private readonly done = new Set<string>();
   private userMessages = 0;
   private planUpdates = 0;
+  /** The row of the review under way: its `enteredReviewMode` item's id. */
+  private review: string | null = null;
   /** Text streamed since the last tool or closed piece, to close at a steer. */
   private openText = "";
   private lastError: string | null = null;
@@ -141,6 +147,7 @@ export class CodexStream {
     this.done.clear();
     this.userMessages = 0;
     this.planUpdates = 0;
+    this.review = null;
     this.openText = "";
     this.lastError = null;
     this.compactingFrom = null;
@@ -190,6 +197,7 @@ export class CodexStream {
       case "item/agentMessage/delta":
         return this.textDelta(params.itemId, params.delta);
       case "item/commandExecution/outputDelta":
+      case "item/plan/delta":
         if (typeof params.itemId === "string" && typeof params.delta === "string" && this.tools.has(params.itemId)) this.live.append(params.itemId, params.delta);
         return [];
       case "item/reasoning/summaryPartAdded":
@@ -240,6 +248,12 @@ export class CodexStream {
       case "contextCompaction":
         this.compactingFrom = this.contextUsed;
         return [{ type: "status", text: "Compacting the conversation…" }];
+      case "enteredReviewMode":
+        this.review = item.id;
+        return this.openTool(item);
+      case "exitedReviewMode":
+        // Its row is the review's, closed when it completes.
+        return [];
       default:
         return isToolItem(item) ? this.openTool(item) : [];
     }
@@ -268,6 +282,15 @@ export class CodexStream {
         this.compactingFrom = null;
         return [{ type: "status", text: "" }, compacted];
       }
+      case "enteredReviewMode":
+        // Open until the review ends; opened now when its start came before the bridge listened.
+        this.review = item.id;
+        return this.openTool(item);
+      case "exitedReviewMode": {
+        const review = this.review;
+        this.review = null;
+        return review !== null && this.tools.has(review) ? this.closeTool({ ...item, id: review }) : this.closeTool(item);
+      }
       default:
         return isToolItem(item) ? this.closeTool(item) : [];
     }
@@ -295,9 +318,10 @@ export class CodexStream {
     // runs, and a wait comes to be about those that ended meanwhile.
     const tool = gatewayTool(item, this.calledAbout(item)) ?? open;
     const duration = typeof item.durationMs === "number" ? item.durationMs / 1000 : (this.now() - open.startedAt) / 1000;
+    // A label only the start had stays (a review's, which its end does not say).
     const end: ProviderEvent = withContext(
       { type: "tool.end", id: item.id, name: tool.name, args: tool.args, result: gatewayResult(item, this.cwd), durationSeconds: Math.max(0, Math.round(duration * 1000) / 1000) },
-      tool.context,
+      tool.context ?? open.context,
     );
     return [...events, end];
   }

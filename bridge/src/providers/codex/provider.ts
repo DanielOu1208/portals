@@ -32,7 +32,8 @@ import { reportVersion } from "../program.ts";
 import { titleFrom, titleSource } from "../titles.ts";
 import { CodexClient, processConnector, socketConnector, type ClientListener, type Connector } from "./client.ts";
 import { codexVersion, defaultSocketPath, desktopDefaults, testedCodexVersion, threadModeFor, type DesktopDefaults } from "./options.ts";
-import { compactCommand } from "./history.ts";
+import { compactCommand, reviewCommand } from "./history.ts";
+import { listSkills, skillCommands, skillIn } from "./skills.ts";
 import { nameFrom, titleConfig, titleInstructions, titlePrompt, titleSchema } from "./naming.ts";
 import { onPath, type CommandAccess } from "../../portals/access.ts";
 import { idKey } from "./requests.ts";
@@ -503,9 +504,26 @@ export class CodexProvider implements Provider, CodexHost {
     };
   }
 
-  /** The one Codex command a thread takes from the app: `/compact`, which the session carries out (`thread/compact/start`). */
-  async commands(): Promise<AgentCommand[]> {
-    return [{ name: compactCommand, description: "Summarise the conversation so far, to free up context", usage: "", skill: false }];
+  /**
+   * The Codex commands a thread takes from the app, which the session carries out:
+   * `/compact` (`thread/compact/start`) and `/review` (`review/start`); then Codex's skills
+   * for the thread's folder (./skills.ts). Without the skills when Codex cannot list them.
+   */
+  async commands(thread?: { id: string; cwd: string }): Promise<AgentCommand[]> {
+    const own: AgentCommand[] = [
+      { name: compactCommand, description: "Summarise the conversation so far, to free up context", usage: "", skill: false },
+      { name: reviewCommand, description: "Review your uncommitted changes", usage: "[what to review]", skill: false },
+    ];
+    try {
+      return [...own, ...skillCommands(await listSkills(this.client, thread?.cwd), own.map((command) => command.name))];
+    } catch (error) {
+      log.debug("Codex did not list its skills", { error: (error as Error).message });
+      return own;
+    }
+  }
+
+  async skill(cwd: string, text: string): Promise<{ name: string; path: string } | null> {
+    return skillIn(text, await listSkills(this.client, cwd));
   }
 
   defaults(): DesktopDefaults | null {

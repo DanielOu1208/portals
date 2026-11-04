@@ -895,8 +895,12 @@ What the app sees:
 | `commandExecution` | Terminal row: the command (without Codex's `zsh -lc` wrapper), its output, its exit code |
 | `fileChange` | Edit row with a unified diff; a new file is a Write row |
 | `mcpToolCall` · `webSearch` · sub-agents · plan updates | The tool's own name · Web search · Delegate · To-do rows |
+| A plan of plan mode (`plan`) | Plan row, filled in as Codex writes it (`item/plan/delta`, as live output) |
+| `sleep` (Codex waiting) | Wait row, saying for how long |
+| A review (`enteredReviewMode` to `exitedReviewMode`) | One Review row from its start to its end, saying what it reviews; the review's commands are rows of their own, and its findings are Codex's reply |
 | A command approval | once (`accept`), for this thread (`acceptForSession`, when Codex offers it), always (the rule Codex proposes, when it offers one), deny (`decline`: the turn goes on; what to do instead, when the app gives it, follows as your message steered into the turn) |
 | A file-change approval | "Edit <path>" and the diff: once, for this thread, deny |
+| A command's approval to reach a host (`networkApprovalContext`) | The host (or the command reaching it) and "Codex wants to reach <host>"; always allows the host from then on (the network amendment Codex offers) |
 | `request_user_input` | A question card |
 | A turn started in a terminal on a thread the bridge follows | A turn of its own |
 | Codex's name for the thread | The thread's title; until the bridge has named a new thread, the first line of its first message |
@@ -906,8 +910,15 @@ What the app sees:
 Models are the ones `model/list` offers (hidden ones left out), from provider `openai`;
 the default is `config.toml`'s. The app's slider offers each model its
 `supportedReasoningEfforts` (`model_levels`); a level a model lacks goes to the next one
-up it has, else its strongest. Of Codex's own slash commands only `/compact` is offered:
-it runs `thread/compact/start`, a turn of its own. `/usage` shows your plan and how much of
+up it has, else its strongest. Of Codex's own slash commands the bridge offers those it
+can carry out through the app-server: `/compact` runs `thread/compact/start`, a turn of
+its own, and `/review` runs `review/start` on the thread (the uncommitted changes, or what
+follows the command), a turn of its own too, with the thread's settings as Codex has them.
+Neither takes a message in while it runs: one sent meanwhile waits for it. The rest of
+Codex's commands are its terminal's own. Codex's skills for the thread's folder
+(`skills/list`, those turned off left out) are offered as skills: `/name what to do` goes
+to Codex as it is, with the skill beside it (a `skill` input), as Codex's own apps send a
+skill picked from their menus. `/usage` shows your plan and how much of
 each of its limits is used now (`account/rateLimits/read`), a workspace's spending limit,
 what turns work away where no limit shows it (a workspace's credits used up), and the
 credits left.

@@ -250,6 +250,37 @@ test("a /compact reads back as the command and the mark of where it compacted; C
   );
 });
 
+test("a review reads back as /review, its commands, then its row and the findings as the reply; the review's own turn is told inside it", () => {
+  // As Codex 0.166 keeps a review: the review's own turn (its prompt and work, cut off)
+  // first, under the review's turn as its root; then the review's start, end and reply.
+  const turn = (id: string, items: unknown[], status: string, durationMs: number | null) => ({ id, rootTurnId: "review", items, itemsView: "full", status, error: null, startedAt: 5, completedAt: 9, durationMs });
+  const command = { type: "commandExecution", id: "exec-1", command: "/bin/zsh -lc 'git diff'", cwd: "/w", processId: null, status: "completed", commandActions: [], aggregatedOutput: "+helo\n", exitCode: 0, durationMs: 5 };
+  const prompt = { type: "userMessage", id: "u", clientId: null, content: [{ type: "text", text: "Review the current code changes and provide prioritized findings.", text_elements: [] }] };
+  const findings = "hello.txt says helo: a typo.";
+  const thread = (review: unknown[], status = "completed") => ({
+    turns: [
+      turn("reviewer", [prompt, { type: "reasoning", id: "r", summary: [], content: [] }, command], "interrupted", null),
+      turn("review", review, status, 24_000),
+    ],
+  }) as never;
+  const entered = { type: "enteredReviewMode", id: "entered", review: "current changes" };
+  const ended = [entered, { type: "exitedReviewMode", id: "exited", review: findings }, { type: "agentMessage", id: "a", text: findings, phase: null }];
+  const { messages } = historyFromThread(thread(ended), "/w", false);
+  assert.deepEqual(messages, [
+    { role: "user", text: "/review", timestamp: 5 },
+    { role: "tool", name: "terminal", args: { command: "git diff" }, content: JSON.stringify({ output: "+helo\n", exit_code: 0 }), tool_call_id: "exec-1", timestamp: 9 },
+    { role: "tool", name: "review", args: {}, context: "current changes", content: JSON.stringify({}), tool_call_id: "entered", timestamp: 9 },
+    { role: "assistant", text: findings, timestamp: 9, turn_usage: { seconds: 24 } },
+  ]);
+
+  // Stopped before it ended: its row says so, after what it did.
+  const stopped = historyFromThread(thread([entered], "interrupted"), "/w", false).messages;
+  assert.deepEqual(
+    stopped.map((message) => (message.role === "tool" ? [message.name, JSON.parse(message.content!)] : [message.role, "text" in message ? message.text : null])),
+    [["user", "/review"], ["terminal", { output: "+helo\n", exit_code: 0 }], ["review", { status: "error", error: "Stopped before it finished." }], ["assistant", ""]],
+  );
+});
+
 test("images in a message read back as @image lines after its text", () => {
   assert.equal(
     userInputText([

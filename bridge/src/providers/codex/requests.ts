@@ -9,6 +9,8 @@ import type { FileUpdateChange, RequestId } from "./types/index.ts";
 //   approval cards. once is `accept`, session `acceptForSession`, always the exec-policy
 //   amendment Codex offers (commands only, and only when offered), deny `decline` (the
 //   turn goes on; `cancel` would stop it).
+// - A command's approval to reach a host on the network (`networkApprovalContext`) names
+//   the host, and always is the amendment that allows that host from then on, when offered.
 // - `item/tool/requestUserInput` is a clarify card; the answers go back keyed by the
 //   question ids.
 // - Questions asked without waiting (`request_user_input_async`, which GPT-6.1 Sol has
@@ -26,9 +28,24 @@ export const commandApproval = "item/commandExecution/requestApproval";
 export const fileChangeApproval = "item/fileChange/requestApproval";
 export const userInput = "item/tool/requestUserInput";
 
-/** What `available` holds for an exec-policy amendment ("always"), if Codex offers one. */
+/** The host a command's approval asks to reach (`networkApprovalContext`), if it asks for one. */
+function networkHost(params: Params): string | null {
+  const host = params.networkApprovalContext?.host;
+  return typeof host === "string" && host.trim() !== "" ? host.trim() : null;
+}
+
+/** What `available` holds for an exec-policy amendment ("always"), or for the network one that allows the host, if Codex offers one. */
 function amendment(params: Params): unknown {
   const offered = Array.isArray(params.availableDecisions) ? params.availableDecisions : null;
+  const host = networkHost(params);
+  if (host) {
+    const allows = offered
+      ? offered.find((decision: Params) => decision?.applyNetworkPolicyAmendment?.network_policy_amendment?.action === "allow")
+      : (Array.isArray(params.proposedNetworkPolicyAmendments) ? params.proposedNetworkPolicyAmendments : [])
+        .filter((proposed: Params) => proposed?.action === "allow")
+        .map((proposed: Params) => ({ applyNetworkPolicyAmendment: { network_policy_amendment: proposed } }))[0];
+    if (allows) return allows;
+  }
   if (offered) return offered.find((decision: unknown) => decision && typeof decision === "object" && "acceptWithExecpolicyAmendment" in decision);
   return Array.isArray(params.proposedExecpolicyAmendment) && params.proposedExecpolicyAmendment.length > 0
     ? { acceptWithExecpolicyAmendment: { execpolicy_amendment: params.proposedExecpolicyAmendment } }
@@ -52,9 +69,12 @@ export function approvalRequest(method: string, params: Params, cwd: string, cha
   if (offers(params, "acceptForSession")) choices.push("session");
   if (amendment(params)) choices.push("always");
   choices.push("deny");
-  const command = typeof params.command === "string" && params.command !== "" ? displayCommand(params.command) : "Run a command";
-  const fallback = params.kind === "writeStdin" ? "Codex wants to type into a command that is running" : "Codex wants to run a command";
-  const description = typeof params.reason === "string" && params.reason.trim() !== "" ? params.reason : fallback;
+  const host = networkHost(params);
+  const command = typeof params.command === "string" && params.command !== "" ? displayCommand(params.command) : host ?? "Run a command";
+  const fallback = host ? `Codex wants to reach ${host}` : params.kind === "writeStdin" ? "Codex wants to type into a command that is running" : "Codex wants to run a command";
+  const reason = typeof params.reason === "string" ? params.reason.trim() : "";
+  // Codex's reason, with the host when it does not name it.
+  const description = reason === "" ? fallback : host && !reason.includes(host) ? `${reason} (${host})` : params.reason;
   return { kind: "approval", command, description, choices };
 }
 
