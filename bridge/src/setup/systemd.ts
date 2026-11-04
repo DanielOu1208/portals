@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { label as defaultLabel } from "./launchAgent.ts";
 import type { Service, ServiceSpec, ServiceState } from "./service.ts";
 import { programOverride, type RunResult, type System } from "./system.ts";
+import { checkDefinitionFields, replaceDefinition, specFromUnit, UnsupportedServiceDefinition, type DefinitionUpdate } from "./serviceDefinition.ts";
 
 // The systemd user service that keeps the bridge running on Linux (service.ts): a unit in
 // ~/.config/systemd/user that the person's own systemd manager (`systemctl --user`)
@@ -179,6 +180,14 @@ export class SystemdService implements Service {
 
   async restart(): Promise<void> {
     await this.must(["restart", this.unit]);
+  }
+
+  refreshDefinition(): Promise<DefinitionUpdate> {
+    if (!existsSync(this.file)) throw new UnsupportedServiceDefinition("the service definition is missing");
+    const before = readFileSync(this.file, "utf8");
+    const next = unit(specFromUnit(before, this.label));
+    checkDefinitionFields(before, next, "unit");
+    return replaceDefinition(this.file, next, () => this.must(["daemon-reload"]));
   }
 
   /** Stops it; it stays enabled, so it starts again at the next login or boot, as a LaunchAgent booted out does at the next login. */
