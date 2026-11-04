@@ -79,3 +79,11 @@ final class ComposerDrafts {
         UserDefaults.standard.set(data, forKey: Self.defaultsKey)
     }
 }
+
+extension ComposerDrafts: ComposerWordsKeeping {}
+
+extension GivenBackMessages {
+    /// The app's: over the words kept on this device (`ComposerDrafts`), to each thread's
+    /// controller while it is open.
+    static let shared = GivenBackMessages(words: ComposerDrafts.shared)
+}

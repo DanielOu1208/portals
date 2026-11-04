@@ -51,6 +51,8 @@ public struct Subagent: Identifiable, Hashable, Sendable {
     public var outputTruncated: Bool
     /// It can be stopped by itself now, apart from the turn.
     public var canStop: Bool
+    /// What it did, its own messages, can be read (`SubagentReading`).
+    public var canRead: Bool
     public var model: String?
     public var tokens: Int?
     public var toolUses: Int?
@@ -61,7 +63,7 @@ public struct Subagent: Identifiable, Hashable, Sendable {
     public init(
         id: String, goal: String, tool: String? = nil, toolDetail: String? = nil, state: State = .working, kind: Kind = .agent,
         name: String? = nil, nickname: String? = nil, role: String? = nil, parentID: String? = nil, turn: Int? = nil, startedAt: Date? = nil, endedAt: Date? = nil, summary: String? = nil, result: String? = nil,
-        output: String? = nil, outputTruncated: Bool = false, canStop: Bool = false, model: String? = nil, tokens: Int? = nil, toolUses: Int? = nil, phases: [WorkflowPhase] = [],
+        output: String? = nil, outputTruncated: Bool = false, canStop: Bool = false, canRead: Bool = false, model: String? = nil, tokens: Int? = nil, toolUses: Int? = nil, phases: [WorkflowPhase] = [],
         agents: [WorkflowAgent] = []
     ) {
         self.id = id
@@ -82,6 +84,7 @@ public struct Subagent: Identifiable, Hashable, Sendable {
         self.output = output
         self.outputTruncated = outputTruncated
         self.canStop = canStop
+        self.canRead = canRead
         self.model = model
         self.tokens = tokens
         self.toolUses = toolUses
@@ -174,6 +177,45 @@ public protocol SubagentStopping: Sendable {
     var stopsSubagents: Bool? { get async }
     /// False when it was no longer one that could be stopped (it had ended).
     func stopSubagent(_ id: String, in thread: ThreadRef.ID) async throws -> Bool
+}
+
+/// A host that gives what one subagent did, its own messages, read only (a Portals
+/// bridge's `subagent_read`): what it was asked, its tool calls and what it said.
+public protocol SubagentReading: Sendable {
+    /// Its messages so far, as turns; nil when it cannot be read (the host cannot, or it
+    /// is not one that can be).
+    func subagentTranscript(_ id: String, in thread: ThreadRef.ID) async throws -> Transcript?
+}
+
+extension Transcript {
+    /// A subagent's messages read again (`SubagentReading`), with the ids of the earlier
+    /// read: each read maps its messages afresh, under new ids, and the steps and rows the
+    /// reader opened are kept by them. Its messages only grow, so the turns match in order
+    /// while they open with the same words (none, for messages that begin with the agent
+    /// speaking, as a Codex subagent's do), and their items in order while they are the
+    /// same kind of item. What follows is new and keeps its own.
+    public func keepingIdentities(of earlier: Transcript) -> Transcript {
+        var kept = self
+        for (index, before) in zip(kept.turns.indices, earlier.turns) {
+            guard kept.turns[index].userTexts == before.userTexts else { break }
+            kept.turns[index].id = before.id
+            for (place, item) in zip(kept.turns[index].items.indices, before.items) {
+                guard Self.sameKind(kept.turns[index].items[place].content, item.content) else { break }
+                kept.turns[index].items[place].id = item.id
+            }
+        }
+        return kept
+    }
+
+    /// The same kind of item; a tool call, of the same tool.
+    private static func sameKind(_ one: TurnItem.Content, _ other: TurnItem.Content) -> Bool {
+        switch (one, other) {
+        case let (.tool(one), .tool(other)): one.name == other.name
+        case (.user, .user), (.text, .text), (.reasoning, .reasoning), (.request, .request), (.notice, .notice),
+             (.command, .command), (.event, .event), (.compaction, .compaction): true
+        default: false
+        }
+    }
 }
 
 extension [Subagent] {

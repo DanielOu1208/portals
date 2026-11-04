@@ -3,7 +3,7 @@
   {
    "role": "user",
    "text": "Run `sleep 4` with bash. Then reply with the single word done.",
-   "timestamp": 1791801839.25
+   "timestamp": 1793786678.674
   },
   {
    "role": "tool",
@@ -12,38 +12,38 @@
     "command": "sleep 4"
    },
    "content": "{\"output\":\"\",\"exit_code\":0}",
-   "tool_call_id": "call_KYmRqGffukY6GY8D2TRSPw8K|fc_0617c94f095390d2016accb9f0cc3c87d0b6d183c1817efb93",
-   "timestamp": 1791801845.251,
+   "tool_call_id": "call_Zdutn9lI38QoZa79bQmGW6L9|fc_07324a76ac591adf016aeb0339522887d0951f2cb7860c19cb",
+   "timestamp": 1793786686.133,
    "turn_usage": {
-    "tokens": 1201
+    "tokens": 1183
    }
   },
   {
    "role": "user",
    "text": "Also add the word banana to your reply.",
-   "timestamp": 1791801845.251,
+   "timestamp": 1793786686.133,
    "display_kind": "steer"
   },
   {
    "role": "assistant",
    "text": "done",
-   "timestamp": 1791801845.253,
+   "timestamp": 1793786686.139,
    "turn_usage": {
-    "tokens": 1233
+    "tokens": 1215
    }
   },
   {
    "role": "user",
    "text": "Now reply with only the word cherry.",
-   "timestamp": 1791801845.253,
+   "timestamp": 1793786686.139,
    "display_kind": "steer"
   },
   {
    "role": "assistant",
    "text": "cherry",
-   "timestamp": 1791801846.85,
+   "timestamp": 1793786687.792,
    "turn_usage": {
-    "tokens": 1253
+    "tokens": 1235
    }
   }
  ],

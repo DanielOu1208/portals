@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { closeSync, constants, fstatSync, openSync, readSync, realpathSync, statSync, type BigIntStats } from "node:fs";
 import type { CanUseTool, EffortLevel, Options, PermissionMode } from "@anthropic-ai/claude-agent-sdk";
 import { counters } from "../../counters.ts";
 import { programVersion } from "../program.ts";
@@ -9,10 +10,11 @@ import type { ThreadMode } from "../types.ts";
 // The bridge never reads, stores or forwards Claude credentials: the installed
 // `claude` signs in with its own login (in the Keychain on a Mac, in
 // ~/.claude/.credentials.json on Linux). Only `claude.apiKey` in config.json, off by
-// default, gives the child an API key instead.
+// default, gives the child an API key instead, or `claude.oauthToken` a long-lived token
+// from `claude setup-token`.
 
 /** The Claude Code release the bridge was built and tested against (docs/bridge-spikes.md). */
-export const testedClaudeVersion = "2.1.299";
+export const testedClaudeVersion = "2.1.318";
 
 /** Claude's own thinking levels. */
 export const claudeEfforts: readonly EffortLevel[] = ["low", "medium", "high", "xhigh", "max"];
@@ -24,17 +26,20 @@ export const claudeEfforts: readonly EffortLevel[] = ["low", "medium", "high", "
  * main thread did (`tool_use_summary`, one small model call of its own each; seen headless
  * on 2.1.299, 2026-10-26), for the app's status line (feature status_headline).
  */
-export function childEnvironment(parent: NodeJS.ProcessEnv, options: { clientApp: string; apiKey: string | null; toolSummaries?: boolean }): Record<string, string | undefined> {
+export function childEnvironment(parent: NodeJS.ProcessEnv, options: { clientApp: string; apiKey: string | null; oauthToken?: string | null; toolSummaries?: boolean }): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = {};
   for (const [key, value] of Object.entries(parent)) {
-    // Inherited ones (from a terminal Claude Code that started the bridge) break a child session.
+    // Inherited ones (from a terminal Claude Code that started the bridge) break a child
+    // session; among them is the token of `claude setup-token`, which only config.json gives.
     if (key.startsWith("CLAUDE_CODE_") || key === "CLAUDECODE" || key === "CLAUDE_PID" || key === "CLAUDE_EFFORT") continue;
     // Credentials come from claude's own login, or from config.json, never from the bridge's environment.
     if (key === "ANTHROPIC_API_KEY" || key === "ANTHROPIC_AUTH_TOKEN") continue;
     env[key] = value;
   }
   env.CLAUDE_AGENT_SDK_CLIENT_APP = options.clientApp;
+  // An API key is used over a token, as config.json says.
   if (options.apiKey) env.ANTHROPIC_API_KEY = options.apiKey;
+  else if (options.oauthToken) env.CLAUDE_CODE_OAUTH_TOKEN = options.oauthToken;
   if (options.toolSummaries) env.CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES = "1";
   return env;
 }
@@ -132,11 +137,15 @@ export function claudeEffort(level: string): EffortLevel | null {
   }
 }
 
-/** What `/mode` names, as Claude's permission modes. `default` is no override. */
+/**
+ * What `/mode` names, as Claude's permission modes. `default` is no override; `medium` is
+ * Claude Code's auto mode, in which a classifier approves or blocks each call and asks
+ * only when it cannot tell.
+ */
 export function permissionModeFor(mode: ThreadMode): PermissionMode | null {
   switch (mode) {
     case "medium":
-      throw new Error("Claude does not offer Medium autonomy.");
+      return "auto";
     case "ask":
       return "default";
     case "edits":
@@ -159,6 +168,8 @@ export function threadModeFor(mode: string | undefined | null): Exclude<ThreadMo
       return "edits";
     case "plan":
       return "plan";
+    case "auto":
+      return "medium";
     case "bypassPermissions":
       return "full";
     default:
@@ -167,8 +178,75 @@ export function threadModeFor(mode: string | undefined | null): Exclude<ThreadMo
 }
 
 /** `claude --version`, as "2.1.292"; null when it cannot be run. */
-export function claudeVersion(claudePath: string, env: Record<string, string | undefined>): Promise<string | null> {
-  return programVersion(claudePath, env as NodeJS.ProcessEnv);
+export function claudeVersion(claudePath: string, env: Record<string, string | undefined>, strict = false): Promise<string | null> {
+  return strict
+    ? programVersion(claudePath, env as NodeJS.ProcessEnv, /^(\d+\.\d+\.\d+)(?: \(Claude Code\))?\s*$/)
+    : programVersion(claudePath, env as NodeJS.ProcessEnv);
+}
+
+/** Proof for one new query launched directly from this exact native executable. */
+export interface ClaudeLaunchProof {
+  path: string;
+  version: string | null;
+  identity: Pick<BigIntStats, "dev" | "ino" | "size" | "mtimeNs" | "ctimeNs" | "mode">;
+}
+
+/** Throws when an updater or path replacement invalidated this query's launch proof. */
+export function checkClaudeLaunch(proof: ClaudeLaunchProof): void {
+  try {
+    if (realpathSync(proof.path) !== proof.path) throw new Error("path changed");
+    const now = statSync(proof.path, { bigint: true });
+    const before = proof.identity;
+    if (!now.isFile() || now.dev !== before.dev || now.ino !== before.ino || now.size !== before.size || now.mtimeNs !== before.mtimeNs || now.ctimeNs !== before.ctimeNs || now.mode !== before.mode) throw new Error("executable changed");
+  } catch {
+    throw new Error("The Claude Code executable changed after its version was verified. File undo was refused.");
+  }
+}
+
+/**
+ * Probe the exact direct-spawn target, never a script that delegates to another program.
+ * The SDK launches JS suffixes through a runtime, so those cannot use this proof either.
+ */
+export async function verifyClaudeLaunch(path: string, version: (resolvedPath: string) => Promise<string | null>): Promise<ClaudeLaunchProof | undefined> {
+  let resolved: string;
+  let identity: BigIntStats;
+  let handle: number | undefined;
+  try {
+    resolved = realpathSync(path);
+    if (/\.(?:js|mjs|tsx|ts|jsx)$/.test(resolved)) return;
+    handle = openSync(resolved, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    identity = fstatSync(handle, { bigint: true });
+    if (!identity.isFile() || (identity.mode & 0o111n) === 0n) return;
+    const header = Buffer.alloc(4);
+    if (readSync(handle, header, 0, header.length, 0) !== header.length) return;
+    const magic = header.readUInt32BE();
+    if (![0x7f454c46, 0xfeedface, 0xcefaedfe, 0xfeedfacf, 0xcffaedfe, 0xcafebabe, 0xbebafeca, 0xcafebabf, 0xbfbafeca].includes(magic)) return;
+  } catch {
+    return;
+  } finally {
+    if (handle !== undefined) closeSync(handle);
+  }
+  const proof: ClaudeLaunchProof = { path: resolved, identity, version: await version(resolved) };
+  checkClaudeLaunch(proof);
+  return proof;
+}
+
+/**
+ * `claude auth status --json`: who Claude Code is signed in as, and since 2.1.318 when a
+ * stored login ends (`loginExpiresAt`). Killed as `claudeAgents` is when it hangs.
+ */
+export function claudeAuthStatus(claudePath: string, env: Record<string, string | undefined>, timeoutMs = 10_000): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    if (counters.on) counters.spawned("claude_cli");
+    execFile(claudePath, ["auth", "status", "--json"], { env: env as NodeJS.ProcessEnv, timeout: timeoutMs, killSignal: "SIGKILL", maxBuffer: 1024 * 1024 }, (error, stdout) => {
+      // Signed out, it says so with JSON and leaves with 1.
+      try {
+        resolve(JSON.parse(stdout));
+      } catch {
+        reject(new Error(error ? `claude auth status failed: ${error.message.split("\n")[0]}` : "claude auth status did not answer with JSON"));
+      }
+    });
+  });
 }
 
 /**

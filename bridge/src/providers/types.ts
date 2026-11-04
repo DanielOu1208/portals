@@ -8,6 +8,7 @@ import type { TurnDiff } from "../sessions/turnDiff.ts";
 import type { MentionLimit } from "../sessions/mentions.ts";
 import type { From } from "../fleet/line.ts";
 import type { SearchFile } from "../search/readers.ts";
+import type { VersionCheck } from "./program.ts";
 
 /** An agent as the app's sidebar lists it (`profiles.list`). */
 export interface AgentProfile {
@@ -117,6 +118,23 @@ export interface TurnUsage {
   tokens?: number;
 }
 
+/** A completed turn's native boundary, kept on its opening user message. */
+export interface MessageCheckpoint {
+  id: string;
+  can_fork: boolean;
+  can_edit: boolean;
+  can_undo_files?: boolean;
+}
+
+export interface FileRewindResult {
+  canRewind: boolean;
+  error?: string;
+  filesChanged?: string[];
+  insertions?: number;
+  deletions?: number;
+  skippedLinks?: number;
+}
+
 /**
  * One message of a stored conversation, in the shape `session.resume` returns
  * (docs/gateway-protocol.md, section 8). The last message of an ended turn may carry what
@@ -135,6 +153,8 @@ type StoredMessageBody =
       display_metadata?: Record<string, unknown>;
       /** The id the device gave the message (`prompt.submit` `message_id`, feature `message_ids`): kept only while the bridge runs. */
       message_id?: string;
+      /** The agent's boundary for branching this turn (feature message_fork). */
+      checkpoint?: MessageCheckpoint;
       /** Who sent it through the fleet (feature `senders`), read from its first line when it goes out: never stored. */
       from?: From;
       /**
@@ -192,12 +212,18 @@ export interface ContextUsage {
  * so the app styles them; mapping an agent's own tools onto them is the provider's job.
  */
 export type ProviderEvent =
+  | { type: "checkpoint"; checkpoint: MessageCheckpoint }
   /** Invalidate live MCP sign-in cards; no authentication data is carried by an event. */
   | { type: "mcp.auth" }
   | { type: "queue.consumed"; requestId: string }
   | { type: "queue.failed"; requestId: string; error: string }
   /** Droid's receipt for a message whose earlier delivery could not be confirmed. */
   | { type: "queue.taken"; requestId: string; prompt: Prompt }
+  /**
+   * A message handed over with `steer` that a Stop took back before the agent read it:
+   * it was never sent, and never will be.
+   */
+  | { type: "steer.withdrawn"; prompt: Prompt }
   /** A piece of the reply. */
   | { type: "text"; text: string }
   /** A closed piece of text written beside tool calls. `alreadyStreamed` when it also came as `text`. */
@@ -480,6 +506,8 @@ export class SettingRefused extends Error {}
 
 /** One conversation inside a provider. */
 export interface ProviderSession {
+  /** Preview or restore native file checkpoints without truncating conversation. */
+  rewindFiles?(checkpointId: string, dryRun: boolean): Promise<FileRewindResult>;
   mcpAuth?(action: import("./mcpAuth.ts").McpAuthAction): Promise<{ servers: import("./mcpAuth.ts").McpAuthCard[] }>;
   /** The conversation so far, oldest first. Read once, when the session is loaded. */
   history(): Promise<StoredMessage[]>;
@@ -498,6 +526,13 @@ export interface ProviderSession {
    */
   stopSubagent?(id: string): Promise<boolean>;
   /**
+   * A subagent's own conversation (one reported as `subagent` of kind `agent`), oldest
+   * first, in the shape of `history()`: what it was asked, where its agent keeps that,
+   * its tool calls and what it said. Read each time it is asked for, so one still at work
+   * gives what it has done so far. Agents that keep none need not have it.
+   */
+  subagentMessages?(id: string): Promise<StoredMessage[]>;
+  /**
    * Read once, with `history()`: the subagents and workflows the stored conversation
    * tells of, all ended, each with the turn that started it: 0 for the conversation's
    * last turn, -1 for the one before it, and so on.
@@ -508,7 +543,8 @@ export interface ProviderSession {
    * off mid-way (its agent's process stopped with the bridge, a crash) rather than ended,
    * as the agent's own record shows (Claude Code: its last entry is not the model's
    * finished answer). A turn the bridge recorded running that is over at the next load is
-   * then told as stopped, not as finished. Agents whose record cannot tell need not have it.
+   * then told as stopped, not as finished. Agents whose record cannot tell need not have it:
+   * a record that ends on the person's message or a tool's row is taken as cut off anyway.
    */
   lastTurnCutOff?(): boolean;
   /** Starts a turn. The provider reports it through the sink and ends it with `turn.end`. */
@@ -779,6 +815,8 @@ export interface Provider {
    * is asked first.
    */
   usage?(thread: string, options?: { fresh?: boolean }): Promise<UsageReport>;
+  /** The release of the agent's program the bridge knows of, and where it stands against the tested ones, for `/status`. */
+  readonly version?: VersionCheck;
   /**
    * The thread whose agent knows it now by `id`, when that is not the thread's own id:
    * a Cursor thread whose conversation was started afresh keeps its id, while the
@@ -825,6 +863,8 @@ export interface Provider {
    * fork's folder check) left behind holds the session to that folder.
    */
   adopt?(id: string, mode: AdoptMode, readOnly?: boolean): Promise<DeskAdoption>;
+  /** A new conversation through a completed turn, or before it when editing. */
+  forkAt?(id: string, checkpointId: string, before: boolean, expectedCwd: string): Promise<DeskAdoption>;
   /**
    * Where the agent keeps the conversation of the thread `id` that runs in `cwd`, and how
    * it is written, for search (feature thread_search, src/search/): read by the bridge

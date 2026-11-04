@@ -153,6 +153,15 @@ To change it later, run setup again with `--claude=login`, `--claude=api-key` or
 `--claude=off`. Or edit `claude.apiKey` in `config.json` (a key, or `null` for your own
 login) and `providers.claude`, then restart the host ([Every day](#every-day)).
 
+A Claude login ends on a fixed date, which using it does not move. From ten days
+before, Claude Code threads say when; once it has ended they say so. Run `claude auth
+login` in a terminal on that computer to sign in again. To sign in less often, make a
+long-lived token with `claude setup-token` and put it in `claude.oauthToken` in
+`config.json`, then restart the host. Usage counts against your Claude plan, as with the
+login. The token is kept only there, readable by you, and given to Claude Code as
+`CLAUDE_CODE_OAUTH_TOKEN`; the host never takes one from its own environment. An API key
+in `claude.apiKey` is used instead when both are set.
+
 ## Every day
 
 | Command | What it does |
@@ -259,7 +268,8 @@ its folder: quit it there first, or fork. A Codex thread can be worked on from b
 
 The host runs your installed `claude` with your own settings, CLAUDE.md files, plugins
 and MCP servers, as at the desk. `/status` shows the thread's folder, git branch, model
-and mode, and `/usage` your plan's limits. Claude Code's own commands (`/compact`,
+and mode, `/usage` your plan's limits, and `/mcp` your MCP servers and whether each is
+connected. Claude Code's own commands (`/compact`,
 `/context`, …) and your skills are offered too; the app's own `/model` and `/reasoning`
 change one thread. Background work Claude starts runs on after the turn, and Claude
 answers when it ends. Stop, and a restart of the host, end it.
@@ -269,7 +279,8 @@ answers when it ends. Stop, and a restart of the host, end it.
 The host joins the Codex daemon every Codex on your computer uses, so threads keep
 running while the host restarts, and a terminal can work on the same thread. A thread
 runs with your `config.toml`; the host never writes it, and what you change in the app
-is for that thread only. `/compact` and `/usage` are offered. A new thread is named by a
+is for that thread only. `/compact`, `/usage` and `/mcp` (your MCP servers, and whether
+each runs for the thread) are offered. A new thread is named by a
 short call to a cheap model (`codex.titleModel`; `null` for none).
 
 ### Pi
@@ -326,6 +337,8 @@ sign-in.
   is doing and its answer; one asks before a command on a card of its own. A subagent left
   in the background keeps the turn open until it ends (Cursor answers the turn then), and
   Stop ends it with the turn: Cursor cannot stop one alone.
+- `/mcp` shows your MCP servers for the thread's folder and whether each is connected,
+  as `cursor-agent mcp list` run there says.
 - **A turn Cursor could not finish** (no network, a plan that is used up) ends as failed,
   with what Cursor said.
 - A message sent while it works waits for the turn to end. There is no context meter or
@@ -357,7 +370,8 @@ Each Hermes profile is an agent (`hermes` for the default one). Setup finds Herm
 offers its installer; `hermes setup model` gives it the AI provider and model it needs.
 The host joins the `hermes serve` your user runs, or starts one and leaves it running:
 while it does, run `hermes dashboard` with `--isolated`, or stop it first with
-`hermes serve --stop`. A message sent while Hermes works is queued. A profile called `pi`
+`hermes serve --stop`. A message sent while Hermes works is queued. `/mcp` shows the
+profile's MCP servers as Hermes last found them. A profile called `pi`
 or `cursor` loses that name to that agent: leave the agent off there.
 
 ## Agents working with each other
@@ -463,6 +477,7 @@ it, and keeps what you change when it runs again. Restart the host after editing
 | `providers.claude`, `providers.codex`, `providers.pi`, `providers.cursor`, `providers.droid`, `providers.hermes` | Offers that agent in the app (`true`) or not (`false`). Setup turns on what it finds |
 | `claude.path`, `codex.path`, `pi.path`, `cursor.path`, `droid.path`, `hermes.path` | Where each agent's program is. Setup writes the one it found; a bare name is looked up on the PATH the host runs with |
 | `claude.apiKey` | The Anthropic API key Claude Code runs with, or `null` for your own Claude login ([Claude Code's sign-in](#claude-codes-sign-in)) |
+| `claude.oauthToken` | A long-lived token from `claude setup-token` that Claude Code signs in with, or `null` for your own Claude login. Not used when `claude.apiKey` is set ([Claude Code's sign-in](#claude-codes-sign-in)) |
 | `generalFolder` | General: where a new thread runs when you pick no folder. `~/Portals` unless set |
 | `folders.hide` | Folders never offered for new threads, nor anything under them (`~` is your home folder) |
 | `pi.model` | The model a new Pi thread starts on, as `pi --list-models` names it: `"openai/gpt-6.1-sol"`. `null`: Pi's own default |
