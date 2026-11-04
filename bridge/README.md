@@ -32,8 +32,9 @@ name.
   - Droid: follow the [Factory quickstart](https://docs.factory.ai/cli/getting-started/quickstart),
     then run `droid` in a terminal and use `/login`
   - Hermes: setup offers to install it, or `curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash`
-  - OpenCode 2: `npm install -g @opencode/cli` (an OpenCode 1 upgrades with
-    `opencode upgrade --major`), then run `opencode` once to choose a model provider
+  - OpenCode 2: `npm install -g @opencode/cli`, then `opencode auth login` and choose a
+    model provider. Keeping OpenCode 1? Use a separate v2 installation and isolated
+    configuration, as described under [OpenCode](#opencode).
 - **Tailscale on that computer and on your iPhone** (and on any iPad or Mac you use
   Portals on), signed in to the same account. On Linux, get it from
   [tailscale.com/download/linux](https://tailscale.com/download/linux) and connect with
@@ -182,6 +183,8 @@ systemctl --user restart portals-host                             # on Linux
 ```
 
 A restart stops Claude Code, Pi, Cursor and Droid turns in progress; Codex's keep going.
+OpenCode keeps running in shared mode. In owned mode, the host asks active sessions to
+stop before shutting down its server; unconfirmed work may resume natively later.
 
 ### Updating
 
@@ -233,8 +236,8 @@ list. Images still go to the agent as pictures, for the models that see them.
 ### Visuals in replies
 
 An agent can put a visual in a reply: a chart, a diagram, a comparison, something to
-play with. The app draws it live, as it is written. Claude Code, Codex, Pi, Cursor and
-Droid threads are told the app does this (`visuals.tellAgents`). A visual is a visual aid
+play with. The app draws it live, as it is written. Claude Code, Codex, Pi, Cursor,
+Droid and OpenCode threads are told the app does this (`visuals.tellAgents`). A visual is a visual aid
 only: nothing in it reaches the agent or the host. It runs locked down in the app: it can
 load scripts, style sheets and fonts from jsDelivr, unpkg and cdnjs, and nothing else from
 the network, and a link you tap opens in your browser.
@@ -244,7 +247,7 @@ the network, and a link you tap opens in your browser.
 One setting in the app (the gear, under Messages) says what it does:
 
 - **Steer** (as it comes): the agent reads the message during the turn it is on. Claude
-  Code, Codex and Pi can; Droid takes it at the next model step, and Hermes with its next
+  Code, Codex, Pi and OpenCode can; Droid takes it at the next model step, and Hermes with its next
   tool result (one that comes after its last is a turn of its own). Cursor cannot add a
   message to what it is doing: it stops, and runs the message instead.
 - **Queue**: the message waits and starts a turn of its own when the agent is done.
@@ -262,10 +265,10 @@ app gave the host: Apple and the Portals relay see only "Portals: New activity".
 ### Sessions from your terminal
 
 Under From this Mac in each coding agent's menu, the app lists the sessions you started
-in a terminal on that computer (Claude Code's, Codex's and Pi's), to **continue**, to
+in a terminal on that computer (Claude Code's, Codex's, Pi's and OpenCode's), to **continue**, to
 **fork** (a new thread with its history so far) or to **view only**. A Claude Code session
 a terminal has open is not continued, nor a Pi session while a Pi runs in a terminal in
-its folder: quit it there first, or fork. A Codex thread can be worked on from both.
+its folder: quit it there first, or fork. Codex and OpenCode threads can be worked on from both.
 Cursor's terminal chats are listed too, to fork only.
 
 ### Claude Code

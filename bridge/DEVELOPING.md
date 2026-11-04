@@ -1545,8 +1545,8 @@ both server modes, retaining HOME, USER, SHELL, XDG settings, custom variables, 
 credentials and `PORTALS_BRIDGE_HOME`/`PORTALS_BRIDGE_LOG`. It removes exactly
 `OPENCODE_PASSWORD`, `PORTALS_PASSWORD` and `AERIPORTAL_PASSWORD` (transport/setup
 passwords), prepends the command's PATH and sets `PORTALS_THREAD`, clearing competing
-thread identities. Writable creation and resume await this preparation before returning. Each new
-connection prepares loaded writable roots again before recovery or another admission;
+thread identities. Writable creation and resume await this preparation before
+returning. Each new connection prepares loaded writable roots again before recovery or another admission;
 per-connection promises share the work and failed preparation is retryable. Previously
 discovered children are restored best effort, without preparing read-only adoptions.
 Child commands address their bridge-owned root. Child preparation is asynchronous
