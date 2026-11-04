@@ -1063,6 +1063,33 @@ test("only the bridge's threads count: another thread's events and requests are 
   assert.equal(client.events(session).length, 0);
 });
 
+test("/mcp in a thread Codex has not loaded, whose folder is gone, says so and does not list the servers as set up elsewhere", async (t) => {
+  // A bridge of its own, whose General folder the thread runs in and is then removed. After
+  // the test above, which takes the last connection to Codex for the shared bridge's.
+  const folder = realpathSync(mkdtempSync(join(tmpdir(), "portals-codex-mcp-gone-")));
+  const own = await startTestBridge({ providers: new Map([["codex", codexProvider()]]), config: { generalFolder: folder } });
+  const phone = await TestClient.open(own);
+  t.after(async () => {
+    await phone.close();
+    await own.dispose();
+    rmSync(folder, { recursive: true, force: true });
+  });
+  const session = (await phone.call("session.create", { profile: "codex", source: "tui", cwd: folder })).session_id as string;
+  daemon.mcpServers = [{ name: "elsewhere", runtimeStatus: null, authStatus: "unsupported", tools: {}, toolsError: null }];
+  daemon.thread(session).loaded = false;
+  rmSync(folder, { recursive: true, force: true });
+  try {
+    const from = daemon.calls.length;
+    await assert.rejects(
+      phone.call("slash.exec", { session_id: session, command: "mcp", profile: "codex" }),
+      (error: RpcFailure) => error.message === `The thread's folder, ${folder}, is no longer there, so Codex cannot show its MCP servers.`,
+    );
+    assert.equal(daemon.calls.slice(from).filter((call) => call.method === "mcpServerStatus/list" && call.params.threadId === undefined).length, 0);
+  } finally {
+    daemon.mcpServers = [];
+  }
+});
+
 test("a sub-agent's questions are its thread's cards, and the answers go back to the sub-agent; a terminal's answer closes the card", async () => {
   const session = await createThread({ title: "Spawner" });
   const start = client.frames.length;

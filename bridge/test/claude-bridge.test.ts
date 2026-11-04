@@ -595,6 +595,32 @@ test("/mcp asks the thread's running Claude Code, else one started in the thread
   }
 });
 
+test("/mcp in a thread whose folder is gone says so, and starts no Claude Code elsewhere to answer", async (t) => {
+  const folder = realpathSync(mkdtempSync(join(tmpdir(), "portals-claude-mcp-gone-")));
+  const { provider: own, queries } = fakeClaude();
+  const other = await startTestBridge({ providers: new Map([["claude", own]]), config: { generalFolder: folder } });
+  const client = await TestClient.open(other);
+  t.after(async () => {
+    await client.close();
+    await other.dispose();
+    rmSync(folder, { recursive: true, force: true });
+  });
+  const session = (await client.call("session.create", { profile: "claude", cwd: folder })).session_id as string;
+  rmSync(folder, { recursive: true, force: true });
+  // A server only the startup check's folder has: never shown for this thread.
+  mcpStatus.answers = [[{ name: "elsewhere", status: "connected", tools: [] }]];
+  try {
+    const started = queries.length;
+    await assert.rejects(
+      client.call("slash.exec", { session_id: session, command: "mcp", profile: "claude" }),
+      (error: RpcFailure) => error.message === `The thread's folder, ${folder}, is no longer there, so Claude Code cannot show its MCP servers.`,
+    );
+    assert.equal(queries.slice(started).filter((query) => query.calls.some((call) => call[0] === "mcpServerStatus")).length, 0);
+  } finally {
+    mcpStatus.answers = [[]];
+  }
+});
+
 test("interrupting stops Claude, and the turn ends interrupted", async () => {
   const session = await createThread();
   const start = client.frames.length;

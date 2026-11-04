@@ -48,7 +48,7 @@ import { ClaudeSession, terminalHasIt, titleWatch, type ClaudeHost, type PlanUsa
 import { ContextWindows } from "./stream.ts";
 import { hasLimits, HeardLimits, KnownModelWindows, planDisplayName, planUsageReport, stillStanding } from "./usage.ts";
 import { claudeMentionLimit, type MentionLimit } from "../../sessions/mentions.ts";
-import { mcpCommand, mcpStatusText, type McpServer, type McpServerState } from "../mcpStatus.ts";
+import { mcpCommand, mcpFolderGone, mcpStatusText, type McpServer, type McpServerState } from "../mcpStatus.ts";
 
 // Claude Code as an agent of the bridge (`claude` in profiles.list). It runs the
 // installed `claude` through the Agent SDK, one process per thread in use, with
@@ -704,12 +704,15 @@ export class ClaudeProvider implements Provider, ClaudeHost {
   /**
    * How the thread's MCP servers are (`/mcp`), as its running Claude Code says. With none
    * running, a Claude Code started in the thread's folder only to say, given a while for
-   * its servers to connect: what the thread's next message would find.
+   * its servers to connect: what the thread's next message would find. A thread whose
+   * folder is gone has none to show (`mcpFolderGone`); the startup check's folder is for
+   * a call with no thread.
    */
   private async mcpStatus(thread: { id: string; cwd: string } | undefined): Promise<string> {
     const running = thread ? [...this.sessions].find((session) => session.id === thread.id)?.liveQuery : undefined;
     if (running) return claudeMcpText(await mcpServers(running, 0));
-    const { query, input, ready } = this.checkQuery(thread && isDirectory(thread.cwd) ? { cwd: thread.cwd } : {});
+    if (thread && !isDirectory(thread.cwd)) throw mcpFolderGone("Claude Code", thread.cwd);
+    const { query, input, ready } = this.checkQuery(thread ? { cwd: thread.cwd } : {});
     try {
       await ready;
       return claudeMcpText(await mcpServers(query, mcpConnectMs));

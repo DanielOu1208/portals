@@ -318,6 +318,12 @@ test("/mcp runs `cursor-agent mcp list` in the thread's folder and says each ser
   assert.equal(await mcp(), "Cursor MCP servers:\nNone set up.");
   writeFileSync(join(folder, "refuse"), "");
   await assert.rejects(mcp(), /^Error: Cursor did not say how its MCP servers are: Failed to list MCP servers: not signed in$/);
+
+  // A thread whose folder is gone: said plainly, and cursor-agent is not run anywhere else.
+  rmSync(join(folder, "ran.txt"));
+  rmSync(project, { recursive: true });
+  await assert.rejects(mcp(), (error: Error) => error.message === `The thread's folder, ${project}, is no longer there, so Cursor cannot show its MCP servers.`);
+  assert.equal(existsSync(join(folder, "ran.txt")), false);
 });
 
 // Cursor has three modes; the app offered all five (its own list, with no mode_options), and

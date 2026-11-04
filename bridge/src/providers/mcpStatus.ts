@@ -43,6 +43,14 @@ export function mcpCommand(status: () => Promise<string>): AgentCommand {
   return { name: "mcp", description: "Show your MCP servers and whether each is connected", usage: "", skill: false, execute: status };
 }
 
+/**
+ * `/mcp` for a thread whose folder is gone: the servers found anywhere else could differ
+ * from its own (a folder has its own MCP settings), so none are shown.
+ */
+export function mcpFolderGone(agent: string, cwd: string): Error {
+  return new Error(`The thread's folder, ${cwd}, is no longer there, so ${agent} cannot show its MCP servers.`);
+}
+
 /** "1 tool", "12 tools". */
 function tools(count: number): string {
   return `${count} ${count === 1 ? "tool" : "tools"}`;

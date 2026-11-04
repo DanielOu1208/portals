@@ -13,7 +13,7 @@ import { version } from "../../version.ts";
 import { AcpClient, AgentStopped, refuse } from "../acp/client.ts";
 import type { AvailableCommand, ConfigOption, InitializeResult, RpcId } from "../acp/protocol.ts";
 import { reportVersion } from "../program.ts";
-import { mcpCommand, mcpStatusText, type McpServer, type McpServerState } from "../mcpStatus.ts";
+import { mcpCommand, mcpFolderGone, mcpStatusText, type McpServer, type McpServerState } from "../mcpStatus.ts";
 import { DeskRefused, type AdoptMode, type AgentCommand, type AgentProfile, type DeskAdoption, type ModelCatalog, type ModeOption, type Provider, type ProviderSession, type SessionOptions, type SessionSettings, type SessionSink, type StoredMessage, type UsageReport } from "../types.ts";
 import type { RecentFolder } from "../../folders.ts";
 import type { SearchFile } from "../../search/readers.ts";
@@ -358,9 +358,11 @@ export class CursorProvider implements Provider, CursorHost {
   /**
    * How the MCP servers of a thread in `cwd` are (`/mcp`), as `cursor-agent mcp list` run
    * there says: it reads the folder's `.cursor/mcp.json` and the user's, and connects to
-   * each for the moment it asks.
+   * each for the moment it asks. Not run elsewhere for a thread whose folder is gone
+   * (`mcpFolderGone`).
    */
   private mcpStatus(cwd: string | undefined): Promise<string> {
+    if (cwd !== undefined && !existsSync(cwd)) return Promise.reject(mcpFolderGone(cursorName, cwd));
     return new Promise((resolve, reject) => {
       execFile(this.command, ["mcp", "list"], { cwd: cwd ?? (this.env.HOME || homedir()), env: { ...this.env, NO_COLOR: "1" }, timeout: 60_000, killSignal: "SIGKILL" }, (error, stdout, stderr) => {
         if (error) reject(new Error(`${cursorName} did not say how its MCP servers are: ${(stderr.trim() || error.message).split("\n")[0]}`));

@@ -41,7 +41,7 @@ import { usageReport } from "./stream.ts";
 import type { Model, RequestId, Thread, ThreadForkResponse, ThreadListResponse, ThreadStartResponse } from "./types/index.ts";
 import { CodexRollouts } from "../../search/locate.ts";
 import type { SearchFile } from "../../search/readers.ts";
-import { mcpCommand, mcpStatusText, type McpServer, type McpServerState } from "../mcpStatus.ts";
+import { mcpCommand, mcpFolderGone, mcpStatusText, type McpServer, type McpServerState } from "../mcpStatus.ts";
 
 // Codex as an agent of the bridge (`codex` in profiles.list). The bridge keeps one
 // connection to Codex's app server for all its threads: in the shared mode (the
@@ -541,16 +541,16 @@ export class CodexProvider implements Provider, CodexHost {
   async commands(thread?: { id: string; cwd: string }): Promise<AgentCommand[]> {
     return [
       { name: compactCommand, description: "Summarise the conversation so far, to free up context", usage: "", skill: false },
-      mcpCommand(() => this.mcpStatus(thread?.id)),
+      mcpCommand(() => this.mcpStatus(thread)),
     ];
   }
 
   /**
    * How the thread's MCP servers are (`/mcp`), as Codex runs them for it. A thread Codex
    * has not loaded has none running: then the servers as set up, with the tools Codex
-   * last found.
+   * last found, unless its folder is gone (`mcpFolderGone`).
    */
-  private async mcpStatus(thread: string | undefined): Promise<string> {
+  private async mcpStatus(thread: { id: string; cwd: string } | undefined): Promise<string> {
     const list = async (threadId: string | undefined) => {
       const servers: CodexMcpServer[] = [];
       let cursor: string | null = null;
@@ -568,12 +568,17 @@ export class CodexProvider implements Provider, CodexHost {
     try {
       if (thread) {
         try {
-          return codexMcpText(await list(thread), true);
+          return codexMcpText(await list(thread.id), true);
         } catch (error) {
           // Not loaded: Codex knows no thread of that id until a message loads it.
           if (!/thread not found/i.test((error as Error).message)) throw error;
         }
       }
+    } catch (error) {
+      throw new Error(`Codex did not say how its MCP servers are: ${(error as Error).message}`);
+    }
+    if (thread && !existsSync(thread.cwd)) throw mcpFolderGone("Codex", thread.cwd);
+    try {
       return codexMcpText(await list(undefined), false);
     } catch (error) {
       throw new Error(`Codex did not say how its MCP servers are: ${(error as Error).message}`);
