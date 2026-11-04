@@ -435,6 +435,7 @@ be changed while it runs, on a bridge that was started with them on ([Counters](
 | `claude.idleMinutes` | A thread's Claude process stops after this long with no turn running, no question open and no background work running. The next message resumes it. |
 | `claude.maxWarm` | At most this many Claude processes at once; the least recently used idle one stops first. |
 | `claude.apiKey` | The Anthropic API key Claude Code runs with, or `null` for your own Claude login. See [Claude Code's sign-in](README.md#claude-codes-sign-in). |
+| `claude.oauthToken` | A long-lived token from `claude setup-token`, given to Claude Code as `CLAUDE_CODE_OAUTH_TOKEN`, or `null` for your own Claude login. Not used when `claude.apiKey` is set. See [Claude Code's sign-in](README.md#claude-codes-sign-in). |
 | `claude.toolSummaries` | Claude Code says in a few words what each run of its tool calls did ("Read a.txt and b.txt"), which the app shows on the status line as what the agent is working on. Each summary costs Claude Code one small extra model call of its own. On unless set to `false`. |
 | `codex.mode` | `shared` (the default) or `own`; see [Codex](#codex). |
 | `codex.path` | The installed `codex`. A bare name is looked up on the PATH the bridge runs with. |
@@ -745,8 +746,13 @@ How it runs `claude`:
   tested with Claude Code 2.1.292 and `@anthropic-ai/claude-agent-sdk` 0.3.292; at
   startup it logs a warning when the installed `claude` is another version.
 - **Its sign-in.** With `claude.apiKey` set, `claude` gets the key as
-  `ANTHROPIC_API_KEY`. Without, it signs in with its own Keychain login
-  (`apiKeySource: none`); the bridge never reads, stores or passes on Claude credentials.
+  `ANTHROPIC_API_KEY`; with `claude.oauthToken`, the token as `CLAUDE_CODE_OAUTH_TOKEN`.
+  Without, it signs in with its own Keychain login (`apiKeySource: none`); the bridge
+  never reads, stores or passes on Claude credentials. A login ends on a fixed date,
+  which `claude auth status` (`loginExpiresAt`, asked at startup) and each result
+  (`credential_expires_at`) say from 2.1.318: from ten days before, each thread says
+  so once a day. A turn refused for the sign-in (`authentication_failed`) ends with
+  what to run on the host instead of Claude Code's words, which name its `/login`.
 - **Your own settings.** It loads your user, project and local settings, CLAUDE.md
   files, plugins and MCP servers, as at the desk, with Claude Code's own system prompt,
   and starts in the permission mode they give. Change it per thread with `/mode` (below).

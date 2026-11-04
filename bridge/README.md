@@ -153,6 +153,15 @@ To change it later, run setup again with `--claude=login`, `--claude=api-key` or
 `--claude=off`. Or edit `claude.apiKey` in `config.json` (a key, or `null` for your own
 login) and `providers.claude`, then restart the host ([Every day](#every-day)).
 
+A Claude login ends on a fixed date, which using it does not move. From ten days
+before, Claude Code threads say when; once it has ended they say so. Run `claude auth
+login` in a terminal on that computer to sign in again. To sign in less often, make a
+long-lived token with `claude setup-token` and put it in `claude.oauthToken` in
+`config.json`, then restart the host. Usage counts against your Claude plan, as with the
+login. The token is kept only there, readable by you, and given to Claude Code as
+`CLAUDE_CODE_OAUTH_TOKEN`; the host never takes one from its own environment. An API key
+in `claude.apiKey` is used instead when both are set.
+
 ## Every day
 
 | Command | What it does |
@@ -448,6 +457,7 @@ it, and keeps what you change when it runs again. Restart the host after editing
 | `providers.claude`, `providers.codex`, `providers.pi`, `providers.cursor`, `providers.droid`, `providers.hermes` | Offers that agent in the app (`true`) or not (`false`). Setup turns on what it finds |
 | `claude.path`, `codex.path`, `pi.path`, `cursor.path`, `droid.path`, `hermes.path` | Where each agent's program is. Setup writes the one it found; a bare name is looked up on the PATH the host runs with |
 | `claude.apiKey` | The Anthropic API key Claude Code runs with, or `null` for your own Claude login ([Claude Code's sign-in](#claude-codes-sign-in)) |
+| `claude.oauthToken` | A long-lived token from `claude setup-token` that Claude Code signs in with, or `null` for your own Claude login. Not used when `claude.apiKey` is set ([Claude Code's sign-in](#claude-codes-sign-in)) |
 | `generalFolder` | General: where a new thread runs when you pick no folder. `~/Portals` unless set |
 | `folders.hide` | Folders never offered for new threads, nor anything under them (`~` is your home folder) |
 | `pi.model` | The model a new Pi thread starts on, as `pi --list-models` names it: `"openai/gpt-6.1-sol"`. `null`: Pi's own default |

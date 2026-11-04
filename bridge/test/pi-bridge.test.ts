@@ -10,6 +10,7 @@ import { WaitingStore } from "../src/sessions/waiting.ts";
 import { agentInstructions, mathInstructions, visualInstructions } from "../src/portals/guide.ts";
 import { makeProviders } from "../src/providers/index.ts";
 import type { PiProvider } from "../src/providers/pi/provider.ts";
+import { refusalText } from "../src/providers/pi/session.ts";
 import { isEvent, RpcFailure, startTestBridge, streamedText, TestClient, unspent, type Frame, type TestBridge } from "./helpers.ts";
 import { piProvider, standin, until, type Standin } from "./pi-standin.ts";
 
@@ -1246,6 +1247,24 @@ test("a thread's model and level are kept until its process starts; a model Pi t
   // Another model, and the thread works.
   await client.call("config.set", { session_id: locked, key: "model", value: "gpt-6-luna --session" });
   assert.equal(streamedText(await turn(locked, "hello again")), "Working. You said: hello again");
+});
+
+test("a message Pi will not run for want of a sign-in fails the turn with what to run on the host, and can be tried again", async (t) => {
+  // The model a new thread runs on is one Pi has no key for: nothing refuses it before the message.
+  pi.configure({ ...standinSettings, noKey: [...standinSettings.noKey, "openai/gpt-6-luna"] });
+  t.after(() => pi.configure(standinSettings));
+  const session = await createThread();
+  const failed = (await turn(session, "hello")).at(-1).payload;
+  assert.deepEqual([failed.status, failed.text, failed.error_surface?.retryable], ["error", `Pi is not signed in to openai on this ${machineWord()}. Run \`pi\` in a terminal there and sign in with /login, then try again.`, true]);
+});
+
+test("Pi's sentences for a provider it has no sign-in for are what to run on the host; any other refusal is Pi's own", () => {
+  const signedOut = (to: string) => `Pi is not signed in${to} on this ${machineWord()}. Run \`pi\` in a terminal there and sign in with /login, then try again.`;
+  // As Pi 1.5.0 words them.
+  assert.equal(refusalText("No API key found for openai.\n\nUse /login to log into a provider via OAuth or API key. See:\n  /opt/pi/docs/providers.md\n  /opt/pi/docs/models.md"), signedOut(" to openai"));
+  assert.equal(refusalText("No API key found for the selected model.\n\nUse /login to log into a provider via OAuth or API key."), signedOut(""));
+  assert.equal(refusalText(`Authentication failed for "openai-codex". Credentials may have expired or network is unavailable. Run '/login openai-codex' to re-authenticate.`), signedOut(" to openai-codex"));
+  assert.equal(refusalText("Nothing to compact (session too small)"), "Nothing to compact (session too small)");
 });
 
 test("one model id under two of Pi's providers: the default's provider is listed first, and a thread that names none runs on it", async () => {

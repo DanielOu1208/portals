@@ -40,11 +40,12 @@ import type { SearchFile } from "../../search/readers.ts";
 import { fromAgentLog, fromJournal, pastSubagents, type PastSubagent } from "./tasks.ts";
 import { InputQueue } from "./input.ts";
 import { claudeModels } from "./models.ts";
-import { childEnvironment, claudeVersion, desktopAgents, queryOptions, testedClaudeVersion, threadModeFor } from "./options.ts";
+import { childEnvironment, claudeAuthStatus, claudeVersion, desktopAgents, queryOptions, testedClaudeVersion, threadModeFor } from "./options.ts";
 import { onPath, type CommandAccess } from "../../portals/access.ts";
 import { WarmPool } from "../pool.ts";
 import { reportVersion } from "../program.ts";
 import { ClaudeSession, terminalHasIt, titleWatch, type ClaudeHost, type PlanUsage, type QueryFactory, type QueryLike, type SessionFiles, type StoredSession } from "./session.ts";
+import { ClaudeSignIn } from "./signIn.ts";
 import { ContextWindows } from "./stream.ts";
 import { hasLimits, HeardLimits, KnownModelWindows, planDisplayName, planUsageReport, stillStanding } from "./usage.ts";
 import { claudeMentionLimit, type MentionLimit } from "../../sessions/mentions.ts";
@@ -66,6 +67,8 @@ export interface ClaudeSettings {
   maxWarm: number;
   /** A fallback for when the Claude login cannot be used; null (the default) uses the login. */
   apiKey: string | null;
+  /** A long-lived token from `claude setup-token`, used instead of the login; null or absent uses the login. */
+  oauthToken?: string | null;
   /** Claude Code summarises each run of its tool calls (`claude.toolSummaries`); on unless false. */
   toolSummaries?: boolean;
   /** Where the startup check runs. */
@@ -84,6 +87,8 @@ export interface ClaudeProviderOptions {
   managedSettings?: string;
   /** What `claude agents --json` lists: the sessions running on the Mac now, the bridge's own left out. */
   agents?: () => Promise<unknown>;
+  /** What `claude auth status --json` says. */
+  authStatus?: () => Promise<unknown>;
   /** The clock, in milliseconds. */
   now?: () => number;
   /** How long a turn may take to end after Stop before its process is stopped; 15 s unless a test says otherwise. */
@@ -295,6 +300,9 @@ export class ClaudeProvider implements Provider, ClaudeHost {
   private lastLimits: AskedUsage | undefined;
   /** The window each model's context fills, as its processes have said: a thread's next process shows the context use from its first request. */
   readonly windows = new ContextWindows();
+  /** When the sign-in ends, as `claude auth status` and the processes have said, and what threads say of it. */
+  readonly signIn: ClaudeSignIn;
+  private readonly authStatus: () => Promise<unknown>;
 
   constructor(options: ClaudeProviderOptions) {
     this.settings = options.settings;
@@ -302,28 +310,47 @@ export class ClaudeProvider implements Provider, ClaudeHost {
     this.heard = new HeardLimits(this.now);
     this.modelWindows = new KnownModelWindows(this.now);
     this.claudePath = options.settings.path;
-    const env = childEnvironment(options.env ?? process.env, { clientApp: "portals-bridge", apiKey: options.settings.apiKey, toolSummaries: options.settings.toolSummaries !== false });
+    const { apiKey, oauthToken = null } = options.settings;
+    const env = childEnvironment(options.env ?? process.env, { clientApp: "portals-bridge", apiKey, oauthToken, toolSummaries: options.settings.toolSummaries !== false });
+    this.signIn = new ClaudeSignIn({ credential: apiKey ? "apiKey" : oauthToken ? "oauthToken" : "login", now: this.now });
     this.portals = options.settings.portals;
     this.env = this.portals ? onPath(env, this.portals.bin) : env;
     this.settingsEnv = new ClaudeSettingsEnv(this.env, options.managedSettings);
     this.query = options.query ?? ((prompt, queryOptions) => sdkQuery({ prompt, options: queryOptions }) as QueryLike);
     this.files = options.files ?? sdkSessionFiles;
     this.agents = options.agents ?? (() => desktopAgents(this.claudePath, this.env));
+    this.authStatus = options.authStatus ?? (() => claudeAuthStatus(this.claudePath, this.env));
     this.pool = new WarmPool({ maxWarm: options.settings.maxWarm, idleMs: options.settings.idleMinutes * 60_000 });
     this.interruptGraceMs = options.interruptGraceMs ?? 15_000;
     this.titleWatchMs = options.titleWatchMs ?? titleWatch;
   }
 
-  /** Starts the idle sweep, checks the installed version and learns the models. */
+  /** Starts the idle sweep, checks the installed version and learns the models, and when the sign-in ends. */
   start(): void {
     this.pool.start();
     void this.checkVersion();
     void this.catalogReady();
+    void this.checkSignIn();
   }
 
   private async checkVersion(): Promise<void> {
     const version = await claudeVersion(this.claudePath, this.env);
     reportVersion({ name: "Claude Code", version, tested: testedClaudeVersion, path: this.claudePath, setting: "claude.path" });
+  }
+
+  /**
+   * When the login ends (`loginExpiresAt`, Claude Code 2.1.318), known before any thread
+   * runs: a turn the ended login refuses says so from the first. A key or a token in
+   * config.json has no such date.
+   */
+  async checkSignIn(): Promise<void> {
+    if (this.settings.apiKey || this.settings.oauthToken) return;
+    try {
+      const status = await this.authStatus();
+      if (status && typeof status === "object") this.signIn.heard((status as { loginExpiresAt?: unknown }).loginExpiresAt);
+    } catch (error) {
+      log.debug("could not ask Claude Code when its sign-in ends", { error: (error as Error).message });
+    }
   }
 
   // MARK: Models and commands

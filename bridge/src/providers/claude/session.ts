@@ -30,6 +30,7 @@ import { ClaudeTodos } from "./todos.ts";
 import { InputQueue } from "./input.ts";
 import { claudeEffort, permissionModeFor, queryOptions, thinkingBudget, threadModeFor } from "./options.ts";
 import { permissionRequest, permissionResult } from "./permissions.ts";
+import type { ClaudeSignIn } from "./signIn.ts";
 import type { CommandAccess } from "../../portals/access.ts";
 import type { Warmable, WarmPool } from "../pool.ts";
 import { ClaudeStream, type ContextWindows } from "./stream.ts";
@@ -145,6 +146,8 @@ export interface ClaudeHost {
   forget(session: ClaudeSession): void;
   /** The window each model's context fills, as its processes have said. */
   readonly windows: ContextWindows;
+  /** When the sign-in ends, as its processes have said. */
+  readonly signIn: ClaudeSignIn;
 }
 
 interface Live {
@@ -502,7 +505,7 @@ export class ClaudeSession implements ProviderSession, Warmable {
     const live: Live = {
       query,
       input,
-      stream: new ClaudeStream({ cwd: this.cwd, background: (event) => this.sink.emit(event), todos: this.todos, windows: this.host.windows }),
+      stream: new ClaudeStream({ cwd: this.cwd, background: (event) => this.sink.emit(event), todos: this.todos, windows: this.host.windows, signIn: this.host.signIn.thread(this.id) }),
       controls: Promise.resolve(),
       permission: Promise.resolve(),
       closing: false,

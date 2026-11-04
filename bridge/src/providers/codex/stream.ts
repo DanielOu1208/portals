@@ -1,4 +1,5 @@
 import { LiveOutput } from "../liveOutput.ts";
+import { notSignedIn } from "../signIn.ts";
 import type { ContextUsage, ProviderEvent, UsageLimit, UsageReport } from "../types.ts";
 import { asyncQuestions } from "./requests.ts";
 import { gatewayResult, gatewayTool, isToolItem } from "./tools.ts";
@@ -209,7 +210,7 @@ export class CodexStream {
           this.retrying = true;
           return [{ type: "status", text: `Codex is trying again: ${message}` }];
         }
-        this.lastError = message;
+        this.lastError = signedOut(params.error?.codexErrorInfo) ? notSignedIn("codex") : message;
         return [];
       }
       case "model/rerouted":
@@ -447,6 +448,11 @@ export class CodexStream {
         events.push({ type: "turn.end", status: "interrupted", ...usage });
         break;
       case "failed": {
+        // A request with no sign-in Codex could use: what to do instead of the HTTP error.
+        if (signedOut(turn.error?.codexErrorInfo)) {
+          events.push({ type: "turn.end", status: "error", error: notSignedIn("codex"), retryable: true, ...usage });
+          break;
+        }
         const error = turn.error?.message || this.lastError || "Codex stopped with an error.";
         const detail = turn.error?.additionalDetails ? ` ${turn.error.additionalDetails}` : "";
         events.push({ type: "turn.end", status: "error", error: `${error}${detail}`, retryable: true, ...usage });
@@ -621,6 +627,18 @@ export function usageReport(account: AccountRateLimits): UsageReport {
   if (notes.length > 0) report.note = notes.join("\n");
   else if (limits.length === 0) report.note = "Codex says no limits apply to this account.";
   return report;
+}
+
+/**
+ * Whether Codex's word for an error (`codexErrorInfo`) says the request had no sign-in it
+ * could use: `unauthorized`, or an HTTP 401 on any of the kinds that carry a status, as
+ * Codex 0.166.0 with no sign-in says (`httpConnectionFailed`, "401 Unauthorized: Missing
+ * bearer or basic authentication").
+ */
+function signedOut(info: unknown): boolean {
+  if (info === "unauthorized") return true;
+  if (!info || typeof info !== "object") return false;
+  return Object.values(info).some((detail) => (detail as { httpStatusCode?: unknown } | null)?.httpStatusCode === 401);
 }
 
 /** A count of Codex's tokens (`TokenUsageBreakdown`): input, its cached part in it, and output; null when it says none. */

@@ -377,7 +377,7 @@ export class FakeFiles implements SessionFiles {
 
 /** A Claude provider whose queries are FakeQuery objects, in the order they start. */
 export function fakeClaude(
-  options: { maxWarm?: number; idleMinutes?: number; files?: FakeFiles; agents?: () => Promise<unknown>; appliedModel?: string | null; now?: () => number; interruptGraceMs?: number; titleWatchMs?: number[]; home?: string; managedSettings?: string } = {},
+  options: { maxWarm?: number; idleMinutes?: number; files?: FakeFiles; agents?: () => Promise<unknown>; authStatus?: () => Promise<unknown>; appliedModel?: string | null; now?: () => number; interruptGraceMs?: number; titleWatchMs?: number[]; home?: string; managedSettings?: string } = {},
 ) {
   const queries: FakeQuery[] = [];
   const files = options.files ?? new FakeFiles();
@@ -389,6 +389,8 @@ export function fakeClaude(
     managedSettings: options.managedSettings ?? "/nonexistent/managed-settings.json",
     // No terminal has anything open unless the test says so.
     agents: options.agents ?? (async () => []),
+    // Signed in with no end said, unless the test says.
+    authStatus: options.authStatus ?? (async () => ({ loggedIn: true, loginExpiresAt: null })),
     now: options.now,
     interruptGraceMs: options.interruptGraceMs,
     titleWatchMs: options.titleWatchMs,

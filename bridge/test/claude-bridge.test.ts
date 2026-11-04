@@ -1492,3 +1492,45 @@ test("Claude Code's API retry heartbeat after a turn's end (a background agent w
   await play(query, "plain", { from: 1 });
   await completed(session, next);
 });
+
+test("Claude's sign-in through a whole bridge: the end claude auth status says is told from ten days before, and a turn the ended sign-in refuses names what to run on the host", async (t) => {
+  let now = Date.parse("2026-11-20T09:00:00Z");
+  const own = fakeClaude({ now: () => now, authStatus: async () => ({ loggedIn: true, authMethod: "claude.ai", loginExpiresAt: "2026-11-27T08:00:00.000Z" }) });
+  const folder = realpathSync(mkdtempSync(join(tmpdir(), "portals-claude-signin-test-")));
+  const ownBridge = await startTestBridge({ providers: new Map([["claude", own.provider]]), config: { generalFolder: folder } });
+  const phone = await TestClient.open(ownBridge);
+  t.after(async () => {
+    await phone.close();
+    await ownBridge.dispose();
+    rmSync(folder, { recursive: true, force: true });
+  });
+  await own.provider.checkSignIn();
+  const session = (await phone.call("session.create", { profile: "claude", source: "tui", cwd: folder })).session_id;
+  const turn = async (text: string, said: (query: FakeQuery) => void) => {
+    const start = phone.frames.length;
+    await phone.call("prompt.submit", { session_id: session, text, profile: "claude" });
+    await until(() => own.queries.some((query) => query.options.persistSession !== false && query.received.some((message) => message.message?.content === text)));
+    said(own.queries.at(-1)!);
+    await phone.from(start, (frame) => isEvent(frame, "message.complete", session));
+    return phone.frames.slice(start).filter((frame) => frame.method === "event" && frame.params.session_id === session).map((frame) => frame.params);
+  };
+
+  // A week before, with no result yet that said the date.
+  const first = await turn("Hello.", (query) => {
+    query.emit({ type: "system", subtype: "init", model: "claude-sign-in-test", permissionMode: "bypassPermissions", session_id: session });
+    query.emit({ type: "result", subtype: "success", is_error: false, user_message_uuids: [query.received.at(-1)!.uuid], usage: {}, session_id: session });
+  });
+  assert.deepEqual(first.filter((event) => event.type === "status.update").map((event) => event.payload), [
+    { kind: "warn", text: `Claude Code's sign-in on this ${machineWord()} ends on Fri, Nov 27. Run \`claude auth login\` in a terminal there before then to keep its threads working.` },
+  ]);
+
+  // Past its end, Claude Code refuses it with words that name its /login.
+  now = Date.parse("2026-11-28T09:00:00Z");
+  const refused = await turn("Hello again.", (query) => {
+    query.emit({ type: "assistant", error: "authentication_failed", is_api_error_message: true, message: { id: "e", model: "<synthetic>", role: "assistant", content: [{ type: "text", text: "Not logged in · Please run /login" }] }, user_message_uuids: [query.received.at(-1)!.uuid], session_id: session });
+    query.emit({ type: "result", subtype: "success", is_error: true, result: "Not logged in · Please run /login", user_message_uuids: [query.received.at(-1)!.uuid], usage: {}, session_id: session });
+  });
+  const end = refused.at(-1)!.payload;
+  assert.deepEqual([end.status, end.text, end.error_surface?.retryable], ["error", `Claude Code's sign-in on this ${machineWord()} has ended. Run \`claude auth login\` in a terminal there, then try again.`, true]);
+  assert.equal(JSON.stringify(refused).includes("/login"), false);
+});

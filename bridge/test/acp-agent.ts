@@ -382,7 +382,8 @@ async function handle(method: string, params: any): Promise<unknown> {
 //   sleep      a command that runs until the turn is stopped; `hang` a read that does
 //   stubborn   ignores a stop: goes on until a file `let-go` is in ACP_STANDIN_DIR, or a new prompt comes
 //   babble     ignores a stop, SIGTERM and the end of its input, and writes a word every 20 ms until it is killed
-//   signin     the reply of a session whose sign-in has gone
+//   signin     the reply of a session whose sign-in has gone; `refused` the error of one whose
+//              sign-in Cursor's backend refuses
 //   subagent   a Task whose subagent, in a session of its own, asks before a command, says
 //              how many files there are, and ends; with `long` it waits for a stop instead.
 //              (Told only to a client that said `_meta.subagents` at hello, as Cursor does.)
@@ -861,6 +862,10 @@ async function turnAsCursor(session: Stored, prompt: { type: string; text?: stri
   }
   if (has("signin")) {
     text(id, "Please sign in to continue");
+    return "end_turn";
+  }
+  if (has("refused")) {
+    text(id, "\n\nError: [unauthenticated] Backend rejected authentication. Verify this is a User API Key for the same endpoint/environment, then rerun with --debug for request-level auth logs.");
     return "end_turn";
   }
   if (has("subagent") && subagentsSaid) {

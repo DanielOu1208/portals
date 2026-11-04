@@ -9,6 +9,7 @@ import {
   type CreateSessionOptions, type DroidResultMessage, type DroidStreamEvent, type MessageOptions,
   type SessionSettings as SdkSettings, type UpdateSessionSettingsRequestParams,
 } from "@factory/droid-sdk/node";
+import { machineWord } from "../src/platform.ts";
 import { DroidProvider } from "../src/providers/droid/provider.ts";
 import { tokenTotal } from "../src/providers/droid/activity.ts";
 import { forgetSession, forgetStale, localSdk, titleAnswer, titleArguments, type DroidHandle, type DroidSdk, type TitleRequest } from "../src/providers/droid/sdk.ts";
@@ -770,6 +771,25 @@ test("an oversized Droid message is a visible failed turn with the model-window 
   r.handle.script = null;
   assert.equal((await turn(r.session, r.sink, "short enough")).status, "complete");
   assert.equal(r.sdk.opens.length, 1);
+});
+
+test("a Droid that is not signed in fails the turn with what to run on the host, and the next try works once it is", async (t) => {
+  const r = await rig(t);
+  const signedOut = `Droid is not signed in on this ${machineWord()}. Run \`droid\` in a terminal there and sign in with /login, then try again.`;
+  // As Droid 1.3.0 ends a turn with no sign-in, and as the SDK words a turn ended so with no error of Droid's.
+  for (const message of ["No access token available", "Agent turn ended: model_authentication_failed"]) {
+    r.handle.script = async function* (handle) {
+      yield {
+        type: "result", sessionId: handle.id, durationMs: 0, tokenUsage: null, messages: [], text: "", turnCount: 1,
+        subtype: "error_during_execution", success: false, interrupted: false,
+        error: { type: "error", message, errorType: DroidErrorType.ERROR, timestamp: new Date().toISOString() },
+      };
+    };
+    const end = await turn(r.session, r.sink, "hello");
+    assert.deepEqual([end.status, end.error, end.retryable], ["error", signedOut, true]);
+  }
+  r.handle.script = null;
+  assert.equal((await turn(r.session, r.sink, "hello again")).status, "complete");
 });
 
 test("Droid's known steering receipt still reaches the bridge when its history cannot be saved (D14)", async (t) => {
