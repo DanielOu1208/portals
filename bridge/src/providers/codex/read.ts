@@ -80,7 +80,7 @@ export async function readThread(client: Pick<CodexCalls, "call">, threadId: str
     try {
       return (await client.call<{ thread: Thread }>("thread/read", { threadId, includeTurns: true })).thread;
     } catch (fallback) {
-      if (!noTurnsYet(fallback)) throw fallback;
+      if (turns.length > 0 || !noTurnsYet(fallback)) throw fallback;
       return empty(client, threadId);
     }
   }

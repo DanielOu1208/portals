@@ -158,6 +158,19 @@ test("a thread whose first page was read does not become empty when a later page
   await assert.rejects(readThread(client, "abc"), refusal);
 });
 
+test("a thread whose first page was read does not become empty when paging and its full read are both refused", async () => {
+  const thread = recordedHistory("compact");
+  const refusal = new CodexError(-32601, "list_turns is not supported yet");
+  let reads = 0;
+  const client = reader(async (method, params) => {
+    if (method === "thread/read" && !params.includeTurns) return { thread };
+    if (method === "thread/read") throw refusal;
+    if (reads++ === 0) return { data: [thread.turns.at(-1)], nextCursor: "older" };
+    throw refusal;
+  });
+  await assert.rejects(readThread(client, "abc"), refusal);
+});
+
 test("unsupported paging after one page discards the partial history before falling back", async () => {
   const thread = recordedHistory("compact");
   let reads = 0;
