@@ -199,6 +199,11 @@ export type ProviderEvent =
   | { type: "queue.failed"; requestId: string; error: string }
   /** Droid's receipt for a message whose earlier delivery could not be confirmed. */
   | { type: "queue.taken"; requestId: string; prompt: Prompt }
+  /**
+   * A message handed over with `steer` that a Stop took back before the agent read it:
+   * it was never sent, and never will be.
+   */
+  | { type: "steer.withdrawn"; prompt: Prompt }
   /** A piece of the reply. */
   | { type: "text"; text: string }
   /** A closed piece of text written beside tool calls. `alreadyStreamed` when it also came as `text`. */

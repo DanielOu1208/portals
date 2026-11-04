@@ -351,6 +351,13 @@
 // - `open_on_host`: `host.apps` lists the apps on the host a thread's folder opens in (the
 //   Finder, the editors and terminals installed), and `folder.open` opens the thread's
 //   folder in one, on the host's own screen (src/openers.ts).
+// - `steer_withdrawn`: a message handed to the running turn that a Stop took back before
+//   the agent read it (Claude Code: it would have run once the turn had stopped, as a turn
+//   of its own) is told with a `status.update` `warn`, as before, carrying `withdrawn`:
+//   `{text, message_id?}`, the message as stored and the id its device gave it. The app
+//   takes it out of the turn it was shown in, and the device that sent it puts it back in
+//   its composer; an app without the feature shows the notice, which quotes the message
+//   whole. The conversation no longer has it, after a resume too.
 
 export const bridgeFeatures = [
   "mcp_auth",
@@ -423,6 +430,7 @@ export const bridgeFeatures = [
   "git_status",
   "usage_read",
   "open_on_host",
+  "steer_withdrawn",
 ] as const;
 
 export const bridgeProtocol = 1;

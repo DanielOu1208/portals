@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { statSync } from "node:fs";
 import type {
   CanUseTool,
   EffortLevel,
@@ -47,7 +48,13 @@ import type { PastSubagent } from "./tasks.ts";
 
 /** The parts of the SDK's `Query` the bridge uses, so tests can stand in for it. */
 export interface QueryLike extends AsyncIterable<SDKMessage> {
-  interrupt(): Promise<unknown>;
+  /**
+   * Stops the running turn. With `cancelQueued`, Claude Code also takes back the
+   * messages it has not read yet, which then never run, and lists them under
+   * `cancelled` (`InterruptReceipt`). The SDK takes the option, though its types do not
+   * declare it yet (0.3.292 to 0.3.318); a Claude Code from before it ignores it.
+   */
+  interrupt(options?: { cancelQueued?: boolean }): Promise<unknown>;
   /** Stops one task (a subagent, a workflow); Claude Code then reports it stopped. */
   stopTask(taskId: string): Promise<void>;
   setModel(model?: string): Promise<void>;
@@ -84,6 +91,11 @@ export interface PlanUsage {
   subscription_type?: string | null;
   rate_limits_available?: boolean;
   rate_limits?: Record<string, unknown> | null;
+}
+
+/** What `interrupt` answers: the uuids of the messages it took back, from a Claude Code that can. */
+interface InterruptReceipt {
+  cancelled?: unknown;
 }
 
 export type QueryFactory = (prompt: AsyncIterable<SDKUserMessage>, options: Options) => QueryLike;
@@ -174,6 +186,24 @@ interface Live {
   lastMode: string | null;
   /** Claude Code was asked the window its model's context fills. */
   windowAsked: boolean;
+  /** The messages steered into a turn, by the uuid each was sent with, until a result answers them. */
+  steers: Map<string, Prompt>;
+}
+
+/** Why Claude Code was not started, said as it is rather than as a failure of its start. */
+class NotStarted extends Error {}
+
+/** Why nothing can run in the thread's folder, as Pi's threads say it. */
+function folderGone(cwd: string): string {
+  return `The thread's folder, ${cwd}, is no longer there.`;
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 /** Why a session from the desk is not continued while a terminal has it. */
@@ -243,6 +273,11 @@ export class ClaudeSession implements ProviderSession, Warmable {
   private modelChanged = false;
   private effortChanged = false;
   private stopTimer: NodeJS.Timeout | null = null;
+  /**
+   * Messages steered in that are not written to Claude Code yet, behind a setting change
+   * it has not answered: a Stop takes them back before they are (`withdrawn`).
+   */
+  private readonly unsent = new Set<{ prompt: Prompt; withdrawn: boolean }>();
   private readonly stderr: string[] = [];
 
   constructor(options: SessionOptions, sink: SessionSink, host: ClaudeHost, history: StoredMessage[] = [], past: PastSubagent[] = [], cutOff = false) {
@@ -319,6 +354,8 @@ export class ClaudeSession implements ProviderSession, Warmable {
 
   private async send(prompt: Prompt, steering = false): Promise<true | "refused"> {
     let live: Live;
+    const waiting = steering ? { prompt, withdrawn: false } : null;
+    if (waiting) this.unsent.add(waiting);
     try {
       live = await this.warm();
       for (;;) {
@@ -328,14 +365,20 @@ export class ClaudeSession implements ProviderSession, Warmable {
         await permission;
         if (controls === live.controls && permission === live.permission) break;
       }
+      // Taken back by a Stop meanwhile, and the devices told: it is not sent, nor sent again.
+      if (waiting?.withdrawn) return true;
       if (this.closed || this.live !== live || live.closing) return "refused";
     } catch (error) {
+      if (waiting?.withdrawn) return true;
       // The original native turn still runs when a steer was never sent. Keep it
       // open; the session will retain this input for a turn of its own.
       if (this.closed || steering) return "refused";
       const message = (error as Error).message;
-      this.endTurn({ type: "turn.end", status: "error", error: message === terminalHasIt ? message : `Claude Code could not start: ${message}` });
+      if (error instanceof NotStarted) this.endTurn({ type: "turn.end", status: "error", error: message, retryable: false });
+      else this.endTurn({ type: "turn.end", status: "error", error: message === terminalHasIt ? message : `Claude Code could not start: ${message}` });
       return "refused";
+    } finally {
+      if (waiting) this.unsent.delete(waiting);
     }
     const uuid = randomUUID();
     const { message, skipped } = userMessage(prompt, uuid);
@@ -343,6 +386,7 @@ export class ClaudeSession implements ProviderSession, Warmable {
       this.emit({ type: "notice", level: "warn", text: skippedImagesText(skipped, "Claude") });
     }
     live.stream.sent(uuid);
+    if (steering) live.steers.set(uuid, prompt);
     try {
       live.input.push(message);
     } catch (error) {
@@ -367,12 +411,45 @@ export class ClaudeSession implements ProviderSession, Warmable {
       if (this.turnOpen && this.turns === turn && this.live === live) live.query.close();
     }, this.host.interruptGraceMs);
     this.stopTimer.unref();
+    // A message steered in that Claude has not read yet would run once the turn has
+    // stopped, as a turn of its own: Claude Code takes it back too, and it goes back to
+    // the composer of the device that sent it. Asked only then, so a Stop with none is as
+    // it always was.
+    const steered = new Map([...live.steers].filter(([uuid]) => live.stream.awaits(uuid)));
+    // One still waiting to be written is taken back here, before it is.
+    for (const waiting of this.unsent) {
+      if (waiting.withdrawn) continue;
+      waiting.withdrawn = true;
+      this.sink.emit({ type: "steer.withdrawn", prompt: waiting.prompt });
+    }
     try {
-      await live.query.interrupt();
+      const receipt = await live.query.interrupt(steered.size > 0 ? { cancelQueued: true } : undefined);
+      this.withdraw(live, steered, receipt);
     } catch (error) {
       log.warn("Claude did not take the interrupt", { session: this.id, error: (error as Error).message });
     }
     return true;
+  }
+
+  /**
+   * Of the messages `steered` in before a Stop, those Claude Code took back with it
+   * (`receipt`): the session is told of each. Its receipt may come after the stopped
+   * turn's end.
+   */
+  private withdraw(live: Live, steered: Map<string, Prompt>, receipt: unknown): void {
+    const cancelled = (receipt as InterruptReceipt | undefined)?.cancelled;
+    // Claude Code may list uuids of its own; only the bridge's steered messages are told of.
+    const taken = Array.isArray(cancelled) ? cancelled.filter((uuid): uuid is string => typeof uuid === "string" && steered.has(uuid)) : [];
+    for (const uuid of taken) {
+      this.sink.emit({ type: "steer.withdrawn", prompt: steered.get(uuid)! });
+      live.steers.delete(uuid);
+    }
+    // A process gone meanwhile has ended the turn already.
+    if (taken.length === 0 || this.live !== live) return;
+    for (const event of live.stream.withdraw(taken)) {
+      if (event.type === "turn.end") this.endTurn(event);
+      else this.emit(event);
+    }
   }
 
   /** Stops one subagent or workflow Claude runs; the turn, if any, goes on. */
@@ -481,6 +558,9 @@ export class ClaudeSession implements ProviderSession, Warmable {
       throw new Error(terminalHasIt);
     }
     if (this.closed) throw new Error("Claude session closed before it started.");
+    // Claude Code cannot be started in a folder that is gone, and the SDK then guesses at
+    // why, wrongly (a binary built for another libc), after some seconds.
+    if (!isDirectory(this.cwd)) throw new NotStarted(folderGone(this.cwd));
     const exists = await this.host.files.exists(this.id, this.cwd);
     if (this.closed) throw new Error("Claude session closed before it started.");
     const effort = claudeEffort(this.current.reasoningEffort);
@@ -528,6 +608,7 @@ export class ClaudeSession implements ProviderSession, Warmable {
       overridden,
       lastMode: null,
       windowAsked: false,
+      steers: new Map(),
     };
     live.reading = this.read(live);
     this.live = live;
@@ -564,7 +645,11 @@ export class ClaudeSession implements ProviderSession, Warmable {
       this.endTurn({ type: "turn.end", status: "interrupted", usage: live.stream.usage, ...live.stream.spentSoFar() });
       return;
     }
-    const message = `Claude Code stopped unexpectedly${detail ? `: ${detail}` : "."}`;
+    // The SDK blames the program it could not start in words for its own options
+    // (`pathToClaudeCodeExecutable`): the person's setting is `claude.path`.
+    const message = /pathToClaudeCodeExecutable/.test(detail)
+      ? `Claude Code could not be started at ${this.host.claudePath}. ${isDirectory(this.cwd) ? "Check claude.path in config.json." : folderGone(this.cwd)}`
+      : `Claude Code stopped unexpectedly${detail ? `: ${detail}` : "."}`;
     this.emit({ type: "error", message });
     this.endTurn({ type: "turn.end", status: "error", error: message, retryable: true, ...live.stream.spentSoFar() });
   }
@@ -657,6 +742,8 @@ export class ClaudeSession implements ProviderSession, Warmable {
     if (this.stopTimer) clearTimeout(this.stopTimer);
     this.stopTimer = null;
     const live = this.live;
+    // Those a result has answered are Claude's now; a Stop can take back none of them.
+    if (live) for (const uuid of live.steers.keys()) if (!live.stream.awaits(uuid)) live.steers.delete(uuid);
     if (live) void this.control(live, () => this.afterTurn(live));
     this.sink.emit(event);
     this.host.pool.touch(this);

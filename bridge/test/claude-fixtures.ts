@@ -206,9 +206,11 @@ export class FakeQuery implements QueryLike {
     }
   }
 
-  async interrupt(): Promise<unknown> {
-    this.calls.push(["interrupt"]);
-    return undefined;
+  /** What `interrupt` answers: an older Claude Code's nothing, unless a test gives a receipt. */
+  interruptReceipt: unknown = undefined;
+  async interrupt(options?: { cancelQueued?: boolean }): Promise<unknown> {
+    this.calls.push(options ? ["interrupt", options] : ["interrupt"]);
+    return this.interruptReceipt;
   }
   async stopTask(taskId: string): Promise<void> {
     this.calls.push(["stopTask", taskId]);
