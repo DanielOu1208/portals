@@ -316,6 +316,15 @@ export async function startBridge(options: BridgeOptions = {}): Promise<RunningB
     if (provider.ongoingThread) void keepOngoingOnceAnswered(name, provider, sessions, following.signal);
   };
   for (const provider of new Set(providers.values())) provider.onAgentAdded?.(keepOngoing);
+  for (const [name, provider] of providers) {
+    provider.watchThreads?.(
+      () => registry.all().filter((record) => record.agent === name && !record.readOnly),
+      async (id) => {
+        if (following.signal.aborted || registry.get(id)?.agent !== name) return;
+        await sessions.refresh(await sessions.load(id));
+      },
+    );
+  }
   startProviders(providers);
   for (const [name, provider] of providers) keepOngoing(name, provider);
   void followLiveThreads(registry, providers, sessions, following.signal).then(async (asking) => {

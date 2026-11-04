@@ -120,6 +120,8 @@ export interface CodexHost {
   nameThread(thread: string, message: string): void;
   /** The skill a message in `cwd` runs ("/name …"), if it names one of Codex's (./skills.ts); throws when Codex cannot list them. */
   skill(cwd: string, text: string): Promise<{ name: string; path: string } | null>;
+  used?(session: CodexSession): void;
+  released?(session: CodexSession, thread?: Thread): void;
   forget(session: CodexSession): void;
 }
 
@@ -272,6 +274,11 @@ export class CodexSession implements ProviderSession {
   private applied: Applied | null;
   /** This connection gets the thread's notifications and requests. */
   private subscribed: boolean;
+  private followed = false;
+  private letGo = false;
+  private runtimeActive = false;
+  private releasing: Promise<void> | null = null;
+  private waking: Promise<void> | null = null;
   /** The bridge has followed it in this run, so it follows it again after a reconnect while Codex still has it loaded. */
   private following: boolean;
   private subscribing: Promise<void> | null = null;
@@ -436,6 +443,8 @@ export class CodexSession implements ProviderSession {
     this.past = this.agents.remember((thread.turns ?? []) as Turn[]);
     this.lastKnownTurn = ((thread.turns ?? []) as Turn[]).at(-1)?.id ?? null;
     this.lastShownTurn = this.lastKnownTurn;
+    this.runtimeActive = thread.status?.type === "active";
+    this.letGo = !this.following && this.lastKnownTurn !== null;
     log.info("Codex thread loaded", { session: this.id, following: this.subscribed, running: history.running !== null });
     this.stored = history.messages;
     this.turnEnds = history.ends;
@@ -513,7 +522,9 @@ export class CodexSession implements ProviderSession {
    * open questions again. Persisted history is read separately; a pending file-change
    * approval whose changes were missed reads its live item in `changesOf`.
    */
-  private subscribe(): Promise<void> {
+  private async subscribe(): Promise<void> {
+    if (this.releasing) await this.releasing;
+    if (this.closed) return;
     if (this.subscribed) return Promise.resolve();
     this.subscribing ??= (async () => {
       try {
@@ -521,6 +532,7 @@ export class CodexSession implements ProviderSession {
         this.learn({ model: result.model, effort: result.reasoningEffort, approvalPolicy: result.approvalPolicy, sandboxPolicy: result.sandbox, collaborationMode: result.collaborationMode?.mode });
         this.subscribed = true;
         this.following = true;
+        this.host.used?.(this);
       } catch (error) {
         // A thread with no turn yet has nothing stored to resume; Codex still has it, and
         // the next turn/start follows it.
@@ -540,6 +552,83 @@ export class CodexSession implements ProviderSession {
       if (value !== undefined) applied[key] = value;
     }
     this.applied = applied;
+  }
+
+  // MARK: Idle subscriptions
+
+  get isReleased(): boolean { return this.letGo; }
+
+  get busy(): boolean {
+    return this.readOnly || this.followed || this.lastKnownTurn === null || this.turnOpen || this.starting || this.beginning !== null
+      || this.pending.size > 0 || this.planCard !== null || this.agents.isRunning || this.terminalProcesses.size > 0
+      || this.external !== null || this.abandoned !== null || this.runtimeActive || this.reading !== null
+      || this.subscribing !== null || this.waking !== null || this.down || this.recovery !== null || !this.isAttached;
+  }
+
+  setFollowed(followed: boolean): void {
+    if (this.followed === followed) return;
+    this.followed = followed;
+    this.host.used?.(this);
+    if (followed) void this.prepareOpen().catch((error: Error) => log.warn("could not reopen a Codex thread", { session: this.id, error: error.message }));
+  }
+
+  /** Releases only the subscription; the session's history and event stream stay. */
+  async cool(): Promise<void> {
+    if (this.closed || this.busy || this.letGo) return;
+    if (this.releasing) return this.releasing;
+    const drops = this.drops;
+    this.releasing = (async () => {
+      const { thread } = await this.host.client.call<{ thread: Thread }>("thread/read", { threadId: this.id, includeTurns: false });
+      if (this.closed || this.busy || drops !== this.drops) return;
+      if (thread.status?.type === "active") { this.runtimeActive = true; return; }
+      // History omits live commands after a restart or a missed turn. Ask Codex before
+      // letting go; if it cannot say, keep following rather than lose background work.
+      if (thread.status?.type !== "notLoaded") {
+        const terminals = await this.host.client.call<{ data: unknown[]; nextCursor: string | null }>("thread/backgroundTerminals/list", { threadId: this.id, cursor: null, limit: 1 });
+        if (terminals.data.length > 0 || terminals.nextCursor) return;
+      }
+      if (this.closed || this.busy || drops !== this.drops) return;
+      this.subscribed = false;
+      this.following = false;
+      this.letGo = true;
+      this.gap ??= { after: this.lastKnownTurn, shown: new Set() };
+      await this.host.client.call("thread/unsubscribe", { threadId: this.id });
+      if (!this.closed && drops === this.drops) this.host.released?.(this, thread);
+    })().catch((error: Error) => {
+      this.letGo = false;
+      this.following = true;
+      log.debug("could not let go of an idle Codex thread", { session: this.id, error: error.message });
+    }).finally(() => {
+      this.releasing = null;
+      if (this.closed) return;
+      if (!this.letGo) this.host.used?.(this);
+      else if (this.followed || this.busy) void this.prepareOpen().catch((error: Error) => log.warn("could not rejoin a Codex thread used while it was let go", { session: this.id, error: error.message }));
+    });
+    return this.releasing;
+  }
+
+  async prepareOpen(): Promise<void> {
+    for (;;) {
+      if (this.closed || this.readOnly) return;
+      // Each await may end with another reconnect or a transition to cold.
+      if (this.releasing) { await this.releasing; continue; }
+      if (this.waking) { await this.waking; continue; }
+      if (this.recovery) { await this.recovery.done; continue; }
+      if (!this.letGo) return;
+      this.letGo = false;
+      this.following = true;
+      const run = this.reconnecting.then(() => this.followAgain(Promise.resolve(null), true));
+      this.reconnecting = run.catch(() => undefined);
+      this.waking = run.catch((error) => {
+        this.letGo = true;
+        this.following = false;
+        throw error;
+      }).finally(() => {
+        this.waking = null;
+        if (!this.closed && !this.letGo) this.host.used?.(this);
+      });
+      await this.waking;
+    }
   }
 
   // MARK: ProviderSession
@@ -587,6 +676,7 @@ export class CodexSession implements ProviderSession {
     this.completedCheckpoint = null;
     this.compositeTurn = false;
     this.starting = true;
+    this.host.used?.(this);
     this.compacting = isCompact(prompt);
     this.reviewing = !this.compacting && isReview(prompt);
     void (this.compacting ? this.compact() : this.reviewing ? this.review(prompt) : this.begin(prompt));
@@ -740,6 +830,7 @@ export class CodexSession implements ProviderSession {
     this.answersGone();
     for (const settle of [...this.reachWaiters]) settle(undefined);
     await this.removeImages();
+    await Promise.allSettled([this.releasing, this.waking].filter((work) => work !== null));
     this.host.forget(this);
   }
 
@@ -1004,6 +1095,7 @@ export class CodexSession implements ProviderSession {
     this.carried = null;
     this.carriedTurn = null;
     this.turnOpen = false;
+    this.runtimeActive = false;
     this.turnID = null;
     this.runningUser = null;
     this.compacting = false;
@@ -1258,9 +1350,11 @@ export class CodexSession implements ProviderSession {
         return;
       }
       case "thread/status/changed":
+        this.runtimeActive = params.status?.type === "active";
         if (params.status?.type === "notLoaded") this.subscribed = false;
         return;
       case "thread/closed":
+        this.runtimeActive = false;
         this.subscribed = false;
         return;
       case "warning":
@@ -1687,6 +1781,13 @@ export class CodexSession implements ProviderSession {
 
   /** While the bridge is not back in step with the thread after a drop of the connection to Codex: resolves once it is. */
   catchingUp(): Promise<void> | undefined {
+    if (this.waking) return this.waking;
+    if (this.letGo || this.releasing) {
+      const opening = this.prepareOpen();
+      // Some callers only ask whether catch-up is pending (watchReach).
+      void opening.catch(() => undefined);
+      return opening;
+    }
     return this.recovery?.done;
   }
 
@@ -1748,11 +1849,12 @@ export class CodexSession implements ProviderSession {
   }
 
   /** `reconnected`, once the reconnect before it is over. */
-  private async followAgain(loaded: Promise<Set<string> | null>): Promise<void> {
+  private async followAgain(loaded: Promise<Set<string> | null>, opening = false): Promise<void> {
+    if (this.closed) return;
     // A sub-agent may have ended while Codex could not say so.
     if (this.isAttached) this.settleAgents();
     // Not followed again: what it missed shows when it is opened again, as before.
-    if (!this.following && this.pending.size === 0 && !this.turnOpen) {
+    if (!opening && !this.following && this.pending.size === 0 && !this.turnOpen) {
       this.gap = null;
       this.caughtUp();
       return;
@@ -1764,9 +1866,10 @@ export class CodexSession implements ProviderSession {
     if (held) this.reading = held;
     try {
       const live = await loaded;
-      if (!this.subscribed && this.pending.size === 0 && !this.turnOpen && live?.has(this.id) === false) {
+      if (!opening && !this.followed && !this.subscribed && this.pending.size === 0 && !this.turnOpen && live?.has(this.id) === false) {
         this.following = false;
-        this.gap = null;
+        this.letGo = this.lastKnownTurn !== null;
+        if (this.letGo) this.host.released?.(this);
         return;
       }
       await this.subscribe();
@@ -1776,6 +1879,7 @@ export class CodexSession implements ProviderSession {
       if (!this.turnOpen) await this.joinMissed(held ?? undefined);
     } catch (error) {
       log.warn("could not follow a Codex thread again", { session: this.id, error: (error as Error).message });
+      if (opening) throw error;
     } finally {
       // Not taken by joinMissed (it did not get that far): what it held goes on now.
       if (held && this.reading === held) {
@@ -1858,6 +1962,11 @@ export class CodexSession implements ProviderSession {
       const through = [after, this.external].filter((id): id is string => id !== null);
       const thread = await this.read({ through: this.withBackgroundTurns(through) });
       within = reviewsOwn((thread.turns ?? []) as Turn[]);
+      this.runtimeActive = thread.status?.type === "active";
+      if (typeof thread.name === "string" && thread.name.trim() !== "" && thread.name !== this.title) {
+        this.title = thread.name;
+        this.handle("thread/name/updated", { threadId: this.id, threadName: thread.name });
+      }
       this.terminalsEnded(thread);
       // A wait among what was missed names the sub-agents it waited for as live: their
       // nicknames, which only their own threads say, as their starts were missed too.

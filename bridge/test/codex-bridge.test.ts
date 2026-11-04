@@ -2029,7 +2029,7 @@ test("a reply streaming when the connection to Codex drops goes on whole, withou
   assert.equal(streamed, "Hello big world");
 });
 
-test("after a reconnect only the threads Codex still has loaded are followed again; one it let go of is followed at its next message", async () => {
+test("after a reconnect an unloaded thread no device retains is followed at its next open", async () => {
   const kept = await createThread();
   const dropped = await createThread();
   for (const session of [kept, dropped]) {
@@ -2038,6 +2038,7 @@ test("after a reconnect only the threads Codex still has loaded are followed aga
     daemon.finishTurn(session, await daemon.activeTurn(session));
     await completed(session, start);
   }
+  await client.call("session.leave", { session_id: dropped });
   const from = daemon.calls.length;
   daemon.accepting = false;
   daemon.dropAll();
@@ -2050,6 +2051,7 @@ test("after a reconnect only the threads Codex still has loaded are followed aga
   assert.equal(resumed().length, 0);
 
   const start = client.frames.length;
+  await client.call("session.resume", { session_id: dropped });
   const turn = await send(dropped, "Again.");
   assert.equal(resumed().length, 1);
   assert.ok(daemon.calls.indexOf(resumed()[0]) < daemon.calls.indexOf(turn));
@@ -2326,7 +2328,7 @@ test("after a restart a thread with no message yet, which Codex still has loaded
   }
 });
 
-test("after a restart a thread Codex has not loaded comes back from thread/read, and is followed only when used", async () => {
+test("after a restart an unloaded thread reads back and is followed while a device has it open", async () => {
   const turns = rewrite(recordedHistory("tools").turns, [
     [recordedThread("tools"), "x"],
     [fixtureCwd, cwd],
@@ -2352,7 +2354,7 @@ test("after a restart a thread Codex has not loaded comes back from thread/read,
     assert.equal(JSON.parse(resumed.messages[3].content).diff, "--- a/hello.txt\n+++ b/hello.txt\n@@ -1 +1 @@\n-hi\n+hello\n");
     // Codex's own name for it (given at the desk) is the title.
     assert.equal(resumed.info.title, "Patch hello.txt");
-    assert.equal(daemon.calls.slice(from).some((call) => call.method === "thread/resume" && call.params.threadId === thread), false);
+    assert.equal(daemon.calls.slice(from).some((call) => call.method === "thread/resume" && call.params.threadId === thread), true);
 
     // The next message follows it first, then starts the turn with the mode set before the restart.
     const start = phone.frames.length;

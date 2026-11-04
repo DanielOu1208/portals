@@ -42,7 +42,7 @@ function assertPaged(daemon: FakeDaemon) {
   assert.equal(daemon.callsOf("thread/resume").some((call) => call.params.excludeTurns !== true), false);
 }
 
-test("opening paged history retains full tool rows across pages without loading an idle thread", async (t) => {
+test("opening paged history retains full tool rows across pages and follows it for the device", async (t) => {
   const turns = [turn("old"), ...recordedHistory("tools").turns, turn("new")];
   const { daemon, client, id } = await fixture(t, turns);
   const result = await client.call("session.resume", { session_id: id, profile: "codex", inline_images: false });
@@ -50,8 +50,8 @@ test("opening paged history retains full tool rows across pages without loading 
   assert.deepEqual(result.messages.filter((message: any) => message.role === "user").map((message: any) => message.text), ["old", turns[1].items[0].content[0].text, "new"]);
   const patch = result.messages.find((message: any) => message.role === "tool" && message.name === "patch");
   assert.match(JSON.parse(patch.content).diff, /-hi\n\+hello/);
-  assert.equal(daemon.callsOf("thread/resume").length, 0);
-  assert.equal(daemon.callsOf("thread/turns/list").length, 2);
+  assert.equal(daemon.callsOf("thread/resume").length, 1);
+  assert.ok(daemon.callsOf("thread/turns/list").length >= 2);
   assertPaged(daemon);
 });
 

@@ -95,6 +95,10 @@ export class FakeDaemon {
   accepting = true;
   /** The paged protocol; false stands in for an older app-server. */
   pagedHistory = false;
+  /** Unsubscribed connections miss turn/item events, as with the real app-server. */
+  subscriptionEventsOnly = false;
+  onUnsubscribe: (params: Json) => void | Promise<void> = () => {};
+  backgroundTerminals: Json[] = [];
   historyPageSize = 2;
   /** Runs after a turns page is captured, before it is returned. */
   onTurnsRead: (params: Json) => void = () => {};
@@ -206,7 +210,10 @@ export class FakeDaemon {
   /** Every connection hears it, whether it follows the thread or not. */
   broadcast(method: string, params: Json): void {
     this.observe(method, params);
-    for (const connection of this.connections) connection.send({ method, params });
+    for (const connection of this.connections) {
+      if (this.subscriptionEventsOnly && /^(turn|item)\//.test(method) && !connection.subscribed.has(params.threadId)) continue;
+      connection.send({ method, params });
+    }
   }
 
   /**
@@ -575,7 +582,10 @@ export class FakeDaemon {
       }
       case "account/rateLimits/read":
         return this.accountLimits;
+      case "thread/backgroundTerminals/list":
+        return { data: this.backgroundTerminals, nextCursor: null };
       case "thread/unsubscribe":
+        await this.onUnsubscribe(params);
         // An ephemeral thread is gone once nobody follows it.
         connection.subscribed.delete(params.threadId);
         if (this.ephemeral.delete(params.threadId)) this.threads.delete(params.threadId);

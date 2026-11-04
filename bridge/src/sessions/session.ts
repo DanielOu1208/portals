@@ -747,6 +747,7 @@ export class Session {
    * gone on in the terminal that has it open. Called before a snapshot.
    */
   async refresh(): Promise<void> {
+    await this.provider?.prepareOpen?.();
     if (!this.isReadOnly || this.running || !this.provider?.reload) return;
     this.transcript = new Transcript(withTurnDiffs(withKeptDiffs(await this.provider.reload(), this.keptDiffs())));
     // Told by no event: a device that held the conversation before takes it whole.
@@ -756,6 +757,7 @@ export class Session {
   /** Connects the provider's side and reads the conversation so far. */
   async attach(provider: ProviderSession): Promise<void> {
     this.provider = provider;
+    provider.setFollowed?.(this.followers.size > 0);
     // With the diffs the bridge kept of edits as they were live, where the agent's history
     // would give others (feature turn_diff): its turns' counts are those shown live.
     // And with how its questions asked without waiting were settled on their card (feature
@@ -854,7 +856,9 @@ export class Session {
   follow(peer: Peer): void {
     // One that closed while its call was under way would never be removed.
     if (!peer.isOpen) return;
+    const first = this.followers.size === 0;
     this.followers.add(peer);
+    if (first) this.provider?.setFollowed?.(true);
     if (peer.keepsSubagentRequests === true) this.keepsSubagentQuestions = true;
     if (peer.keepsAsyncQuestions === true) this.keepsAsyncQuestions = true;
   }
@@ -874,7 +878,7 @@ export class Session {
   }
 
   unfollow(peer: Peer): void {
-    this.followers.delete(peer);
+    if (this.followers.delete(peer) && this.followers.size === 0) this.provider?.setFollowed?.(false);
     // Gone with its connection: what it attached was for a message it can no longer send.
     this.attached.delete(peer);
   }
@@ -1897,6 +1901,7 @@ export class Session {
    */
   retire(): void {
     this.retired = true;
+    if (this.followers.size > 0) this.provider?.setFollowed?.(false);
     this.followers.clear();
     this.queue.length = 0;
     this.watchReach();
@@ -1919,6 +1924,7 @@ export class Session {
     this.sayNotesDue();
     this.watchReach();
     this.watchQuiet();
+    if (this.followers.size > 0) this.provider?.setFollowed?.(false);
     this.followers.clear();
     await this.provider?.close();
   }
@@ -2207,6 +2213,10 @@ export class Session {
             // Also while a turn told meanwhile runs: a message waiting behind it waits its
             // own time again, should the connection drop before that turn ends.
             this.watchReach();
+            if (!this.running && !this.retired) this.startNext();
+          }, (error: Error) => {
+            this.awaitingCatchUp = false;
+            next.failure = error.message;
             if (!this.running && !this.retired) this.startNext();
           });
         }
