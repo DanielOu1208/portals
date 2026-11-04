@@ -537,3 +537,32 @@ test("a message sent while the connection is down is still sent when the replay 
     assert.ok(core.messages.some((message) => message.role === "assistant" && message.text === "Next reply"));
   } finally { await core.close(); }
 });
+
+for (const when of ["live while the replay is asked for", "in the replay"] as const) {
+  test(`a turn Hermes begins after an at-rest resume, ${when}, is not ended by that resume's truncated replay`, async () => {
+    const { core, adapter, setCall } = await fixture();
+    const replay = deferred<unknown>(), asked = deferred<void>();
+    const newer = [{ type: "message.start", seq: 10, payload: {} }, delta(11, "B")];
+    setCall(async (method) => {
+      // Hermes was at rest when resumed: the open turn ended among the events it lost.
+      if (method === "session.resume") return { session_id: "runtime", running: false, messages: [{ role: "user", text: "hello", timestamp: 0 }, { role: "assistant", text: "AZ", timestamp: 1 }] };
+      if (method === "session.events.since") { asked.resolve(); return replay.promise; }
+      return {};
+    });
+    try {
+      adapter.connectionLost();
+      const resumed = adapter.reconnected(true);
+      await asked.promise;
+      // Then it began another turn, after the resume's snapshot.
+      if (when === "in the replay") replay.resolve({ events: newer, latest_seq: 11, truncated: true, open_requests: [] });
+      else {
+        for (const event of newer) adapter.event(event.type, event.seq, event.payload);
+        replay.resolve({ events: [], latest_seq: 9, truncated: true, open_requests: [] });
+      }
+      await resumed;
+      assert.equal(core.isRunning, true, "the turn begun after the at-rest snapshot is still running");
+      adapter.event("message.complete", 12, { status: "complete", text: "BC" });
+      assert.equal(core.isRunning, false);
+    } finally { replay.resolve({ events: [], open_requests: [] }); await core.close(); }
+  });
+}

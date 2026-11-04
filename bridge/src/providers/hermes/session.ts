@@ -164,6 +164,8 @@ export class HermesSession implements ProviderSession {
   private gap = false;
   /** The last turn Hermes has (it took the message or began it, or was running it when loaded). */
   private handedOver = 0;
+  /** Hermes's `message.start`s heard so far, so a resume knows a turn began after its snapshot. */
+  private starts = 0;
 
   /**
    * `mark` is where Hermes's stored copy of the ongoing conversation stood before `loaded`
@@ -552,6 +554,7 @@ export class HermesSession implements ProviderSession {
         // Hermes is past the stopped turn the bridge ended for the app.
         this.abandoned = false;
         this.startHeard = true;
+        this.starts += 1;
         if (!this.turnOpen) {
           this.openTurn();
           this.streamed = "";
@@ -766,6 +769,7 @@ export class HermesSession implements ProviderSession {
     const held = this.recovering ??= [];
     const cursor = this.lastSeq;
     const turn = this.turns;
+    const starts = this.starts;
     const current = () => !this.closed && this.generation === generation && this.recovering === held;
     const resume = Promise.resolve().then(async () => {
       try {
@@ -826,8 +830,10 @@ export class HermesSession implements ProviderSession {
         // The turn Hermes was given ended among the events it lost: Hermes is at rest, and the
         // turn ends here too, so its stored copy can fill the holes (`changedConversation`).
         // Not one Hermes has not been given yet (a message waiting on this resume), nor a
-        // compression, which ends with its own answer.
-        if (sameRuntime && this.gap && !loaded.running && this.turnOpen && this.turns === turn && this.handedOver === turn && this.compression === null) {
+        // compression, which ends with its own answer. Nor when a turn began since, in the
+        // replay or live meanwhile: Hermes is at work on it, and its own end ends the turn (a
+        // start of the turn open would have its end in the replay too, which would close it).
+        if (sameRuntime && this.gap && !loaded.running && this.turnOpen && this.turns === turn && this.handedOver === turn && this.starts === starts && this.compression === null) {
           this.endTurn({ type: "turn.end", status: "complete" });
         }
         this.retryDelay = 400;
