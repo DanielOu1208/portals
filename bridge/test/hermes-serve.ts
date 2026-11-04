@@ -96,6 +96,16 @@ export class FakeHermes {
   mcpServers: Frame[] | null = [];
   /** `session.list` fails with this when set. */
   listFails: { code: number; message: string } | null = null;
+  /** What `commands.catalog` answers, as Hermes 0.22.5 shapes it. */
+  catalog: Frame = {
+    pairs: [["/context", "Show detailed context window view"], ["/model", "Switch model"], ["/plan", "Write a markdown implementation plan"], ["/yolo", "Toggle YOLO mode"], ["/tidy", "Tidy a folder"]],
+    categories: [{ name: "Session", pairs: [["/context", "Show detailed context window view"], ["/plan", "Write a markdown implementation plan"]] }, { name: "Configuration", pairs: [["/model", "Switch model"], ["/yolo", "Toggle YOLO mode"]] }],
+    skills: { "/tidy": { usage: 0, origin: "local" } },
+  };
+  /** What `usage.bars` answers. */
+  usageBars: Frame = { ok: true, available: false };
+  /** Each session's `yolo` (Hermes's for the session alone), by runtime id. */
+  readonly yolo = new Map<string, boolean>();
   /** Runs when a `session.title` arrives, before it is taken (another app naming its session first). */
   onTitle: (params: Frame) => void = () => {};
   /** Runs when a `session.resume` arrives, before it is answered (once it settles, when it gives a promise). */
@@ -148,6 +158,13 @@ export class FakeHermes {
   /** An event of no session to every connection, as Hermes's `sessions.changed` is. */
   broadcast(type: string, payload: Frame = {}): void {
     for (const connection of this.connections) this.send(connection, { jsonrpc: "2.0", method: "event", params: { type, session_id: "", payload } });
+  }
+
+  /** An event for a session, by its stored id, as Hermes sends a loaded session's. */
+  tell(stored: string, type: string, payload: Frame = {}): void {
+    const session = this.sessions.get(stored);
+    if (!session?.runtime) throw new Error(`${stored} is not loaded`);
+    for (const connection of this.connections) this.send(connection, { jsonrpc: "2.0", method: "event", params: { type, session_id: session.runtime, payload } });
   }
 
   dropAll(): void {
@@ -334,7 +351,22 @@ export class FakeHermes {
         if (!this.mcpServers) return this.fail(connection, id, -32601, `unknown method: ${call.method}`);
         return this.reply(connection, id, { servers: this.mcpServers, checked_at: 1791337800 });
       case "config.set":
+        if (params.key === "yolo") {
+          if (params.scope !== "session") return this.fail(connection, id, 4000, "the fake Hermes changes yolo for one session only");
+          this.yolo.set(params.session_id, params.value === "on");
+          return this.reply(connection, id, { key: "yolo", value: params.value === "on" ? "1" : "0", scope: "session" });
+        }
         return this.reply(connection, id, params.key === "model" ? { deferred: false } : {});
+      case "commands.catalog":
+        return this.reply(connection, id, this.catalog);
+      case "slash.exec":
+        return this.reply(connection, id, { output: `Hermes ran ${params.command}` });
+      case "command.dispatch":
+        return this.reply(connection, id, { type: params.name === "tidy" ? "skill" : "send", message: `[the ${params.name} prompt] ${params.arg ?? ""}`.trim() });
+      case "usage.bars":
+        return this.reply(connection, id, this.usageBars);
+      case "subagent.interrupt":
+        return this.reply(connection, id, { found: true, subagent_id: params.subagent_id });
       default:
         return this.fail(connection, id, 4000, `the fake Hermes has no ${call.method}`);
     }

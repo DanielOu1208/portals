@@ -573,7 +573,7 @@ test("an event Hermes sends that the bridge does not know is said once in the lo
     adapter.event("something.new", 2, { detail: 1 });
     adapter.event("something.new", 3, { detail: 2 });
     adapter.event("tool.generating", 4, { name: "terminal" });
-    adapter.event("subagent.progress", 5, {});
+    adapter.event("subagent.thinking", 5, {});
     const unknown = lines.filter((line) => line.includes("Hermes sent an event the bridge does not know"));
     assert.equal(unknown.length, 1);
     assert.match(unknown[0], /"type":"something\.new"/);
@@ -656,6 +656,32 @@ test("a message sent after the Stop deadline but before Hermes ends the stopped 
     assert.deepEqual(core.messages.filter((message) => message.role === "assistant").map((message) => message.text), ["A", "New reply"]);
   } finally { stop.resolve({}); await core.close(); }
 });
+for (const run of ["the same run of Hermes", "another run of Hermes"] as const) {
+  test(`a child Hermes's delegate_task left running in the background after its turn ended is followed again after a drop, on ${run}`, async () => {
+    const { core, adapter, loaded, setCall } = await fixture();
+    const calls: string[] = [];
+    const child = { subagent_id: "child", goal: "Count the files", depth: 0 };
+    setCall(async (method) => {
+      calls.push(method);
+      if (method === "session.resume") return run === "the same run of Hermes" ? { ...loaded, running: false, inflight: undefined } : { session_id: "new-runtime", running: false, messages: [] };
+      if (method === "session.events.since") return { events: [{ type: "subagent.complete", seq: 4, payload: { ...child, status: "completed", summary: "12 files" } }], latest_seq: 4, open_requests: [] };
+      return {};
+    });
+    const status = () => core.subagentList().find((info) => info.subagent_id === "child")?.status;
+    try {
+      adapter.event("subagent.start", 2, child);
+      adapter.event("message.complete", 3, { status: "complete", text: "A child is counting." });
+      assert.equal(core.isRunning, false);
+      assert.equal(status(), "running");
+      adapter.connectionLost();
+      await adapter.reconnected(run === "the same run of Hermes");
+      assert.ok(calls.includes("session.resume"), calls.join(", "));
+      // Its end came with the replay; another run of Hermes no longer has it.
+      assert.equal(status(), run === "the same run of Hermes" ? "completed" : "stopped");
+      assert.equal(core.isAtWork, false);
+    } finally { await core.close(); }
+  });
+}
 
 for (const when of ["live while the replay is asked for", "in the replay"] as const) {
   test(`a turn Hermes begins after an at-rest resume, ${when}, is not ended by that resume's truncated replay`, async () => {

@@ -1538,9 +1538,12 @@ See [the protocol](../docs/gateway-protocol.md#lean-deltas) for the format and o
   Leave Pi off on a bridge with such a profile. A profile called `cursor` loses its name
   to Cursor the same way, on a Mac that has `cursor-agent`: turn Cursor off there
   (`providers.cursor`).
-- Hermes threads through the bridge show no subagents line, offer none of Hermes's own
-  slash commands or skills, list no Hermes sessions from the desk (Discord, a terminal),
-  and queue a message sent mid-turn rather than steering it in.
+- Hermes threads through the bridge list no Hermes sessions from the desk (Discord, a
+  terminal), and offer only those of Hermes's own commands that change none of its
+  settings and work outside its own windows (`hermesCommands` in
+  `src/providers/hermes/provider.ts`). A skill local to a project is not offered, and
+  goes as words when typed: the catalog is asked for the profile. A subagent's own
+  transcript (`subagent.tail`) is not shown.
 - While a `hermes serve` the bridge started runs, `hermes dashboard` refuses to start
   beside it (one backend per user): stop it with `hermes serve --stop`, or run the
   dashboard with `--isolated`.
