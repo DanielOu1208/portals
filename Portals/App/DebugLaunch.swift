@@ -380,9 +380,9 @@ enum DebugLaunch {
     /// `PORTALS_DEBUG_PANEL=1`: the panel over the chat open as the app starts (`ThreadPanel`).
     static var opensPanel: Bool { value("PORTALS_DEBUG_PANEL") == "1" }
 
-    /// `PORTALS_DEBUG_MESSAGE_FORK=edit|fork`: open the first eligible completed
-    /// message's draft or fork sheet after the requested debug thread appears. It opens
-    /// the sheet only; it never creates a thread or sends a message.
+    /// `PORTALS_DEBUG_MESSAGE_FORK=edit|fork`: stage an edit in the composer or open a
+    /// fork of the first eligible completed message after the debug thread appears.
+    /// Fork creates a thread but neither action sends a model prompt.
     static var opensMessageFork: Bool? {
         switch value("PORTALS_DEBUG_MESSAGE_FORK") {
         case "edit": true

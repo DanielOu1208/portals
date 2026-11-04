@@ -7,7 +7,7 @@ enum MessageEditError: LocalizedError {
     case missingAttachments
 
     var errorDescription: String? {
-        "This device no longer has an attachment. Attach it again to edit this message."
+        "An original attachment is no longer available on this portal."
     }
 }
 
