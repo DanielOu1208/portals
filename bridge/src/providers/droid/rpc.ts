@@ -104,6 +104,12 @@ export class DroidTransport extends ProcessTransport {
    * when set, such a request is answered here and never reaches the client.
    */
   pickOptions: ((params: unknown) => Promise<unknown>) | undefined;
+  /**
+   * Told Droid's list of the commands a session runs in the background, whole, each time it
+   * changes (`background_processes_changed`, CLI 1.0): a notification the SDK does not know,
+   * and drops.
+   */
+  backgroundProcesses: ((session: string, processes: unknown) => void) | undefined;
 
   // Since SDK 0.10.0 the transport carries messages decoded, envelopes whose params it
   // leaves as Droid sent them; they are read here as plain objects.
@@ -179,6 +185,15 @@ export class DroidTransport extends ProcessTransport {
   private loaded(frame: Frame): void {
     if (this.loads.size === 0 || frame.type !== "response" || typeof frame.id !== "string" || !this.loads.delete(frame.id)) return;
     this.loadedUsage = record(frame.result)?.lastCallTokenUsage;
+  }
+
+  /** Droid's list of a session's background commands (`backgroundProcesses`). */
+  private listed(frame: Frame): void {
+    if (!this.backgroundProcesses || frame.method !== "droid.session_notification") return;
+    const params = record(frame.params);
+    const notification = record(params?.notification);
+    if (notification?.type !== "background_processes_changed" || typeof params?.sessionId !== "string") return;
+    this.backgroundProcesses(params.sessionId, notification.processes);
   }
 
   /** The ends to tell after `frame`: one for each awaited message Droid took into the turn it ends. */
@@ -296,6 +311,7 @@ export class DroidTransport extends ProcessTransport {
         return;
       }
       this.loaded(frame);
+      this.listed(frame);
       const ends = this.coalesced(frame);
       this.route(message, handler);
       for (const end of ends) handler(end);

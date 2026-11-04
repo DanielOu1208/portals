@@ -150,6 +150,12 @@ class Handle implements DroidHandle {
   /** Who answers Droid's pick lists on this process (`DroidHandle.onPickOptions`). */
   picker: Parameters<NonNullable<DroidHandle["onPickOptions"]>>[0] | undefined;
   onPickOptions(handler: Parameters<NonNullable<DroidHandle["onPickOptions"]>>[0]): void { this.picker = handler; }
+  /** Who is told Droid's list of background processes (`DroidHandle.onBackgroundProcesses`). */
+  lister: ((session: string, processes: unknown) => void) | undefined;
+  onBackgroundProcesses(listener: (session: string, processes: unknown) => void): void { this.lister = listener; }
+  /** The background processes stopped, by Droid's id (`DroidHandle.killBackgroundProcess`). */
+  readonly kills: string[] = [];
+  async killBackgroundProcess(processId: string): Promise<boolean> { this.kills.push(processId); return true; }
   die(): void { this.alive = false; this.exit?.(new Error("Droid process exited.")); }
 }
 
@@ -1388,6 +1394,40 @@ test("background work pins its process, while idle sessions can cool", async (t)
   await until(() => r.handle.closed === 1);
 });
 
+test("a command Droid runs in the background is a row of its own, which Stop ends through Droid's own call for that one, as Droid's footer does", async (t) => {
+  const r = await rig(t);
+  r.handle.script = async function* (handle) {
+    yield { type: "tool_call", name: "Execute", toolUseId: "loop", input: { command: "for i in 1 2 3; do echo tick $i; sleep 1; done", fireAndForget: true } };
+    yield { type: "tool_result", toolName: "Execute", toolUseId: "loop", content: "Background process started (PID: 4242)", isError: false };
+    yield result(handle.id);
+  };
+  await turn(r.session, r.sink, "start the loop");
+  const process = { id: "loop", pid: 4242, command: "for i in 1 2 3; do echo tick $i; sleep 1; done", startedAtMs: 1793781650937, toolUseId: "loop" };
+  // Another session's list (a subagent's) is not the thread's.
+  r.handle.lister!("child", [process]);
+  assert.equal(r.sink.events.filter((event) => event.type === "subagent").length, 0);
+  r.handle.lister!(r.handle.id, [process]);
+  const rows = () => r.sink.events.flatMap((event) => (event.type === "subagent" ? [event.subagent] : []));
+  assert.deepEqual(rows().map(({ id, kind, goal, status, stoppable, background }) => ({ id, kind, goal, status, stoppable, background })), [
+    { id: "loop#4242", kind: "command", goal: process.command, status: "running", stoppable: true, background: true },
+  ]);
+  assert.equal(await r.session.stopSubagent("loop#4242"), true);
+  assert.deepEqual(r.handle.kills, ["loop"]);
+  // Droid tells the end, then lists it no more (CLI 1.3).
+  tell(r.handle, { type: "create_message", message: { id: "execute-completion:loop", role: "user", visibility: "llm_only", content: [{ type: "text",
+    text: "Background Execute command finished.\ntool_use_id: loop\nexit_status: signal SIGTERM\nstopped_by: user\noutput: tick 1\n\n\nThis background process was intentionally stopped by the user, not by the command itself." }] } });
+  r.handle.lister!(r.handle.id, []);
+  assert.equal(rows().at(-1)!.status, "stopped");
+  assert.equal(await r.session.stopSubagent("loop#4242"), false, "ended: nothing to stop");
+  // Two under one id: Droid would stop whichever it finds first, so neither is offered.
+  r.handle.lister!(r.handle.id, [{ ...process, id: "call_0", pid: 1 }, { ...process, id: "call_0", pid: 2 }]);
+  assert.equal(await r.session.stopSubagent("call_0#1"), false);
+  assert.deepEqual(r.handle.kills, ["loop"]);
+  // Droid's process going away lets go of those still listed.
+  r.handle.die();
+  assert.deepEqual(rows().slice(-2).map(({ id, status }) => [id, status]), [["call_0#1", "stopped"], ["call_0#2", "stopped"]]);
+});
+
 test("a Script Droid runs on in the background pins its process until its completion, as a background command does: closing the process stops it and loses its result (Codex's review of n14/droid, P1)", async (t) => {
   const r = await rig(t);
   // CLI 0.250: a Script still running as its call returns answers {toolCallId, status: "running"}.
@@ -2376,7 +2416,9 @@ for (const name of ["task-stop-background", "task-stop-foreground", "task-stop-t
     assert.equal(r.session.hasBackgroundWork(), true, "the Task still runs after the parent turn ends");
     assert.equal(r.provider.store.read("thread").subagents![0].status, "running");
     assert.equal(r.provider.store.read("thread").subagents![0].stoppable, false);
-    assert.equal("stopSubagent" in r.session, false, "the mission worker RPC must not become an individual Task stop");
+    // Only a background command is stopped by itself (`droid.kill_background_process`), never a Task.
+    assert.equal(await r.session.stopSubagent(r.provider.store.read("thread").subagents![0].id), false, "the mission worker RPC must not become an individual Task stop");
+    assert.deepEqual(r.handle.kills, []);
     const mark = r.sink.events.length;
     for (const record of records.slice(firstResult + 1)) {
       if (record.kind === "notification") r.handle.notify(record.notification);
