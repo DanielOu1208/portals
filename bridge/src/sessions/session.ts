@@ -364,11 +364,14 @@ export class Session {
   /** The status line says the turn has gone quiet; what it said before, which the agent's next word puts back. */
   private quietOver: { before: string } | null = null;
   /**
-   * Stop ended the running turn here, the agent not having taken it in time (`stopWithin`):
-   * what the agent still says of that turn is let go of, up to its end, or until another
-   * turn begins.
+   * Stop ended the running turn here, the agent not having taken it in time (`stopWithin`),
+   * and the agent may still run it. Its events carry no turn of their own, so until the
+   * agent ends it (its `turn.end`), says nothing was running, or begins a turn of its own,
+   * what it says of that turn is let go of, and no message goes to it: one sent meanwhile
+   * waits on the list (`heldByStop`). Of the agent it was asked of only: one attached since
+   * is not held.
    */
-  private stoppedHere = false;
+  private stoppedHere: { provider: ProviderSession } | null = null;
   /** The reads of the folder's branch begun so far (`noteBranch`). */
   private branchReads = 0;
   /**
@@ -711,7 +714,7 @@ export class Session {
    * attachment waiting for a message, and no work going on.
    */
   get atRest(): boolean {
-    if (this.isBusy || this.transcript.isInTurn || this.activity !== undefined || this.closing || this.settingsOnTheWay > 0) return false;
+    if (this.isBusy || this.heldByStop || this.transcript.isInTurn || this.activity !== undefined || this.closing || this.settingsOnTheWay > 0) return false;
     if (this.queue.length > 0 || this.awaitingCatchUp || this.notesDue.size > 0 || this.askedBefore !== null || this.askedOpen !== null) return false;
     return [...this.attached.values()].every((attached) => attached.images.length === 0 && attached.files.length === 0 && attached.saving === 0 && attached.pending.size === 0);
   }
@@ -1109,7 +1112,8 @@ export class Session {
     const messageID = options.messageID;
     // The agent's side catching up on turns it missed: it waits on the list until then.
     const catchingUp = this.running ? undefined : this.provider?.catchingUp?.();
-    if (!this.running && this.queue.length === 0 && !catchingUp) {
+    // Nor while the agent may still run a turn Stop ended here: it waits on the list until the agent is past it.
+    if (!this.running && this.queue.length === 0 && !catchingUp && !this.heldByStop) {
       this.running = true;
       return { status: "streaming", begin: () => this.begin(prompt, { fleet, messageID }) };
     }
@@ -1403,8 +1407,9 @@ export class Session {
    * Stop as the agent takes it, waited for `stopWaitMs` at most. An agent that has not
    * taken it by then (it cannot be reached, a call to it hangs), or that failed to, has
    * its turn ended here, as stopped: the app can go on, and the agent may still be at it
-   * (`stopping`, which keeps such a thread from being removed where the agent can say so).
-   * What it still says of that turn is let go of (`take`).
+   * (`stopping`, which keeps such a thread from being removed). What it still says of that
+   * turn is let go of (`take`), and a message sent meanwhile waits until the agent is past
+   * it (`stoppedHere`).
    */
   private async stopWithin(provider: ProviderSession, turn: number): Promise<boolean> {
     const asked = provider.interrupt();
@@ -1414,11 +1419,11 @@ export class Session {
       timer.unref();
     });
     let failure: Error | undefined;
+    let answeredLate = false;
     try {
       const answer = await Promise.race([asked, late]);
       if (answer !== "late") return answer;
-      // Its answer, when it comes, is of no use any more; nor is a failure then.
-      asked.catch((error: Error) => log.warn("the agent failed to take a Stop after its turn was ended here", { session: this.id, error: error?.message }));
+      answeredLate = true;
     } catch (error) {
       failure = error as Error;
     } finally {
@@ -1430,9 +1435,18 @@ export class Session {
       return true;
     }
     log.warn(failure ? "the agent failed to take a Stop, so its turn ends here" : "the agent did not take a Stop in time, so its turn ends here", { session: this.id, error: failure?.message });
+    // Before its end, which would start a message waiting: that waits for the agent to be past this turn.
+    const held = (this.stoppedHere = { provider });
     this.end({ type: "turn.end", status: "interrupted" });
-    // After its end, which takes the thread to rest; a message waiting may have begun a turn already.
-    if (this.turns === turn) this.stoppedHere = true;
+    // Its answer, when it comes: true, the agent ends the turn as it does any it stopped;
+    // false, nothing was running any more, and no end comes. A failure leaves the turn to
+    // end as the agent ends it.
+    if (answeredLate) {
+      asked.then(
+        (stopped) => { if (!stopped) this.letGoOfStop(held); },
+        (error: Error) => log.warn("the agent failed to take a Stop after its turn was ended here", { session: this.id, error: error?.message }),
+      );
+    }
     return true;
   }
 
@@ -1747,7 +1761,21 @@ export class Session {
    * not reported yet): the thread is still at work.
    */
   async stopping(): Promise<boolean> {
+    // A turn Stop ended here that the agent has not ended yet (`stopWithin`).
+    if (this.heldByStop) return true;
     return (await this.provider?.stopping?.()) ?? false;
+  }
+
+  /** The agent may still run a turn Stop ended here (`stoppedHere`): nothing goes to it until it is past that turn. */
+  private get heldByStop(): boolean {
+    return this.stoppedHere !== null && this.stoppedHere.provider === this.provider;
+  }
+
+  /** The agent is past the turn Stop ended here (`held`): the message waiting, if one does, goes now. */
+  private letGoOfStop(held: { provider: ProviderSession }): void {
+    if (this.stoppedHere !== held) return;
+    this.stoppedHere = null;
+    if (!this.running && !this.retired) this.startNext();
   }
 
   /**
@@ -1828,8 +1856,6 @@ export class Session {
     // A message waiting for the agent's side to catch up waits for this turn now (one a
     // no's note opens at rest goes ahead of it).
     this.watchReach();
-    // The agent begins anew with this turn: what comes now is its.
-    this.stoppedHere = false;
     this.turns += 1;
     this.answeredByTurn = answered;
     this.replyText = "";
@@ -1880,8 +1906,8 @@ export class Session {
     if (!host && user.trim() !== "" && !(command ?? isCommand({ text: user, images: [] }))) this.withdrawAsked("replied");
     // A message waiting for the agent's side to catch up waits for this turn now.
     this.watchReach();
-    // The agent is past a turn Stop ended here.
-    this.stoppedHere = false;
+    // The agent is past a turn Stop ended here: what waits goes once this one ends.
+    this.stoppedHere = null;
     this.turns += 1;
     this.answeredByTurn = null;
     this.replyText = "";
@@ -2061,6 +2087,8 @@ export class Session {
         return;
       }
       if (next.requestId || next.changing) return;
+      // The agent may still run a turn Stop ended here: the message waits until it is past it (`letGoOfStop`).
+      if (this.heldByStop) return;
       // The agent's side catching up on turns it missed (the connection to it dropped): those
       // are told first, as turns of their own, and the message's turn begins once they are.
       const catchingUp = this.provider?.catchingUp?.();
@@ -2297,7 +2325,7 @@ export class Session {
     // on disk with the others, for the next start.
     const catchingUp = this.provider?.catchingUp?.();
     const earlierOut = [...this.steersOut].some((out) => out < steered);
-    if (this.running || catchingUp || earlierOut || this.closing) {
+    if (this.running || catchingUp || earlierOut || this.closing || this.heldByStop) {
       // Ahead of the messages waiting, and behind those said again that were sent before
       // it, whichever the agent turned down first: one waiting since before a restart
       // (no `steered`) came before them all.
@@ -2332,7 +2360,7 @@ export class Session {
       this.keepQueue();
       return;
     }
-    if (!this.running) {
+    if (!this.running && !this.heldByStop) {
       this.running = true;
       // Opened by Portals for an app without the feature turn_messages, which shows such a turn's message.
       this.begin(prompt, { fleet: true, sender: "user" });
@@ -2357,10 +2385,10 @@ export class Session {
    */
   private take(event: ProviderEvent): void {
     // What the agent still says of a turn Stop ended here (`stopWithin`) has no turn to
-    // show it in; its end is the last of it.
-    if (this.stoppedHere && !this.transcript.isInTurn) {
+    // show it in; its end is the last of it, and lets a message waiting go.
+    if (this.stoppedHere && this.heldByStop && !this.transcript.isInTurn) {
       if (event.type === "turn.end") {
-        this.stoppedHere = false;
+        this.letGoOfStop(this.stoppedHere);
         return;
       }
       if (ofTheTurn(event)) return;

@@ -262,7 +262,8 @@ HermesReconnectTests.swift:142, 279.
   then shows as a turn that ends `interrupted` as it begins. An agent that has not taken
   the stop in 20 seconds, or failed to (Hermes out of reach), has its turn ended by
   portals-bridge, with `message.complete` `status:"interrupted"`, and the answer is
-  `interrupted`; what the agent still says of that turn is not passed on.
+  `interrupted`; what the agent still says of that turn is not passed on, and a message
+  sent before the agent ends that turn waits on the list (`queue.changed`) until it has.
 - **`config.get`** is asked with `key:"reasoning"` only. `value` is a thinking level:
   `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra`; anything else reads
   as unknown (AgentCore/ModelSetting.swift:5-9). A failure is ignored

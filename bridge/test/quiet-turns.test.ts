@@ -10,8 +10,9 @@ import { quietLimitMs, Session, stopWaitMs, type Peer } from "../src/sessions/se
 // from the agent put a line on the turn's status saying so, and that Stop ends it; the
 // agent's next word takes it down. Nothing is stopped and nothing fails: the agent may be
 // running a command that prints nothing. A Stop the agent has not taken in `stopWaitMs`
-// (it cannot be reached, a call to it hangs) ends the turn here, and what the agent still
-// says of that turn is let go of. A session on its own, with an agent that only starts
+// (it cannot be reached, a call to it hangs) ends the turn here, what the agent still
+// says of that turn is let go of, and a message sent before the agent ends that turn waits
+// for its end. A session on its own, with an agent that only starts
 // turns, on mocked timers.
 
 setLogLevel("silent");
@@ -164,4 +165,82 @@ test("a Stop the agent fails to take ends the turn here as well; one it takes le
   assert.equal(taking.thread.isRunning, true);
   taking.thread.sink.emit({ type: "turn.end", status: "interrupted" });
   assert.equal(taking.thread.isRunning, false);
+});
+
+test("after a Stop the agent answers late, a message sent before the agent ends the stopped turn waits for that end: the stopped turn's words and end never reach it", async (t) => {
+  let answer!: (stopped: boolean) => void;
+  const { thread, device, started } = await running(t, () => new Promise((resolve) => { answer = resolve; }));
+  thread.sink.emit({ type: "text", text: "Building" });
+  const stopping = thread.interrupt();
+  await nextStep();
+  t.mock.timers.tick(stopWaitMs);
+  assert.equal(await stopping, true);
+  assert.equal(thread.isRunning, false);
+  // The agent may still run the stopped turn: the thread is still at work, and is not let go of.
+  assert.equal(await thread.stopping(), true);
+  assert.equal(thread.atRest, false);
+
+  // The next message waits on the list; the agent is sent nothing yet.
+  assert.equal(thread.submit("try again").status, "queued");
+  await nextStep();
+  assert.deepEqual(started, ["run the build"]);
+  assert.equal(thread.isRunning, false);
+
+  // The agent takes the Stop late, says more of the stopped turn and ends it: none of it shows.
+  answer(true);
+  await nextStep();
+  thread.sink.emit({ type: "text", text: "… still building" });
+  thread.sink.emit({ type: "turn.end", status: "complete" });
+  assert.equal(device.events.filter((event) => event.type === "message.complete").length, 1);
+  assert.ok(!device.events.some((event) => event.type === "message.delta" && String(event.payload?.text).includes("still building")));
+
+  // Only then does the message go, as a turn of its own that only the agent's next end ends.
+  await nextStep();
+  assert.deepEqual(started, ["run the build", "try again"]);
+  assert.equal(thread.isRunning, true);
+  assert.equal(await thread.stopping(), false);
+  thread.sink.emit({ type: "text", text: "Done." });
+  thread.sink.emit({ type: "turn.end", status: "complete" });
+  assert.equal(thread.isRunning, false);
+  assert.deepEqual(device.events.filter((event) => event.type === "message.complete").map((event) => [event.payload?.status, event.payload?.text]), [["interrupted", undefined], ["complete", "Done."]]);
+  assert.deepEqual(thread.messages.map((message) => [message.role, "text" in message ? message.text : ""]), [["user", "run the build"], ["assistant", "Building"], ["user", "try again"], ["assistant", "Done."]]);
+});
+
+test("a message already waiting when the Stop deadline ends the turn waits for the agent's end of the stopped turn as well", async (t) => {
+  const { thread, started } = await running(t);
+  assert.equal(thread.submit("next one", { queue: true }).status, "queued");
+  const stopping = thread.interrupt();
+  await nextStep();
+  t.mock.timers.tick(stopWaitMs);
+  assert.equal(await stopping, true);
+  await nextStep();
+  assert.deepEqual(started, ["run the build"]);
+  assert.equal(thread.isRunning, false);
+  // The agent's late words and end of the stopped turn do not touch the waiting message.
+  thread.sink.emit({ type: "text", text: "late" });
+  thread.sink.emit({ type: "turn.end", status: "interrupted" });
+  await nextStep();
+  assert.deepEqual(started, ["run the build", "next one"]);
+  assert.equal(thread.isRunning, true);
+  thread.sink.emit({ type: "turn.end", status: "complete" });
+  assert.equal(thread.isRunning, false);
+  assert.ok(!thread.messages.some((message) => "text" in message && message.text === "late"));
+});
+
+test("an agent that answers a Stop late that nothing was running lets the next message go without an end", async (t) => {
+  let answer!: (stopped: boolean) => void;
+  const { thread, started } = await running(t, () => new Promise((resolve) => { answer = resolve; }));
+  const stopping = thread.interrupt();
+  await nextStep();
+  t.mock.timers.tick(stopWaitMs);
+  assert.equal(await stopping, true);
+  thread.submit("try again");
+  await nextStep();
+  assert.deepEqual(started, ["run the build"]);
+  answer(false);
+  await nextStep();
+  await nextStep();
+  assert.deepEqual(started, ["run the build", "try again"]);
+  assert.equal(await thread.stopping(), false);
+  thread.sink.emit({ type: "turn.end", status: "complete" });
 });
