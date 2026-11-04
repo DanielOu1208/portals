@@ -1,4 +1,5 @@
 import { mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { open, type FileHandle } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, sep } from "node:path";
 import { expandHome } from "./config.ts";
@@ -12,7 +13,8 @@ import { readJSON, writeJSON } from "./store/jsonFile.ts";
 // other.
 //
 // Where an agent worked comes from its own history (Claude Code's sessions, Codex's
-// threads and its trusted projects) and from the bridge's threads. What is offered is
+// threads and its trusted projects, Cursor's chats, the headers of Droid's and Pi's
+// session files) and from the bridge's threads. What is offered is
 // cleaned up: only folders that exist, each once (by its real path), none of `/`, the
 // home folder, temporary folders, the bridge's own folder, hidden ones or the ones
 // config.json hides, and at most `limit`.
@@ -368,6 +370,35 @@ function realpath(path: string): string {
     return realpathSync(path);
   } catch {
     return path;
+  }
+}
+
+/**
+ * A file's first line, read only that far, and no further than `limit` bytes: the header
+ * of an agent's session file, where it says the folder the session ran in, without the
+ * conversation after it. Null when the file cannot be read or its first line is longer.
+ */
+export async function firstLine(path: string, limit = 64 * 1024): Promise<string | null> {
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(path, "r");
+    const chunks: Buffer[] = [];
+    let size = 0;
+    while (size < limit) {
+      const chunk = Buffer.alloc(Math.min(4096, limit - size));
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, size);
+      // A file of one line with no end to it: that line, as far as it goes.
+      if (bytesRead === 0) return Buffer.concat(chunks).toString("utf8");
+      const end = chunk.subarray(0, bytesRead).indexOf(10);
+      chunks.push(chunk.subarray(0, end < 0 ? bytesRead : end));
+      if (end >= 0) return Buffer.concat(chunks).toString("utf8");
+      size += bytesRead;
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    await handle?.close();
   }
 }
 

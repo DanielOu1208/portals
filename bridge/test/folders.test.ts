@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
-import { codexProjects, FolderRefused, Folders, makeGeneral, type RecentFolder } from "../src/folders.ts";
+import { codexProjects, firstLine, FolderRefused, Folders, makeGeneral, type RecentFolder } from "../src/folders.ts";
 import { machineWord } from "../src/platform.ts";
 import { CodexProvider } from "../src/providers/codex/provider.ts";
 import { socketConnector } from "../src/providers/codex/client.ts";
@@ -198,6 +198,22 @@ test("config.toml's trusted projects are read from its table headers only", (t) 
   );
   assert.deepEqual(codexProjects(file), [{ path: "/Users/dev/coding_projects/aerirc" }, { path: "/Users/dev/My Notes" }, { path: '/Users/dev/quote"d é' }]);
   assert.deepEqual(codexProjects(join(root, "missing.toml")), []);
+});
+
+test("a session file's header is read alone: its first line, as far as a limit, and nothing after it", async (t) => {
+  const file = join(root, "session.jsonl");
+  t.after(() => rmSync(file, { force: true }));
+  const header = JSON.stringify({ type: "session", cwd: "/Users/dana/garden", title: "é".repeat(3000) });
+  // A header longer than one read, then a conversation far longer than the limit.
+  writeFileSync(file, `${header}\n${"x".repeat(200_000)}\n`);
+  assert.equal(await firstLine(file), header);
+  assert.equal(await firstLine(file, 4096), null);
+  // A file of one line with no end: the line as far as it goes.
+  writeFileSync(file, '{"type":"session"');
+  assert.equal(await firstLine(file), '{"type":"session"');
+  writeFileSync(file, "");
+  assert.equal(await firstLine(file), "");
+  assert.equal(await firstLine(join(root, "missing.jsonl")), null);
 });
 
 test("Codex's folders come from a list refreshed in the background, never waited for", async (t) => {

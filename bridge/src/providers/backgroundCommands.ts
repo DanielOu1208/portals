@@ -4,12 +4,13 @@ import { asShown, outputTail } from "./liveOutput.ts";
 import type { ProviderEvent, SubagentInfo, SubagentStatus } from "./types.ts";
 
 // The commands an agent left running in the background after its turn moved on (Claude
-// Code's `run_in_background`, Codex's background terminals), each a row of the subagents
-// line (feature background_commands): what it runs, its last line of output while it
-// runs, its output's end when opened, how it ended, and a Stop where the agent has one.
-// Its output goes out at most once a second per command, the whole tail each time
-// (`subagent.progress` replaces the one before, and the session's replay log keeps only a
-// command's latest). Nothing of it is written to the thread's history.
+// Code's `run_in_background`, Codex's background terminals, Droid's background commands),
+// each a row of the subagents line (feature background_commands): what it runs, its last
+// line of output while it runs, its output's end when opened, how it ended, and a Stop
+// where the agent has one. Its output goes out at most once a second per command, the
+// whole tail each time (`subagent.progress` replaces the one before, and the session's
+// replay log keeps only a command's latest). Nothing of it is written to the thread's
+// history.
 
 /** The least time between two updates of one command's row. */
 const intervalMs = 1000;
@@ -74,6 +75,14 @@ export class BackgroundCommands {
         if (kept.info.status !== "running") this.forget(other);
       }
     }
+  }
+
+  /** Whether command `id`, still running, can be stopped by itself: its row says so again when that changed. */
+  stoppable(id: string, stoppable: boolean): void {
+    const entry = this.commands.get(id);
+    if (!entry || entry.info.status !== "running" || entry.info.stoppable === stoppable) return;
+    entry.info.stoppable = stoppable;
+    this.send(entry);
   }
 
   /** More output of command `id`, following what came before. */

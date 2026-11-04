@@ -1,10 +1,10 @@
 import { accessSync, constants } from "node:fs";
 import { delimiter, isAbsolute, join } from "node:path";
 import { expandHome } from "../../config.ts";
-import { machineWord } from "../../platform.ts";
 import type { ContentBlock } from "../acp/protocol.ts";
 import type { Quirks } from "../acp/tools.ts";
 import { programVersion } from "../program.ts";
+import { notSignedIn } from "../signIn.ts";
 import type { ThreadMode } from "../types.ts";
 
 // What is fixed about Cursor as the bridge runs it: the release it was tested with,
@@ -71,12 +71,19 @@ export const cursorQuirks: Quirks = {
   diffHeaderScraps: true,
 };
 
-/** The end of "Cursor is not signed in on this Mac." */
-export const signInHint = "Run `cursor-agent login` in a terminal there.";
-export const notSignedInText = `${cursorName} is not signed in on this ${machineWord()}. ${signInHint}`;
+export const notSignedInText = notSignedIn("cursor");
 
 /** The last piece of a reply from a session whose sign-in has gone, in a turn Cursor ends as complete. */
 export const signInReply = "Please sign in to continue";
+
+/**
+ * Whether a piece of reply is Cursor saying the sign-in has gone: `signInReply`, or the
+ * error it gives when its backend refuses the sign-in ("Error: [unauthenticated] Backend
+ * rejected authentication…", 2026.10.22), which only a new process gets past too.
+ */
+export function saysSignedOut(piece: string): boolean {
+  return piece.trim() === signInReply || turnFailure(piece)?.startsWith("[unauthenticated]") === true;
+}
 
 /** What Cursor says, as the last piece of a turn's reply, of a turn its plan or settings stopped (with the sign-in's, `signInReply`). */
 const stoppedByAccount = new Set([signInReply, "Upgrade your plan to continue", "Add a payment method to continue", "Check your settings to continue"]);
