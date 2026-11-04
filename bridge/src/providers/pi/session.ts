@@ -343,9 +343,9 @@ export class PiSession implements ProviderSession, Warmable {
     void (instructions !== null ? this.compact(instructions) : this.send(prompt));
   }
 
-  /** True while the open turn takes a message: Pi is in a run, and neither Stop nor `/compact` is under way. */
+  /** True once this turn's message was written and Pi is in a run, with neither Stop nor `/compact` under way. */
   steerable(): boolean {
-    return this.turnOpen && !this.stopped && !this.compacting && this.live?.stream.inRun === true;
+    return this.turnOpen && this.written && !this.stopped && !this.compacting && this.live?.stream.inRun === true;
   }
 
   /**
@@ -786,13 +786,18 @@ export class PiSession implements ProviderSession, Warmable {
     // A stopped initialization still owns its place until Pi answers. The next turn's
     // initialization and every user prompt wait behind it.
     const next = live.prompting.then(async () => {
-      if (!current() || !live.client.running || live.stream.inRun) return;
-      if (live.mode === this.threadMode) return;
       try {
-        const listed = await live.client.call<{ commands?: { name?: string; source?: string }[] }>({ type: "get_commands" });
-        if (!current() || !live.client.running || live.stream.inRun) return;
-        if (!listed?.commands?.some((command) => command.name === permissionCommand && command.source === "extension")) throw new Error("Pi did not load the permission extension.");
-        while (current() && live.client.running && !live.stream.inRun && live.mode !== this.threadMode) {
+        while (current() && live.client.running && live.mode !== this.threadMode) {
+          // A late steered message may have begun the previous run. A turn with a
+          // different mode waits for it; only a matching mode may join that run.
+          if (live.stream.inRun) {
+            await new Promise<void>((resolve) => this.settleWaiters.push(resolve));
+            continue;
+          }
+          const listed = await live.client.call<{ commands?: { name?: string; source?: string }[] }>({ type: "get_commands" });
+          if (!current() || !live.client.running) return;
+          if (live.stream.inRun) continue;
+          if (!listed?.commands?.some((command) => command.name === permissionCommand && command.source === "extension")) throw new Error("Pi did not load the permission extension.");
           const mode = this.threadMode;
           live.modeError = null;
           const reply = await live.client.call<PromptAnswer>({ type: "prompt", message: `/${permissionCommand} ${mode}` }, this.host.callTimeoutMs);

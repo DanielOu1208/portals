@@ -827,6 +827,81 @@ test("a message handed over as the run settles, with a command waiting behind it
   assert.equal(turnEvents(session, start).filter((entry) => entry.type === "message.complete").length, 2);
 });
 
+for (const mode of ["ask", "plan"] as const) {
+  test(`a queued Pi turn in ${mode} waits for a late steered run in Default to settle before sending its message`, async () => {
+    const session = await createThread();
+    const first = `mode-first-${mode}`;
+    const begin = `mode-begin-${mode}`;
+    const finish = `mode-finish-${mode}`;
+    try {
+      const start = await send(session, `hold ${first} settle-first`);
+      await event(session, start, "message.delta");
+      const late = `slowstart ${begin} hold ${finish} the late one`;
+      assert.equal(await submit(session, late), "steered");
+      await client.call("session.set_mode", { session_id: session, mode });
+      assert.equal((await client.call("prompt.submit", { session_id: session, text: "permission bash", when_busy: "queue" })).status, "queued");
+      await until(() => pi.sentTo(session, "prompt").length === 2);
+      pi.release(first);
+      await ends(session, start, 1);
+      await client.from(start, () => turnEvents(session, start).filter((entry) => entry.type === "message.start").length === 2);
+      const begun = client.frames.length;
+      pi.release(begin);
+      await event(session, begun, "message.delta");
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      assert.deepEqual(pi.sentTo(session, "prompt").map((record) => record.message), [`hold ${first} settle-first`, late]);
+      assert.equal((await client.call("prompt.submit", { session_id: session, text: "the following message", when_busy: "steer" })).status, "queued");
+      pi.release(finish);
+      if (mode === "ask") {
+        const card = await client.nextRequest();
+        assert.match(card.params.questions[0].question, /^Allow bash\?/);
+        client.answer(card.id, { answers: { [card.params.questions[0].qid]: "Deny" } });
+      }
+      const [, done] = await ends(session, start, 2);
+      assert.equal(done.status, "complete");
+      assert.match(done.text, /Tool blocked\.$/);
+      const [, , following] = await ends(session, start, 3);
+      assert.equal(following.status, "complete");
+      assert.match(following.text, /You said: the following message$/);
+      assert.deepEqual(pi.sentTo(session, "prompt").map((record) => record.message), [`hold ${first} settle-first`, late, `/portals-permission-mode ${mode}`, "permission bash", "the following message"]);
+    } finally {
+      for (const gate of [first, begin, finish]) pi.release(gate);
+      await client.call("session.interrupt", { session_id: session });
+    }
+  });
+
+  test(`Stop cancels a queued Pi turn waiting to apply ${mode} without sending it later`, async () => {
+    const session = await createThread();
+    const first = `cancel-mode-first-${mode}`;
+    const begin = `cancel-mode-begin-${mode}`;
+    const finish = `cancel-mode-finish-${mode}`;
+    try {
+      const start = await send(session, `hold ${first} settle-first`);
+      await event(session, start, "message.delta");
+      const late = `slowstart ${begin} hold ${finish} the late one`;
+      assert.equal(await submit(session, late), "steered");
+      await client.call("session.set_mode", { session_id: session, mode });
+      assert.equal((await client.call("prompt.submit", { session_id: session, text: "permission bash", when_busy: "queue" })).status, "queued");
+      await until(() => pi.sentTo(session, "prompt").length === 2);
+      pi.release(first);
+      await ends(session, start, 1);
+      await client.from(start, () => turnEvents(session, start).filter((entry) => entry.type === "message.start").length === 2);
+      const begun = client.frames.length;
+      pi.release(begin);
+      await event(session, begun, "message.delta");
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      await client.call("session.interrupt", { session_id: session });
+      const [, done] = await ends(session, start, 2);
+      assert.equal(done.status, "interrupted");
+      assert.deepEqual(pi.sentTo(session, "prompt").map((record) => record.message), [`hold ${first} settle-first`, late]);
+      assert.equal((await turn(session, "permission read")).at(-1).payload.text, "Tool allowed.");
+      assert.deepEqual(pi.sentTo(session, "prompt").map((record) => record.message), [`hold ${first} settle-first`, late, `/portals-permission-mode ${mode}`, "permission read"]);
+    } finally {
+      for (const gate of [first, begin, finish]) pi.release(gate);
+      await client.call("session.interrupt", { session_id: session });
+    }
+  });
+}
+
 test("a message Pi takes and then never begins to answer fails its turn, when the time a command has is up", async () => {
   const impatient = piProvider(pi, { folder: cwd, callTimeoutMs: 1500 });
   const own = await startTestBridge({ providers: new Map([["pi", impatient]]), config: { generalFolder: cwd } });
