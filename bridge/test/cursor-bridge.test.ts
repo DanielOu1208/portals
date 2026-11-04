@@ -17,7 +17,7 @@ import { CursorProvider } from "../src/providers/cursor/provider.ts";
 import { providerModeOptions } from "../src/providers/modes.ts";
 import { commandLeftText } from "../src/providers/cursor/tools.ts";
 import type { ProviderEvent, ProviderSession, RequestAnswer, SessionSettings, SessionSink } from "../src/providers/types.ts";
-import { isEvent, RpcFailure, runTurn, startTestBridge, streamedText, temporaryHome, TestClient, type Frame, type TestBridge } from "./helpers.ts";
+import { failingWrites, isEvent, RpcFailure, runTurn, startTestBridge, streamedText, temporaryHome, TestClient, type Frame, type TestBridge } from "./helpers.ts";
 import { standin as piStandin } from "./pi-standin.ts";
 
 // The Cursor provider through the whole bridge, as the app sees it, against a stand-in
@@ -1630,6 +1630,22 @@ test("a thread whose file a power cut left empty comes back from the file its la
   assert.ok(threadFile(state.stateDir, session).messages.length > kept.messages.length);
   assert.equal(readdirSync(join(state.stateDir, "threads")).filter((name) => name.startsWith(`${session}.json.corrupt-`)).length, 1);
   assert.notEqual(readFileSync(`${path}.bak`, "utf8"), "");
+});
+
+test("a conversation that cannot be saved for a full disk is told in the thread, once until a save works again", async (t) => {
+  const state = await rig(t);
+  const session = await createThread({}, state.phone);
+  const path = join(state.stateDir, "threads", `${session}.json`);
+  // Saved after each tool row and at the turn's end: told once all the same.
+  let restore = failingWrites(t, path);
+  const failed = await runTurn(state.phone, session, "use a tool");
+  assert.deepEqual(notices(failed), ["The disk is full, so Portals could not save this conversation. Its history may come back short."]);
+  restore();
+  assert.deepEqual(notices(await runTurn(state.phone, session, "use a tool")), []);
+  // Failing again after a save worked, it is told again; another failure says only that it could not.
+  restore = failingWrites(t, path, "EACCES");
+  assert.deepEqual(notices(await runTurn(state.phone, session, "use a tool")), ["Portals could not save this conversation. Its history may come back short."]);
+  restore();
 });
 
 test("a thread's to-do list is kept with it: a change to one item after the bridge restarted, or after the thread was removed and taken up again, shows the whole list", async (t) => {

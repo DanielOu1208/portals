@@ -163,6 +163,11 @@ final class HostModel: Identifiable {
     /// Whether the host's bridge says when a later version is out (`update_notice`), as of
     /// the last connection: its polls' word on it is taken, none included.
     @ObservationIgnored private var saysUpdates = false
+    /// The free space on the host's disk, as its bridge said on connecting and in each poll
+    /// since (`disk_space`), for Settings; nil from a host that does not say.
+    private(set) var disk: HostDisk?
+    /// Whether the host's bridge says its free space (`disk_space`), as of the last connection.
+    @ObservationIgnored private var saysDisk = false
     /// The registration for notifications last asked for, which the next waits for.
     @ObservationIgnored private var pushRegistration: Task<Void, Never>?
     /// Whether what answered at the host's address is Hermes on its own (`hermes serve`),
@@ -621,14 +626,21 @@ final class HostModel: Identifiable {
         fleet?.hostChanged(host)
     }
 
-    /// What the host's greeting says of a later version (`update_notice`): once a
-    /// connection, before its first poll, so that it never puts back an older word over
+    /// What the host's greeting says of a later version (`update_notice`), and of its
+    /// disk's free space (`disk_space`): once a connection, before its first poll, so that it never puts back an older word over
     /// what a poll said since (Codex's review, 2026-10-29).
     private func learnUpdate() async {
         guard let gateway = backend as? HermesBackend, let ready = await gateway.gatewayReady, !isRetired else { return }
         bridgeVersion = ready.bridge?.version
         saysUpdates = ready.bridge?.features.contains(BridgeWire.Feature.updateNotice) == true
         updateIs(ready.bridge?.latest)
+        saysDisk = ready.bridge?.features.contains(BridgeWire.Feature.diskSpace) == true
+        diskIs(ready.bridge?.disk)
+    }
+
+    /// The free space the host said, set only when it changed, as a poll says it every few seconds.
+    private func diskIs(_ said: HostDisk?) {
+        if said != disk { disk = said }
     }
 
     /// The later version the host said is out, or none: set only when that changed, as a
@@ -1380,6 +1392,7 @@ final class HostModel: Identifiable {
                 looksAre(at: report.looks)
                 orderIs(at: report.order)
                 if saysUpdates { updateIs(report.update) }
+                if saysDisk { diskIs(report.disk) }
             } catch {
                 AppLog.chat.error("Could not ask which threads are at work: \(error.localizedDescription, privacy: .public)")
             }

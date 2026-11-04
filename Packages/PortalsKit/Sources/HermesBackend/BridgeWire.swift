@@ -201,6 +201,18 @@ public enum BridgeWire {
         /// that a Stop took back before the agent read it: it leaves the turn, and goes back
         /// to the composer of the device that sent it.
         public static let steerWithdrawn = "steer_withdrawn"
+        /// `gateway.ready`'s `bridge` block and the `sessions.activity` answer carry `disk`,
+        /// the free space on the bridge's disk (`HostDisk`), for Settings.
+        public static let diskSpace = "disk_space"
+    }
+
+    /// The free space on a bridge's disk, as one with `disk_space` says it (`disk`): two
+    /// whole numbers of bytes, none below 0 and the free no more than the size; nil
+    /// otherwise. A level this app does not know is read as `ok`.
+    public static func hostDisk(_ value: JSONValue?) -> HostDisk? {
+        guard let free = value?["free"]?.intValue, let total = value?["total"]?.intValue, free >= 0, total > 0, free <= total else { return nil }
+        let level = value?["level"]?.stringValue.flatMap(HostDisk.Level.init(rawValue:)) ?? .ok
+        return HostDisk(free: Int64(free), total: Int64(total), level: level)
     }
 
     /// A later version of portals-host, as a bridge with `update_notice` says it
@@ -603,9 +615,12 @@ public enum BridgeWire {
         /// Feature `update_notice`: a later version of portals-host that is out, only while
         /// there is one. Kept as raw JSON, so an odd one costs only itself.
         public var latest: JSONValue?
+        /// Feature `disk_space`: the free space on the bridge's disk. Kept as raw JSON, so
+        /// an odd one costs only itself.
+        public var disk: JSONValue?
 
         enum CodingKeys: String, CodingKey {
-            case sessions, looks, order, latest
+            case sessions, looks, order, latest, disk
             case threadList = "thread_list"
         }
 
@@ -649,6 +664,11 @@ public enum BridgeWire {
         /// The later version that is out, when the answer says one; nil otherwise.
         public var laterVersion: String? {
             BridgeWire.laterVersion(latest)
+        }
+
+        /// The free space on the bridge's disk, when the answer says it; nil otherwise.
+        public var hostDisk: HostDisk? {
+            BridgeWire.hostDisk(disk)
         }
     }
 

@@ -37,7 +37,7 @@ import type { ClaudeSignIn } from "./signIn.ts";
 import type { CommandAccess } from "../../portals/access.ts";
 import type { VersionCheck } from "../program.ts";
 import type { Warmable, WarmPool } from "../pool.ts";
-import { ClaudeStream, type ContextWindows } from "./stream.ts";
+import { ClaudeStream, isWritesLost, writesLost, type ContextWindows } from "./stream.ts";
 import type { PastSubagent } from "./tasks.ts";
 
 // One Claude Code thread. It has a process ("warm") only while it is in use: the first
@@ -774,7 +774,12 @@ export class ClaudeSession implements ProviderSession, Warmable {
   }
 
   private receive(live: Live, message: SDKMessage): void {
-    if (this.live !== live) return;
+    if (this.live !== live) {
+      // Claude Code says it could not save all it wrote as its process exits, which is
+      // mostly after the bridge let it go (`stop`, as a warm process cools): told all the same.
+      if (isWritesLost(message)) this.sink.emit(writesLost(message as Record<string, unknown>));
+      return;
+    }
     if (message.type === "system" && (message as { subtype?: unknown }).subtype === "init") {
       const version = (message as { claude_code_version?: unknown }).claude_code_version;
       live.initSeen = true;

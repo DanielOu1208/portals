@@ -10,7 +10,7 @@ import { DeskRefused, type AdoptMode, type OngoingThread, type Provider, type Se
 import { providerModeOptions } from "../providers/modes.ts";
 import type { DiffStore } from "./keptDiffs.ts";
 import { lastPreview } from "./preview.ts";
-import type { Peer, SessionListener, ThreadActivity } from "./session.ts";
+import type { Peer, SessionListener, SessionOptions, ThreadActivity } from "./session.ts";
 import { Session } from "./session.ts";
 import type { Registry, StartedBy, ThreadChanges, ThreadRecord } from "./registry.ts";
 import type { SpentStore } from "./spent.ts";
@@ -67,6 +67,7 @@ export class SessionManager {
   private readonly waiting: WaitingStore | undefined;
   private readonly spent: SpentStore | undefined;
   private readonly diffs: DiffStore | undefined;
+  private readonly disk: SessionOptions["disk"];
   /** Closing with the bridge: nothing waiting is sent any more. */
   private closing = false;
   private readonly listeners: SessionListener[] = [];
@@ -98,7 +99,7 @@ export class SessionManager {
 
   constructor(options: {
     registry: Registry; providers: Map<string, Provider>; logCapacity?: number; listener?: SessionListener; waiting?: WaitingStore; spent?: SpentStore;
-    diffs?: DiffStore; heldFor?: number;
+    diffs?: DiffStore; heldFor?: number; disk?: SessionOptions["disk"];
   }) {
     this.held = new HeldElsewhere((threads) => {
       for (const id of threads) this.tell((listener) => listener.activityChanged?.(id));
@@ -109,6 +110,7 @@ export class SessionManager {
     this.waiting = options.waiting;
     this.spent = options.spent;
     this.diffs = options.diffs;
+    this.disk = options.disk;
     if (options.listener) this.listeners.push(options.listener);
   }
 
@@ -160,6 +162,14 @@ export class SessionManager {
   /** How many sessions are loaded. */
   get loaded(): number {
     return this.live.size;
+  }
+
+  /**
+   * The host's disk began to run low on space (src/disk.ts): each thread at work is told
+   * now, once; the others as they start a turn.
+   */
+  diskLow(): void {
+    for (const session of this.live.values()) if (session.activity) session.tellDiskLow();
   }
 
   /**
@@ -710,7 +720,7 @@ export class SessionManager {
   /** A session for `record`, numbering its events on past the last one of this thread in this run. */
   private session(record: ThreadRecord): Session {
     const provider = this.provider(record.agent);
-    return new Session(record, this.registry, { folderLocked: () => this.folderLocked(record.cwd), modeOptions: providerModeOptions(provider), agentName: provider.profile.displayName, logCapacity: this.logCapacity, listener: this.listener, lastSeq: this.lastSeq.get(record.id), waiting: this.waiting, spent: this.spent, diffs: this.diffs, lastQueueID: this.lastQueueID.get(record.id) });
+    return new Session(record, this.registry, { folderLocked: () => this.folderLocked(record.cwd), modeOptions: providerModeOptions(provider), agentName: provider.profile.displayName, logCapacity: this.logCapacity, listener: this.listener, lastSeq: this.lastSeq.get(record.id), waiting: this.waiting, spent: this.spent, diffs: this.diffs, lastQueueID: this.lastQueueID.get(record.id), disk: this.disk });
   }
 
   /** Lets go of a loaded session; it is loaded again from the registry when next asked for. */

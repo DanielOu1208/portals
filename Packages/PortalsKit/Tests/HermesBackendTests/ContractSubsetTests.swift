@@ -140,7 +140,7 @@ import Testing
             BridgeWire.Feature.answerOwner, BridgeWire.Feature.netRename, BridgeWire.Feature.netRenameDevices,
             BridgeWire.Feature.botChat, BridgeWire.Feature.historyPages, BridgeWire.Feature.updateNotice, BridgeWire.Feature.mcpAuth,
             BridgeWire.Feature.messageReconciliation,
-            BridgeWire.Feature.gitStatus, BridgeWire.Feature.usageRead, BridgeWire.Feature.openOnHost,
+            BridgeWire.Feature.gitStatus, BridgeWire.Feature.usageRead, BridgeWire.Feature.openOnHost, BridgeWire.Feature.diskSpace,
             BridgeWire.Feature.steerWithdrawn,
         ])
         // Searching the folders under the host's home folder: as the subset has it, and never sent to Hermes.

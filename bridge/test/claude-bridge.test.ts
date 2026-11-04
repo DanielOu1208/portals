@@ -1513,6 +1513,38 @@ test("at most maxWarm processes: the least recently used idle one goes cold firs
   assert.equal(small.provider.pool.size, 1);
 });
 
+test("Claude Code saying, as its process exits, that a full disk kept it from saving is told in the thread, also after the process went cold", async (t) => {
+  const small = fakeClaude({ maxWarm: 1 });
+  const other = await startTestBridge({ providers: new Map([["claude", small.provider]]), config: { generalFolder: cwd } });
+  const phone = await TestClient.open(other);
+  t.after(async () => {
+    await phone.close();
+    await other.dispose();
+  });
+  const create = async () => (await phone.call("session.create", { profile: "claude", cwd })).session_id;
+  const first = await create();
+  await phone.call("prompt.submit", { session_id: first, text: "one" });
+  await until(() => sessionQueries(small.queries).length === 1);
+  const [one] = sessionQueries(small.queries);
+  await until(() => one.received.length === 1);
+  // Its stdin closed, Claude Code says what it lost, then exits.
+  const exit = one.end.bind(one);
+  one.end = () => {
+    one.emit({ type: "system", subtype: "session_writes_lost", error_code: "ENOSPC", lost: ["transcript"], transcript_session_ids: [first], uuid: "u-lost", session_id: first });
+    exit();
+  };
+  void play(one, "plain");
+  await phone.find((frame) => isEvent(frame, "message.complete", first));
+  const start = phone.frames.length;
+
+  // Another thread warming up pushes the first out: the bridge has let its process go as it says it.
+  const second = await create();
+  await phone.call("prompt.submit", { session_id: second, text: "two" });
+  const notice = await phone.from(start, (frame) => isEvent(frame, "status.update", first));
+  assert.deepEqual(notice.params.payload, { kind: "warn", text: "The disk is full, so Claude Code could not save all of this conversation. Its history may come back short." });
+  assert.equal(one.isRunning, false);
+});
+
 test("after a restart a cold thread comes back from Claude's stored history, with no process started", async () => {
   const shared = new FakeFiles();
   const firstRun = fakeClaude({ files: shared });

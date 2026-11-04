@@ -1616,7 +1616,7 @@ test("a client that never calls the new methods sees what it saw before", async 
   assert.deepEqual(Object.keys(started).sort(), fleetKeys.filter((key) => key !== "title"));
   // sessions.activity still lists what is at work, beside the keys such a client never reads.
   const activity = await a.client.call("sessions.activity");
-  assert.deepEqual(Object.keys(activity).sort(), ["looks", "order", "sessions", "thread_list"]);
+  assert.deepEqual(Object.keys(activity).sort(), ["disk", "looks", "order", "sessions", "thread_list"]);
   assert.deepEqual(activity.sessions, []);
   const read = await a.client.call("thread.read", { thread });
   assert.deepEqual(Object.keys(read).sort(), ["messages", "open_requests", "thread"]);

@@ -9,6 +9,7 @@ import { redacted } from "../push/notifier.ts";
 import type { LoggedEvent } from "../sessions/eventLog.ts";
 import { version } from "../version.ts";
 import { wellFormedJSON } from "../json.ts";
+import { diskFields } from "../disk.ts";
 import { ErrorCode, RpcError } from "./errors.ts";
 import { bridgeFeatures, bridgeProtocol } from "./features.ts";
 import type { GatewaySocket } from "./gateway.ts";
@@ -104,7 +105,8 @@ export class Connection implements Caller {
           // `version` is the bridge's own (package.json), for the app's About.
           // `relay_problem`, only when there is one: "in_use", another bridge holds this Mac's relay id.
           // `latest`, only when there is one: a later portals-host that is out (feature update_notice).
-          bridge: { protocol: bridgeProtocol, version, features: bridgeFeatures, machine: { hostname: hostname(), home: homedir(), id: gateway.machine, os: hostOS }, net: gateway.net.revision(), ...relayProblem(ready.relayProblem?.()), ...latest(gateway.updates?.latest) },
+          // `disk`, once it has been read: the free space on the bridge's disk (feature disk_space).
+          bridge: { protocol: bridgeProtocol, version, features: bridgeFeatures, machine: { hostname: hostname(), home: homedir(), id: gateway.machine, os: hostOS }, net: gateway.net.revision(), ...relayProblem(ready.relayProblem?.()), ...latest(gateway.updates?.latest), ...diskFields(gateway.disk?.now) },
         },
       },
     });

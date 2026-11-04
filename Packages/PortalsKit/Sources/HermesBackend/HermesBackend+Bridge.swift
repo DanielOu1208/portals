@@ -161,7 +161,8 @@ extension HermesBackend: ThreadActivityReporting {
             list: offers(BridgeWire.Feature.threadSync) ? result.list : nil,
             looks: offers(BridgeWire.Feature.agentLooks) ? result.lookList : nil,
             order: offers(BridgeWire.Feature.sidebarOrder) ? result.orderList : nil,
-            update: offers(BridgeWire.Feature.updateNotice) ? result.laterVersion : nil
+            update: offers(BridgeWire.Feature.updateNotice) ? result.laterVersion : nil,
+            disk: offers(BridgeWire.Feature.diskSpace) ? result.hostDisk : nil
         )
     }
 }

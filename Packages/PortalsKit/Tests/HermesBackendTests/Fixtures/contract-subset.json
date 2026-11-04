@@ -165,7 +165,8 @@
    "open_on_host",
    "steer_withdrawn",
    "message_fork",
-   "turn_file_undo"
+   "turn_file_undo",
+   "disk_space"
   ],
   "events": {
    "mcp.auth": {

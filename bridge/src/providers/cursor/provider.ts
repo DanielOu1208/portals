@@ -805,15 +805,18 @@ export class CursorProvider implements Provider, CursorHost {
    * file it replaces as `<file>.bak`: nothing waits for a save to be on the disk, so a
    * power cut can leave the file empty, and the thread is then read from the save
    * before (`resumeSession`). That save keeps the file that could not be used aside
-   * (store/jsonFile.ts `readBackedUp`), not as the `.bak`.
+   * (store/jsonFile.ts `readBackedUp`), not as the `.bak`. Whether it could be written: the
+   * thread says so when it could not (CursorSession `save`).
    */
-  save(id: string, kept: KeptThread): void {
+  save(id: string, kept: KeptThread): { kept: true } | { kept: false; error: unknown } {
     try {
       const aside = this.asides.get(id);
       writeJSON(this.threadFile(id), kept, aside === undefined ? { backup: true } : { aside });
       this.asides.delete(id);
+      return { kept: true };
     } catch (error) {
       log.warn(`could not keep a ${cursorName} conversation`, { session: id, error: (error as Error).message });
+      return { kept: false, error };
     }
   }
 
