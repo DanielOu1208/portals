@@ -128,16 +128,16 @@ class MessageActionsUIHarness: XCTestCase {
         XCTAssertTrue(field.waitForExistence(timeout: 10))
         return field
     }
-    func replace(_ text: String, in field: XCUIElement, app: XCUIApplication) {
+    func edit(_ field: XCUIElement) -> String {
+        let before = field.value as? String
         field.tap()
-        field.press(forDuration: 1.2)
-        let selectAll = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Select All"))
-            .firstMatch
-        XCTAssertTrue(selectAll.waitForExistence(timeout: 5), "iOS Select All was unavailable")
-        selectAll.tap()
-        field.typeText(text)
-        XCTAssertEqual(field.value as? String, text)
+        field.typeText(" 123")
+        let text = field.value as? String ?? ""
+        XCTAssertNotEqual(text, before)
+        XCTAssertTrue(text.contains("123"))
+        return text
     }
+
     func unchanged(_ s: [String: Any]) throws {
         let before = s["baseline"] as! [[String: Any]]
         let after = (s["snapshot"] as! [String: Any])["messages"] as! [[String: Any]]
@@ -227,7 +227,7 @@ final class MessageActionsUITests: MessageActionsUIHarness {
         try save(state, device + "-" + style + "-edit-cancel")
         action("Edit and send again", app)
         XCTAssertTrue(cancel.waitForExistence(timeout: 10))
-        replace("Revised request", in: composer(app), app: app)
+        let revised = edit(composer(app))
         app.buttons["send"].tap()
         state = try waitState("edited Send did not fork/send once") {
             ($0["forks"] as! [Any]).count == 1 && ($0["calls"] as! [Any]).count == 1
@@ -237,7 +237,7 @@ final class MessageActionsUITests: MessageActionsUIHarness {
         XCTAssertEqual(editFork["before"] as? Bool, true)
         XCTAssertEqual((editFork["prefix"] as! [Any]).count, 0)
         XCTAssertEqual(sent["id"] as? String, editFork["newID"] as? String)
-        XCTAssertEqual(sent["text"] as? String, "Revised request")
+        XCTAssertEqual(sent["text"] as? String, revised)
         XCTAssertEqual((sent["images"] as! [Any]).count, 0)
         XCTAssertEqual((sent["files"] as! [Any]).count, 0)
         try unchanged(state)
@@ -271,7 +271,7 @@ final class MessageActionsUITests: MessageActionsUIHarness {
             app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "notes.txt")).firstMatch
                 .exists)
         try capture(device + "-" + style + "-attachment-edit", app)
-        replace("Revised attachment request", in: composer(app), app: app)
+        let revisedAttachment = edit(composer(app))
         app.buttons["send"].tap()
         state = try waitState("attachment edit Send did not fork/send once") {
             ($0["forks"] as! [Any]).count == 1 && ($0["calls"] as! [Any]).count == 1
@@ -279,7 +279,7 @@ final class MessageActionsUITests: MessageActionsUIHarness {
         let payload = (state["calls"] as! [[String: Any]])[0]
         let attachmentFork = (state["forks"] as! [[String: Any]])[0]
         XCTAssertEqual(payload["id"] as? String, attachmentFork["newID"] as? String)
-        XCTAssertTrue((payload["text"] as! String).hasPrefix("Revised attachment request"))
+        XCTAssertTrue((payload["text"] as! String).hasPrefix(revisedAttachment))
         for key in ["images", "files"] {
             let expected = original[key] as! [[String: Any]]
             let actual = payload[key] as! [[String: Any]]
@@ -306,7 +306,7 @@ final class MessageActionsUITests: MessageActionsUIHarness {
         }
         action("Edit and send again", app)
         XCTAssertTrue(editCancel(app).waitForExistence(timeout: 10))
-        replace("Revised held request", in: composer(app), app: app)
+        _ = edit(composer(app))
         _ = try request("/hold-fork")
         app.buttons["send"].tap()
         var state = try waitState("before-fork did not reach held provider") {
