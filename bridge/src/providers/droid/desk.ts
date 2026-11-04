@@ -1,6 +1,7 @@
 import { lstat, readdir, readFile } from "node:fs/promises";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { AutonomyLevel, DroidInteractionMode, filterMessagesForUI } from "@factory/droid-sdk/node";
+import { firstLine, type RecentFolder } from "../../folders.ts";
 import { titleFrom } from "../titles.ts";
 import { DeskRefused, type StoredMessage } from "../types.ts";
 import { appEffort } from "./models.ts";
@@ -44,6 +45,8 @@ export class DroidSessionFiles {
   readonly root: string;
   private readonly names: string;
   private readonly cache = new Map<string, { size: number; changed: number; session: StoredDroidSession | null }>();
+  /** The folder each file's header names, by path, as last read; null for a file that is no session of the desk's. */
+  private readonly heads = new Map<string, { size: number; changed: number; cwd: string | null }>();
 
   constructor(home: string, names: string) {
     this.root = join(home, ".factory", "sessions");
@@ -67,6 +70,30 @@ export class DroidSessionFiles {
     }
     const there = new Set(files.map((file) => file.path));
     for (const path of this.cache.keys()) if (!there.has(path)) this.cache.delete(path);
+    return result;
+  }
+
+  /**
+   * Where the desk's sessions ran, each with when its file last changed (`recentFolders`).
+   * Only a file's header is read, and again only once the file has changed.
+   */
+  async folders(): Promise<RecentFolder[]> {
+    const files = await this.files();
+    const result: RecentFolder[] = [];
+    for (const file of files) {
+      const known = this.heads.get(file.path);
+      let cwd = known?.size === file.size && known.changed === file.updated ? known.cwd : undefined;
+      if (cwd === undefined) {
+        const line = await firstLine(file.path);
+        // Not read this time: nothing is remembered of it, and the next look reads it.
+        if (line === null) continue;
+        cwd = this.header(line, file.path)?.cwd ?? null;
+        this.heads.set(file.path, { size: file.size, changed: file.updated, cwd });
+      }
+      if (cwd !== null) result.push({ path: cwd, lastUsed: file.updated });
+    }
+    const there = new Set(files.map((file) => file.path));
+    for (const path of this.heads.keys()) if (!there.has(path)) this.heads.delete(path);
     return result;
   }
 
@@ -103,13 +130,21 @@ export class DroidSessionFiles {
     return result;
   }
 
-  private summary(text: string, path: string, updated: number): StoredDroidSession | null {
-    const [first, ...lines] = text.split("\n");
+  /** A session file's first line as the header of a session the desk lists, with its id and folder; null for any other. */
+  private header(first: string, path: string): { header: Record<string, unknown>; id: string; cwd: string } | null {
     const header = parsed(first);
     const id = basename(path, ".jsonl");
     const cwd = header?.lastCwd ?? header?.cwd;
     if (header?.type !== "session_start" || (header.id ?? header.sessionId) !== id || typeof cwd !== "string" || !isAbsolute(cwd)) return null;
     if (header[snapshotField] !== undefined || header.callingSessionId || header.decompSessionType || resolve(cwd) === this.names) return null;
+    return { header, id, cwd };
+  }
+
+  private summary(text: string, path: string, updated: number): StoredDroidSession | null {
+    const [first, ...lines] = text.split("\n");
+    const start = this.header(first, path);
+    if (!start) return null;
+    const { header, id, cwd } = start;
     let prompt: string | undefined;
     for (const line of lines) {
       const entry = parsed(line);

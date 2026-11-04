@@ -526,6 +526,9 @@ lately, newest first, at most 30. The list comes from:
   when the bridge starts and every 3 minutes, so a reply never waits for Codex;
 - the projects `~/.codex/config.toml` trusts (its `[projects."<path>"]` headers only;
   no time, so they come after the rest);
+- Droid's sessions (`~/.factory/sessions`) and Pi's (its session folder): the folder
+  each session file's first line names, and when the file last changed; only that
+  line is read, and again only once the file has changed;
 - the bridge's own threads.
 
 Only folders that exist are offered, each once by its real path. Never offered: `/`,
@@ -1450,8 +1453,6 @@ See [the protocol](../docs/gateway-protocol.md#lean-deltas) for the format and o
 - A message sent mid-turn and then interrupted may still be answered by Claude after
   the interrupt; that answer is not shown live.
 - Pi threads never ask before a command or an edit ([Pi](#pi)), and have no `/mode`.
-- The folders Pi worked in are not offered for new threads. A Pi thread starts in
-  General, in a folder another agent worked in, or in one you added.
 - Whether a terminal has a Pi session open is judged by folder, since Pi does not say.
   A Pi left open in a project keeps every Pi session of that project from being
   continued (fork one instead). Not seen: a Pi started in another folder that opened
