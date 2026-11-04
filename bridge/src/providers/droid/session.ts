@@ -201,6 +201,8 @@ export class DroidSession implements ProviderSession {
    * reports otherwise a side call's (`conversing`).
    */
   private droidAtWork = false;
+  /** Droid says it is compacting the thread's conversation by itself: a call it reports then is the compaction's (`conversing`). */
+  private droidCompacting = false;
   /** The last call Droid reported (its three figures), taken or not: the same again is no new call (`observeContext`). */
   private lastCall: string | undefined;
   /** How long the last save took: a mid-turn save waits the longer for a long thread (`saveSoon`). */
@@ -520,8 +522,11 @@ export class DroidSession implements ProviderSession {
       }
       if (own) {
         if (completion && !this.turn) this.autonomousWorking = true;
-        if (notification.type === "droid_working_state_changed") this.autonomousWorking = this.droidAtWork = notification.newState !== DroidWorkingState.Idle;
-        if (notification.type === "agent_turn_completed") this.autonomousWorking = this.droidAtWork = false;
+        if (notification.type === "droid_working_state_changed") {
+          this.autonomousWorking = this.droidAtWork = notification.newState !== DroidWorkingState.Idle;
+          this.droidCompacting = notification.newState === DroidWorkingState.CompactingConversation;
+        }
+        if (notification.type === "agent_turn_completed") this.autonomousWorking = this.droidAtWork = this.droidCompacting = false;
         if (this.autonomousWorking) this.autonomousAt = this.host.now();
       }
       // A subagent's queue is its own: only a receipt for one of this thread's own steering
@@ -635,9 +640,13 @@ export class DroidSession implements ProviderSession {
    * set by its side calls (CLI 0.250: the session's naming, Droid Shield's check of a
    * command, Auto's routing), and the naming one often lands after a new thread's first
    * turn has ended (fixtures/droid/compact.jsonl: 355 tokens, where the turn's own call took
-   * 19,164); Droid reports a turn's own calls before it says the turn ended.
+   * 19,164); Droid reports a turn's own calls before it says the turn ended. Nor a compaction's
+   * own call, which Droid reports before it says it compacted (CLI 1.3.0: 973 tokens, where
+   * the turn's call before it took 38,939): the meter dropped to it, and the marker of a
+   * compaction Droid did by itself said it was what the conversation took before.
    */
   private conversing(): boolean {
+    if (this.compacting || this.droidCompacting) return false;
     const turn = this.turn;
     return this.droidAtWork || (!!turn && !turn.ended && !turn.droidDone);
   }
@@ -1432,7 +1441,7 @@ export class DroidSession implements ProviderSession {
     this.handle = null;
     this.unlisten?.(); this.unlisten = null;
     this.lifetime = null;
-    this.autonomousWorking = this.droidAtWork = false;
+    this.autonomousWorking = this.droidAtWork = this.droidCompacting = false;
     this.work.stopped(trackingEnded);
     this.background.close();
     this.host.pool.cooled(this);

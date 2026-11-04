@@ -2299,6 +2299,33 @@ test("after a compaction, the person's or Droid's own, the meter reads what is l
   assert.deepEqual(usage(), { type: "usage", usage: { used: 21_050, max: 800_000 } });
 });
 
+test("Droid compacting by itself makes a call of its own for it, which is not the conversation's: the meter does not drop to it, and the marker says what the conversation took before (Droid 1.3.0)", async (t) => {
+  const r = await rig(t);
+  r.handle.breakdown = breakdown(22_809);
+  // As Droid 1.3.0 said it, in a scratch thread whose compaction limit was 35,000: the turn's
+  // call, that it is compacting, its compaction's own call (651 in, 322 out), its word, the end.
+  r.handle.script = async function* (h) {
+    tell(h, { type: "droid_working_state_changed", newState: "streaming_assistant_message" });
+    lastCall(h, { inputTokens: 7233, cacheReadTokens: 31_702, outputTokens: 4 });
+    yield { type: "assistant_text_delta", messageId: "m", blockIndex: 0, text: "ok" };
+    tell(h, { type: "droid_working_state_changed", newState: "compacting_conversation" });
+    lastCall(h, { inputTokens: 7233, cacheReadTokens: 31_702, outputTokens: 4 });
+    lastCall(h, { inputTokens: 651, cacheReadTokens: 0, outputTokens: 322 });
+    tell(h, { type: "session_compacted", summaryId: "summary-1", removedCount: 1, visibleBoundaryMessageId: null });
+    tell(h, { type: "droid_working_state_changed", newState: "streaming_assistant_message" });
+    tell(h, { type: "agent_turn_completed", reason: "completed", turnId: "t1", tokenUsage: { inputTokens: 7884, outputTokens: 326, cacheCreationTokens: 0, cacheReadTokens: 31_702, thinkingTokens: 0 } });
+    tell(h, { type: "droid_working_state_changed", newState: "idle" });
+    yield result(h.id);
+  };
+  await turn(r.session, r.sink, "More filler text; ignore it.");
+  const used = r.sink.events.flatMap((event) => event.type === "usage" ? [event.usage.used] : []);
+  assert.equal(used.includes(973), false, `the meter read ${used.join(", ")}`);
+  assert.deepEqual(r.sink.events.filter((event) => event.type === "compacted"), [{ type: "compacted", trigger: "auto", tokensBefore: 38_939 }]);
+  assert.deepEqual(r.provider.store.read("thread").messages.filter((message) => message.role === "compaction").map((message) => message.role === "compaction" && message.tokens_before), [38_939]);
+  // Until Droid's next call, what is left.
+  assert.deepEqual(r.sink.events.findLast((event) => event.type === "usage"), { type: "usage", usage: { used: 22_809, max: 800_000, estimated: true } });
+});
+
 /** A thread on a long conversation (its last call 139,221), compacted with /compact, which leaves 21,000; the compaction's own call took 141,000. */
 async function compactedThread(t: TestContext) {
   const r = await rig(t);
@@ -2356,8 +2383,8 @@ test("a thread compacted whose meter was not read again before it closed reopens
   r.next.getContextStats = async () => { throw new Error("Droid took too long to answer droid.get_context_stats."); };
   await turn(r.session, r.sink, "/compact");
   const saved = r.provider.store.read("thread");
-  // The compaction's own call, which the meter took as /compact ran, and not read again since.
-  assert.deepEqual(saved.contextUsage, { used: 141_000, max: 872_000 });
+  // The conversation's last call before it, not the compaction's own, and not read again since.
+  assert.deepEqual(saved.contextUsage, { used: 139_221, max: 872_000 });
   assert.equal(saved.staleCall, "139000/0/2000");
   await r.session.close();
   r.sdk.loaded = { inputTokens: 139_000, cacheReadTokens: 0, outputTokens: 2000 };
@@ -2483,9 +2510,12 @@ test("the meter through a real Droid's turn, /compact and next turn (fixtures/dr
     for (const record of records.slice(compacting + 1, compacted)) if (record.kind === "notification") r.handle.notify(record.notification);
     return { session: next, removedCount: 4 };
   };
+  const mark = r.sink.events.length;
   assert.equal((await turn(r.session, r.sink, "/compact")).status, "complete");
-  // What is left (Droid's /context), not get_context_stats's 12,678, unchanged by the compaction, nor its own call's 1,017.
+  // What is left (Droid's /context), not get_context_stats's 12,678, unchanged by the compaction, nor its own call's 1,017,
+  // also not for a moment as it ran.
   assert.deepEqual(usage(), { used: 10_420, max: 200_000, estimated: true });
+  assert.deepEqual(r.sink.events.slice(mark).flatMap((event) => event.type === "usage" ? [event.usage.used] : []), [10_420]);
 
   next.context = stats("after the turn after compacting");
   next.breakdown = breakdown("after the turn after compacting");
