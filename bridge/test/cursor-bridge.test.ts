@@ -1796,7 +1796,7 @@ test("a Cursor that is not signed in says so with what to do, and its process is
   writeFileSync(join(state.agentDir, "signed-out"), "");
   let before = calls(state.agentDir).length;
   await assert.rejects(createThread({}, state.phone), (error: RpcFailure) => error.message === notSignedInText);
-  assert.equal(notSignedInText, `Cursor is not signed in on this ${machineWord()}. Run \`cursor-agent login\` in a terminal there.`);
+  assert.equal(notSignedInText, `Cursor is not signed in on this ${machineWord()}. Run \`cursor-agent login\` in a terminal there, then try again.`);
   const refused = calls(state.agentDir).slice(before);
   assert.deepEqual(methods(refused), ["initialize", "cursor/list_available_models", "session/new"]);
   await until(() => !alive(refused[0].pid), "the signed-out process has gone");
@@ -1824,6 +1824,17 @@ test("a reply that ends with Cursor's request to sign in fails the turn with the
   assert.equal(failed.status, "error");
   assert.equal(failed.text, notSignedInText);
   // That process lost its sign-in for good: the next message starts another.
+  await until(() => !alive(pid), "the process has gone");
+  assert.notEqual(Number(/pid=(\d+)/.exec(await reply(session, "where", state.phone))?.[1]), pid);
+});
+
+test("a sign-in Cursor's backend refuses fails the turn with the same sentence, and the process is stopped as for one that has gone", async (t) => {
+  const state = await rig(t);
+  const session = await createThread({}, state.phone);
+  const pid = Number(/pid=(\d+)/.exec(await reply(session, "where", state.phone))?.[1]);
+  const events = await runTurn(state.phone, session, "refused");
+  assert.deepEqual([events.at(-1).payload.status, events.at(-1).payload.text, events.at(-1).payload.error_surface?.retryable], ["error", notSignedInText, true]);
+  assert.equal(events.some((event: any) => event.type === "message.delta" && /unauthenticated/.test(event.payload.text)), false);
   await until(() => !alive(pid), "the process has gone");
   assert.notEqual(Number(/pid=(\d+)/.exec(await reply(session, "where", state.phone))?.[1]), pid);
 });
@@ -2430,10 +2441,11 @@ function versionLines(t: TestContext): () => string[] {
   return () =>
     written.mock.calls
       .map((call) => String(call.arguments[0]).trimEnd().split(" ").slice(1).join(" "))
-      .filter((line) => /Cursor (was not found|is \d+\.\d+\.\d+;|\d+\.\d+\.\d+$)/.test(line));
+      .filter((line) => /Cursor (was not found|is \d+\.\d+\.\d+[;,]|\d+\.\d+\.\d+$)/.test(line));
 }
 
 const anotherRelease = (version: string) => `warn  Cursor is ${version}; this bridge was tested with ${testedCursorVersion}. Check a thread before relying on it.`;
+const newerRelease = (version: string) => `warn  Cursor is ${version}, newer than this bridge was tested with (${testedCursorVersion}). Check a thread before relying on it.`;
 
 test("at start the bridge logs Cursor's version: an error when the program does not run, a warning for another release, a line for the tested one", async (t) => {
   const dir = agentFolder();
@@ -2497,7 +2509,9 @@ test("a release of Cursor not seen since the bridge started is told of once, whe
   await next(null, "and again");
   await next("2026.11.02-9f8e7d6", "once more");
   await until(() => lines().length === 3, "the third release was told of");
-  assert.deepEqual(lines(), [`info  Cursor ${testedCursorVersion}`, anotherRelease("2026.10.09"), anotherRelease("2026.11.02")]);
+  assert.deepEqual(lines(), [`info  Cursor ${testedCursorVersion}`, anotherRelease("2026.10.09"), newerRelease("2026.11.02")]);
+  // `/status` names the release found last.
+  assert.equal(own.version.statusLine(), `Version: Cursor 2026.11.02, newer than the ${testedCursorVersion} Portals was tested with`);
   assert.equal(new Set(calls(dir).map((call) => call.pid)).size, 4);
 });
 
@@ -2594,20 +2608,29 @@ test("a bridge whose config.json has Pi and Cursor both on runs both, Pi listed 
 
 // MARK: A later Cursor
 
-test("what a later Cursor might send that the bridge does not know leaves the turn running, or ended complete", async (t) => {
+test("what a later Cursor might send that the bridge does not know leaves the turn running, and a reason for stopping it does not know ends it as not finished", async (t) => {
   const state = await rig(t, { features: ["future"] });
   // A new session in a mode nobody knows: the thread's own mode is sent, and nothing is read back.
   const session = await createThread({}, state.phone);
   // An update of a kind nobody knows, a tool call and a permission request that cannot be read
   // (passed over, and answered cancelled), a request nobody knows (refused), and a reason for
-  // stopping nobody knows.
+  // stopping nobody knows: what was said is kept, and the turn is not told as finished.
   const events = await runTurn(state.phone, session, "use the editor in the future");
   const done = events.at(-1).payload;
-  assert.equal(done.status, "complete");
-  assert.equal(done.text, 'odd={"outcome":{"outcome":"cancelled"}} The client answered -32601. pong: use the editor in the future');
+  assert.equal(done.status, "error");
+  assert.equal(done.text, 'Cursor stopped the turn for a reason Portals does not know ("enlightened").');
+  assert.equal(ofType(events, "message.delta").map((event) => event.payload.text).join(""), 'odd={"outcome":{"outcome":"cancelled"}} The client answered -32601. pong: use the editor in the future');
   assert.deepEqual(notices(events), []);
   assert.deepEqual(tools(events), []);
   assert.equal((await state.phone.call("session.resume", { session_id: session })).info.mode, "default");
+});
+
+test("a turn Cursor stops for a refusal keeps what was said, and is told as not finished", async () => {
+  const session = await createThread();
+  const done = (await runTurn(client, session, "decline this")).at(-1).payload;
+  assert.equal(done.status, "error");
+  assert.equal(done.text, "Cursor's model declined to go on.");
+  assert.equal((await runTurn(client, session, "and now?")).at(-1).payload.text, "pong: and now?");
 });
 
 // MARK: Closing

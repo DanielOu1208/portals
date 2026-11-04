@@ -82,6 +82,21 @@ test("a command's output file is read while it runs, only its end; a link is not
   }
 });
 
+test("a command's Stop can be taken back and given again while it runs, and its row says so only when that changed", () => {
+  const events: ProviderEvent[] = [];
+  const commands = new BackgroundCommands((event) => events.push(event));
+  commands.start("a", { goal: "a", stoppable: true });
+  commands.stoppable("a", true);
+  assert.equal(rows(events).length, 1);
+  commands.stoppable("a", false);
+  commands.stoppable("a", true);
+  assert.deepEqual(rows(events).map((row) => row.stoppable), [true, false, true]);
+  commands.end("a", "completed");
+  commands.stoppable("a", true);
+  assert.equal(rows(events).at(-1)!.stoppable, false, "not once it ended");
+  assert.equal(rows(events).length, 4);
+});
+
 test("close says the commands still running are no longer followed", () => {
   const events: ProviderEvent[] = [];
   const commands = new BackgroundCommands((event) => events.push(event));

@@ -8,7 +8,7 @@
   "type": "turn.end",
   "status": "complete",
   "spent": {
-   "tokens": 1393
+   "tokens": 1370
   }
  },
  {
@@ -20,7 +20,7 @@
   "type": "turn.end",
   "status": "complete",
   "spent": {
-   "tokens": 1418
+   "tokens": 1395
   }
  }
 ]

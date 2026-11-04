@@ -4,11 +4,12 @@ import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { DroidTransport } from "../src/providers/droid/rpc.ts";
 import {
-  AutonomyLevel, createSession, DroidInteractionMode, KillWorkerSessionRequestParamsSchema, listModels,
+  AutonomyLevel, CliRequestOrNotificationSchema, createSession, DroidInteractionMode, KillWorkerSessionRequestParamsSchema, listModels,
   ToolConfirmationOutcome, type DroidSession, type ModelInfo, type RequestPermissionRequestParams,
 } from "@factory/droid-sdk/node";
 
-// Records real SDK events AND raw onNotification payloads, in arrival order.
+// Records real SDK events AND raw onNotification payloads, in arrival order, and whole
+// frames the pinned SDK cannot parse (`dropped`), which it would drop unseen.
 // Uses the existing CLI login, never changes settings or skips permissions.
 //
 //   cd bridge && node scripts/record-droid.ts [scenario…]
@@ -121,16 +122,32 @@ function safePermission(cwd: string, params: RequestPermissionRequestParams, spe
 }
 
 function cleaner(cwd: string): (value: unknown, key?: string) => unknown {
-  const paths = [cwd, cwd.replace(/^\/private/, ""), scratch, scratch.replace(/^\/private/, ""), homedir()]
-    .sort((a, b) => b.length - a.length);
+  // The system's temporary folder holds the scratch repos and Droid's background output files.
+  const temporary = realpathSync(tmpdir());
+  const both = (path: string) => [path, path.replace(/^\/private/, "")];
+  const paths: [string, string][] = [
+    ...[cwd, scratch].flatMap(both).map((path): [string, string] => [path, "/tmp/portals-droid-cwd"]),
+    ...both(temporary).map((path): [string, string] => [path, "/tmp"]),
+    [homedir(), "/home/recorder"] as [string, string],
+  ];
+  paths.sort(([a], [b]) => b.length - a.length);
   const clean = (value: unknown, key = ""): unknown => {
     if (/^(email|organization|accountId|userId|apiKey|accessToken|authorization|signature)$/i.test(key)) return "redacted";
+    // The person's own MCP servers (`mcp_status_changed`): their state, not their names.
+    if (key === "servers" && Array.isArray(value)) {
+      return value.map((server, index) => clean({ ...server, name: index === 0 ? "recorded-local-server" : `recorded-local-server-${index + 1}` }));
+    }
+    // The person's own hooks (`hook_execution_started`, `…_completed`): that they ran, not what they run or print.
+    if ((key === "hookCommands" || key === "hookResults") && Array.isArray(value)) {
+      return value.map((hook: Record<string, unknown>) => clean({ ...hook, command: "recorded-hook",
+        ...(hook.stdout ? { stdout: "recorded hook output" } : {}), ...(hook.stderr ? { stderr: "recorded hook output" } : {}) }));
+    }
     // CLI-injected system context can contain personal skills/settings. Preserve the
     // envelope, not that unrelated context. Model/tool output is otherwise untouched.
     if (typeof value === "string") {
       if (value.length > 100_000) return `[recording omitted ${value.length} generated characters]`;
       let text = value.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "<system-reminder>redacted environment context</system-reminder>");
-      for (const path of paths) text = text.split(path).join(path === homedir() ? "/home/recorder" : "/tmp/portals-droid-cwd");
+      for (const [path, stand] of paths) text = text.split(path).join(stand);
       return text.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "redacted@example.invalid");
     }
     if (Array.isArray(value)) return value.map((item) => clean(item));
@@ -178,6 +195,12 @@ async function record(name: string, scenario: Scenario, model: ModelInfo, versio
   const add = (entry: Record<string, unknown>) => lines.push({ ...entry, at: Date.now() - began });
   add({ kind: "meta", scenario: name, cli: version, sdk: sdkVersion, model: model.id, modelName: model.displayName, tokenMultiplier: model.tokenMultiplier, cwd });
   const transport = await connect(cwd);
+  // What Droid sent that the pinned SDK cannot parse, and so drops before any handler sees it.
+  const listen = transport.onMessage.bind(transport);
+  transport.onMessage = (handler) => listen((message) => {
+    if ((message as { type?: unknown }).type !== "response" && !CliRequestOrNotificationSchema.safeParse(message).success) add({ kind: "dropped", frame: message });
+    handler(message);
+  });
   let session: DroidSession | undefined;
   let unsubscribe: (() => void) | undefined;
   let interrupted = false;

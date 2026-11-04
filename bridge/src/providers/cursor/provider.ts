@@ -12,7 +12,7 @@ import { readBackedUp, readJSON, writeJSON } from "../../store/jsonFile.ts";
 import { version } from "../../version.ts";
 import { AcpClient, AgentStopped, refuse } from "../acp/client.ts";
 import type { AvailableCommand, ConfigOption, InitializeResult, RpcId } from "../acp/protocol.ts";
-import { reportVersion } from "../program.ts";
+import { VersionCheck } from "../program.ts";
 import { mcpCommand, mcpFolderGone, mcpStatusText, type McpServer, type McpServerState } from "../mcpStatus.ts";
 import { DeskRefused, type AdoptMode, type AgentCommand, type AgentProfile, type DeskAdoption, type ModelCatalog, type ModeOption, type Provider, type ProviderSession, type SessionOptions, type SessionSettings, type SessionSink, type StoredMessage, type UsageReport } from "../types.ts";
 import type { RecentFolder } from "../../folders.ts";
@@ -219,8 +219,8 @@ export class CursorProvider implements Provider, CursorHost {
   private readonly planLimits: CursorProviderOptions["planLimits"];
   private readonly startTimeoutMs: number | undefined;
   private readonly checking: boolean;
-  /** The versions of the program told of since the bridge started; null is one that did not run. */
-  private readonly versionsSaid = new Set<string | null>();
+  /** Which Cursor runs, as `cursor-agent --version` said at the bridge's start and as each process started. */
+  readonly version: VersionCheck;
   /** Cursor's processes, by the folder each runs in. */
   private readonly running = new Map<string, Process>();
   private readonly starting = new Map<string, Promise<Process>>();
@@ -267,6 +267,7 @@ export class CursorProvider implements Provider, CursorHost {
     this.planLimits = options.planLimits;
     this.note = options.portals?.instructions ?? null;
     this.checking = options.checkVersion ?? true;
+    this.version = new VersionCheck({ name: cursorName, tested: testedCursorVersion, path: this.command, setting: "cursor.path" });
     this.startTimeoutMs = options.startTimeoutMs;
     this.interruptGraceMs = options.interruptGraceMs ?? 15_000;
     this.notes = new ProcessNotes(join(this.directory, "processes.json"));
@@ -334,11 +335,7 @@ export class CursorProvider implements Provider, CursorHost {
    */
   private checkVersion(): void {
     if (!this.checking) return;
-    void cursorVersion(this.command, this.env).then((version) => {
-      if (this.versionsSaid.has(version)) return;
-      this.versionsSaid.add(version);
-      reportVersion({ name: cursorName, version, tested: testedCursorVersion, path: this.command, setting: "cursor.path" });
-    });
+    void cursorVersion(this.command, this.env).then((version) => this.version.installedIs(version));
   }
 
   /** How much of the plan is used (`/usage`), as Cursor says it to cursor-agent's own sign-in (`planLimits.ts`). */

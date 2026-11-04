@@ -1,6 +1,7 @@
 import "./environment.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { CodexError } from "../src/providers/codex/client.ts";
 import type { ProviderSession, StoredMessage, SubagentInfo } from "../src/providers/types.ts";
 import type { LoggedEvent } from "../src/sessions/eventLog.ts";
 import type { Registry, ThreadRecord } from "../src/sessions/registry.ts";
@@ -432,6 +433,7 @@ test("a Codex desk turn told once the connection is back leaves on the line a su
   const host = {
     client: {
       call: async (method: string, params: { threadId: string }) => {
+        if (method === "thread/turns/list") throw new CodexError(-32601, "Method not found");
         if (method === "thread/read") return { thread: structuredClone(params.threadId === "parent" ? parent : child) };
         if (method === "thread/resume") return { thread: structuredClone(parent) };
         throw new Error(`unexpected ${method}`);
@@ -488,6 +490,7 @@ async function recovering(child: Record<string, unknown>) {
   const host = {
     client: {
       call: async (method: string, params: { threadId: string }) => {
+        if (method === "thread/turns/list") throw new CodexError(-32601, "Method not found");
         if (method === "thread/read") return params.threadId === "parent" ? (state.gate ?? { thread: structuredClone(state.parent) }) : { thread: structuredClone(state.child) };
         if (method === "thread/resume") return { thread: structuredClone(state.parent) };
         throw new Error(`unexpected ${method}`);

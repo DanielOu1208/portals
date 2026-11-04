@@ -6,6 +6,8 @@ import { mcpCommand, mcpStatusText, type McpServer, type McpServerState } from "
 import { HermesClient, HermesError, serveConnector, type ClientListener, type Connector, type Frame } from "./client.ts";
 import { ServeLocator } from "./serve.ts";
 import { HermesSession, type Loaded } from "./session.ts";
+import { hermesVersion } from "./setup.ts";
+import { VersionCheck } from "../program.ts";
 
 // Hermes as agents of the bridge: one per Hermes profile (its `default` is `hermes` in
 // profiles.list), all through one connection to the `hermes serve` this Mac runs
@@ -43,6 +45,8 @@ export interface HermesHostOptions {
   interruptGraceMs?: number;
   /** Each profile keeps one ongoing conversation, its Bot Chat (feature bot_chat). True unless said (tests). */
   oneThread?: boolean;
+  /** Ask the installed `hermes` its version at start; true unless said (tests). */
+  checkVersion?: boolean;
 }
 
 /** A Hermes profile, as the bridge offers it. */
@@ -57,6 +61,11 @@ export interface HermesProfile {
   provider: string;
 }
 
+/**
+ * The Hermes release the bridge was tested with. Hermes speaks the protocol the bridge
+ * speaks to the app, and changes it often: another release runs, with a warning at start.
+ */
+export const testedHermesVersion = "0.22.5";
 /** What a thread runs on when Hermes is left to choose: its own default, whatever that is. */
 export const hermesDefaultModel = "default";
 const catalogMaxAgeMs = 2 * 60_000;
@@ -111,6 +120,8 @@ export class HermesHost {
   /** Events for runtime ids no session has claimed yet (a resume answered after its first events). */
   private readonly unclaimed = new Map<string, { type: string; seq: number | undefined; payload: Frame; at: number }[]>();
   private started = false;
+  /** Which Hermes is installed, as `hermes --version` said at the bridge's start. */
+  readonly version: VersionCheck;
   private refreshing: Promise<void> | null = null;
   /** The profiles' ongoing conversations open in the bridge, told when Hermes's stored sessions change (`sessions.changed`). */
   private readonly watching = new Set<HermesSession>();
@@ -121,6 +132,7 @@ export class HermesHost {
     this.options = options;
     this.interruptGraceMs = options.interruptGraceMs ?? 15_000;
     this.oneThread = options.oneThread ?? true;
+    this.version = new VersionCheck({ name: "Hermes", tested: testedHermesVersion, path: options.settings.path, setting: "hermes.path" });
     const locator = new ServeLocator({
       path: options.settings.path,
       start: options.settings.start,
@@ -170,11 +182,12 @@ export class HermesHost {
     };
   }
 
-  /** Connects, then learns the profiles. Once, however many agents call it. */
+  /** Connects, then learns the profiles, and logs which Hermes is installed. Once, however many agents call it. */
   start(): void {
     if (this.started) return;
     this.started = true;
     void this.client.start();
+    if (this.options.checkVersion !== false) void hermesVersion(this.options.settings.path, this.options.env).then((version) => this.version.installedIs(version));
     void this.refreshProfiles();
   }
 
@@ -439,6 +452,11 @@ export class HermesProvider implements Provider {
 
   start(): void {
     this.host.start();
+  }
+
+  /** Every profile runs on the one Hermes. */
+  get version(): VersionCheck {
+    return this.host.version;
   }
 
   async close(): Promise<void> {
