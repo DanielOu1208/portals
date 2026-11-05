@@ -546,11 +546,15 @@ interface Catalog {
 }
 
 /** One Hermes profile as an agent of the bridge. */
+/** How long Hermes's word on usage stands for every read of it: as long as `usage.read` holds one. */
+const recentCallStandsMs = 60_000;
+
 export class HermesProvider implements Provider {
   private readonly host: HermesHost;
   private described: HermesProfile;
   private catalog: Catalog | null = null;
   private loading: Promise<ModelCatalog> | null = null;
+  private readonly recentCalls = new Map<string, { at: number; answer: Promise<Frame> }>();
   readonly ongoingThread?: Provider["ongoingThread"];
   /** A thread asks before risky commands as the profile's settings say, or not at all (Hermes's `yolo`, for its session only). */
   readonly supportsModes = true;
@@ -711,15 +715,16 @@ export class HermesProvider implements Provider {
    * plan's gauges, with a Nous plan's credits (`usage.bars`). Hermes keeps the windows as
    * it last heard them and asks again as it is asked, so a first answer may have none.
    */
-  async usage(thread: string | undefined): Promise<UsageReport> {
+  async usage(thread: string | undefined, { recent = false }: { recent?: boolean } = {}): Promise<UsageReport> {
     const profile = this.described.profile;
-    const options = await this.host.call<Frame>("model.options", { profile });
-    const slug = (thread === undefined ? undefined : this.host.sessionFor(thread)?.settings().provider) || (typeof options.provider === "string" ? options.provider : "");
+    const ask = (method: string, params: Frame) => (recent ? this.recentCall(method, params) : this.host.call<Frame>(method, params));
+    const options = await ask("model.options", { profile });
+    const slug = this.usageScope(thread) || (typeof options.provider === "string" ? options.provider : "");
     const row: Frame = (Array.isArray(options.providers) ? options.providers : []).find((entry: Frame) => entry?.slug === slug) ?? {};
     const report: UsageReport = { limits: [...windowLimits(row.usage), ...gaugeLimits(row.plan_usage)] };
     if (typeof row.plan_usage?.plan === "string" && row.plan_usage.plan !== "") report.plan = row.plan_usage.plan;
     if (slug === "nous") {
-      const bars = await this.host.call<Frame>("usage.bars", { profile }).catch(() => null);
+      const bars = await ask("usage.bars", { profile }).catch(() => null);
       if (bars?.available === true) {
         if (!report.plan && typeof bars.plan_name === "string" && bars.plan_name !== "") report.plan = bars.plan_name;
         const used = bars.plan_bar?.pct_used;
@@ -730,6 +735,20 @@ export class HermesProvider implements Provider {
     const name = typeof row.name === "string" && row.name !== "" ? row.name : slug || "this provider";
     if (report.limits.length === 0) report.note ??= `Hermes shows no usage limits for ${name}.`;
     return report;
+  }
+
+  /** The thread's own model provider where it has one: "" for the bot's default, which a read with no thread gets. */
+  usageScope(thread: string | undefined): string {
+    return (thread === undefined ? undefined : this.host.sessionFor(thread)?.settings().provider) || "";
+  }
+
+  /** Hermes's answer as of the last minute, for every model provider's read of it (`usage.read`): asked once, whichever threads ask. */
+  private recentCall(method: string, params: Frame): Promise<Frame> {
+    const kept = this.recentCalls.get(method);
+    if (kept && Date.now() - kept.at < recentCallStandsMs) return kept.answer;
+    const answer = this.host.call<Frame>(method, params);
+    this.recentCalls.set(method, { at: Date.now(), answer });
+    return answer;
   }
 
   newThread(options: { cwd: string; settings: SessionSettings }): Promise<string> {

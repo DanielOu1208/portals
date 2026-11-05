@@ -128,10 +128,41 @@ public struct AgentProgram: Hashable, Sendable, Identifiable {
         return updateAvailable == false ? .upToDate : .unknown
     }
 
+    /// How it stands in words, on its row and its page; nil where there is nothing to add to its
+    /// version. A later release is the row's own arrow (`stateLine`).
+    public var stateWords: String? {
+        switch state {
+        case .notFound: "Not found on this host"
+        case .updating: "Updating…"
+        case .updateFailed: "Update failed"
+        case let .tooOld(needs): needs.map { "Older than Portals needs (\($0))" } ?? "Older than Portals needs"
+        case let .updateAvailable(latest): "Update available: \(latest)"
+        case .upToDate: "Up to date"
+        case .unknown: nil
+        }
+    }
+
+    /// Its version and how it stands, on a line of its row: "2.1.318 · Up to date",
+    /// "0.166.0 → 0.170.2". nil where neither is known.
+    public var stateLine: String? {
+        if case let .updateAvailable(latest) = state, let version { return "\(version) → \(latest)" }
+        return [isInstalled ? version : nil, stateWords].compactMap(\.self).joined(separator: " · ").nilIfEmpty
+    }
+
+    /// `stateLine` as VoiceOver says it, the arrow in words.
+    public var spokenStateLine: String? {
+        if case let .updateAvailable(latest) = state, let version { return "\(version), update available: \(latest)" }
+        return [isInstalled ? version : nil, stateWords].compactMap(\.self).joined(separator: ", ").nilIfEmpty
+    }
+
     /// Whether updating it is on offer: the host can, and no later release is known to be missing.
     public var offersUpdate: Bool {
         canUpdate && !isUpdating && updateAvailable != false
     }
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }
 
 /// A row of Settings > Agents: a program, however many of the host's agents it runs (a

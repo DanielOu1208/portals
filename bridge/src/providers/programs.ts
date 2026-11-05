@@ -1,13 +1,15 @@
 import { spawn } from "node:child_process";
-import { accessSync, closeSync, constants, fstatSync, mkdirSync, openSync, readSync, realpathSync } from "node:fs";
+import { accessSync, closeSync, constants, existsSync, fstatSync, linkSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, isAbsolute, join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import { expandHome, type Config, type Paths } from "../config.ts";
 import { log } from "../log.ts";
 import { programFolders } from "../platform.ts";
 import { droidProgram, piFolders } from "../setup/agents.ts";
 import { isExecutable } from "../setup/system.ts";
-import { endGroup } from "./child.ts";
+import { groupAlive } from "./child.ts";
 import { claudeVersion, testedClaudeVersion } from "./claude/options.ts";
 import { codexVersion, testedCodexVersion } from "./codex/options.ts";
 import { cursorProgram, cursorVersion, testedCursorVersion } from "./cursor/options.ts";
@@ -19,6 +21,7 @@ import { minimumOpenCodeVersion, opencodeProgram, testedOpenCodeVersion } from "
 import { minimumPiVersion, piVersion, testedPiVersions } from "./pi/options.ts";
 import { compareVersions, programVersion, versionStanding, type VersionCheck, type VersionStanding } from "./program.ts";
 import { claudeChannel, LatestReleases, type LatestOptions, type LatestSource } from "./programLatest.ts";
+import { redacted } from "../push/notifier.ts";
 import type { Provider } from "./types.ts";
 
 // The programs of the agents on this host, for Settings > Agents (feature agent_programs,
@@ -30,6 +33,12 @@ import type { Provider } from "./types.ts";
 // started on until its process next starts, and a service that stays up (Codex's daemon,
 // OpenCode's server) until it restarts, which is never done here. Hermes alone restarts
 // what runs on it, its gateway and so its bots, because its own update does.
+//
+// An update runs in a process of its own (src/providers/programUpdateRun.ts), so a host that
+// restarts neither cuts it off nor frees its lock: the record it keeps under
+// state/program-updates is the lock, its time limit and how it ended, and the next host takes
+// it up from there. Only absolute folders on the PATH are looked in, so that what was checked
+// is what runs, in whatever folder that runs.
 
 export const programIDs = ["claude", "codex", "cursor", "droid", "pi", "opencode", "hermes"] as const;
 export type ProgramID = (typeof programIDs)[number];
@@ -41,6 +50,13 @@ const hermesUpdateMs = 30 * 60_000;
 
 /** How long a version read stands for every device: a read starts a process per program. */
 const versionStandsMs = 60_000;
+/** Hermes's `--version` is a slow start, and looks for updates of its own: not with every look. */
+const hermesVersionStandsMs = 60 * 60_000;
+
+/** How often the host looks at an update's record. */
+const followEveryMs = 200;
+/** How long an update's process may take to say it has started, or to end past its time limit, before it is taken for gone. */
+const updateGraceMs = 30_000;
 
 /** What is told of a failed update: the end of what it printed. */
 const tailLines = 12;
@@ -62,13 +78,20 @@ interface ProgramSpec {
   find(config: Config, env: NodeJS.ProcessEnv, home: string): string | null;
   /** What `--version` says, in the environment that keeps the program from updating itself. */
   version(path: string, env: NodeJS.ProcessEnv): Promise<string | null>;
+  /**
+   * Its `--version` goes to the network by itself (Hermes's looks for updates on each run, by
+   * its own settings), so with `updates.check` off the host never asks it: it goes by what its
+   * provider knows, and reads it only after an update someone asked for. Also read less often.
+   */
+  versionLooksForUpdates?: boolean;
   /** The npm package it is published as, if any. */
   package?: string;
   /** Its own updater. `at`: the folders under the home folder its installer puts it in; absent, any installation (it decides for itself). */
   own?: { args: readonly string[]; at?: readonly string[] };
   /** What to run by hand, for an installation the host cannot update. */
   command: string;
-  latest: LatestSource | null;
+  /** Where the latest release is said, for what updates this installation. */
+  latest(installation: Installation, env: NodeJS.ProcessEnv, home: string): LatestSource | null;
   takesEffect: TakesEffect;
   /** How long its update may take; `updateMs` otherwise. */
   updateMs?: number;
@@ -83,8 +106,8 @@ function onPath(configured: string, env: NodeJS.ProcessEnv, folders: readonly st
   return [...(env.PATH ?? "").split(delimiter).filter(Boolean), ...folders].map((folder) => join(folder, path)).find((candidate) => isExecutable(candidate)) ?? null;
 }
 
-function npm(name: string, tag = "latest"): LatestSource {
-  return { kind: "npm", package: name, tag: () => tag };
+function npm(name: string): () => LatestSource {
+  return () => ({ kind: "npm", package: name, tag: "latest" });
 }
 
 const specs: readonly ProgramSpec[] = [
@@ -98,7 +121,8 @@ const specs: readonly ProgramSpec[] = [
     // `~/.claude/local` is its older installer's, which `claude update` updates as well.
     own: { args: ["update"], at: [".local/share/claude/versions", ".claude/local"] },
     command: "claude update",
-    latest: { kind: "npm", package: "@anthropic-ai/claude-code", tag: (env) => claudeChannel(env, env.HOME || homedir()) },
+    // `claude update` follows its channel; the npm command, `@latest`.
+    latest: ({ method }, env, home) => ({ kind: "npm", package: "@anthropic-ai/claude-code", tag: method === "own" ? claudeChannel(env, home) : "latest" }),
     takesEffect: "next_start",
   },
   {
@@ -117,12 +141,12 @@ const specs: readonly ProgramSpec[] = [
     id: "cursor",
     name: "Cursor",
     tested: testedCursorVersion,
-    find: (config) => cursorProgram(config.cursor.path),
+    find: (config, env) => cursorProgram(config.cursor.path, env),
     version: cursorVersion,
     own: { args: ["update"], at: [".local/share/cursor-agent/versions"] },
     command: "cursor-agent update",
     // Its install script names the release it installs, as `https://downloads.cursor.com/lab/2026.11.05-86047df/…`.
-    latest: { kind: "page", url: "https://cursor.com/install", pattern: /downloads\.cursor\.com\/lab\/(\d+\.\d+\.\d+)/ },
+    latest: () => ({ kind: "page", url: "https://cursor.com/install", pattern: /downloads\.cursor\.com\/lab\/(\d+\.\d+\.\d+)/ }),
     takesEffect: "next_start",
   },
   {
@@ -173,10 +197,11 @@ const specs: readonly ProgramSpec[] = [
     // app) with what to run instead. `--yes`: nobody is at a terminal to answer its prompts.
     own: { args: ["update", "--yes"] },
     command: "hermes update",
-    latest: { kind: "github", repository: "NousResearch/hermes-agent" },
+    latest: () => ({ kind: "github", repository: "NousResearch/hermes-agent" }),
     takesEffect: "gateway_restart",
     updateMs: hermesUpdateMs,
     onlyWhenOn: true,
+    versionLooksForUpdates: true,
   },
 ];
 
@@ -282,6 +307,61 @@ export interface ProgramReport {
 /** A device's request that cannot be done. The message is for the user. */
 export class ProgramRefused extends Error {}
 
+/** What an update's own process is given to do (src/providers/programUpdateRun.ts). */
+export interface UpdateJob {
+  program: string;
+  args: readonly string[];
+  cwd: string;
+  /** Where what it prints goes. */
+  log: string;
+  /** Its record. */
+  record: string;
+  startedAt: number;
+  deadlineMs: number;
+  from: string | null;
+}
+
+/** An update as its record under state/program-updates says it: which is its lock, while there is one. */
+export interface UpdateRecord {
+  startedAt: number;
+  deadlineAt: number;
+  from?: string | null;
+  /** Its own process, once it has started. */
+  supervisor?: number;
+  /** The updater, which heads a process group. */
+  updater?: number;
+  ended?: { at: number; code: number | null; timedOut: boolean; failure?: string };
+}
+
+/** Whether a process of that id is there; a process of another user's counts. */
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/** An environment's own PATH, without its relative folders: they mean something else in another folder. */
+function absolutePath(path: string | undefined): string {
+  return (path ?? "").split(delimiter).filter((folder) => isAbsolute(folder)).join(delimiter);
+}
+
+/**
+ * What an updater runs with: the host's own, less what is the host's, a thread's or an agent's
+ * sign-in. It runs what it downloads. What the package manager needs of its own stays.
+ */
+export function updaterEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const kept: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(env)) {
+    if (/^(PORTALS|AERIPORTAL)_/.test(name)) continue;
+    if (/(TOKEN|API_?KEY|OAUTH|ACCESS_KEY|PASSWORD|PASSWD|SECRET)/i.test(name) && !/^(NPM_TOKEN$|NODE_AUTH_TOKEN$|npm_config_)/i.test(name)) continue;
+    kept[name] = value;
+  }
+  return kept;
+}
+
 export interface ProgramsOptions {
   config: Config;
   paths: Pick<Paths, "state" | "programs">;
@@ -337,16 +417,80 @@ export class AgentPrograms {
   private readonly reads = new Map<ProgramID, VersionRead>();
   private readonly reading = new Map<ProgramID, Promise<VersionRead>>();
   private readonly updates = new Map<ProgramID, ProgramUpdate>();
-  /** Each update's log while it runs. */
-  private readonly logs = new Map<ProgramID, string>();
   /** Each update under way ending (tests wait for it). */
   private readonly ending = new Map<ProgramID, Promise<void>>();
+  /** Its host is stopping: what runs of its updates goes on, with no one to follow it here. */
+  private closed = false;
 
   constructor(options: ProgramsOptions) {
     this.options = options;
-    this.env = options.env ?? process.env;
+    const env = options.env ?? process.env;
+    this.env = { ...env, PATH: absolutePath(env.PATH) };
     this.home = options.home ?? homedir();
-    this.latest = new LatestReleases({ file: options.paths.programs, check: options.config.updates.check, env: this.env, ...options.latest });
+    this.latest = new LatestReleases({ file: options.paths.programs, check: options.config.updates.check, ...options.latest });
+  }
+
+  /** Stops following what is under way, which goes on by itself, for the next host to take up. */
+  close(): void {
+    this.closed = true;
+  }
+
+  /** The installed program, only as an absolute path: nothing else means the same in another folder. */
+  private find(spec: ProgramSpec): string | null {
+    const path = spec.find(this.options.config, this.env, this.home);
+    return path && isAbsolute(path) ? path : null;
+  }
+
+  private folder(): string {
+    return join(this.options.paths.state, "program-updates");
+  }
+
+  private recordOf(id: ProgramID): string {
+    return join(this.folder(), `${id}.json`);
+  }
+
+  private logOf(id: ProgramID): string {
+    return join(this.folder(), `${id}.log`);
+  }
+
+  private readRecord(id: ProgramID): UpdateRecord | null {
+    try {
+      return JSON.parse(readFileSync(this.recordOf(id), "utf8")) as UpdateRecord;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Its record is still that of an update under way, as far as can be told: its process, or the updater's group, is there and within its time. */
+  private isUnderWay(record: UpdateRecord): boolean {
+    const now = Date.now();
+    if (now >= record.deadlineAt + updateGraceMs) return false;
+    if (record.supervisor === undefined) return now < record.startedAt + updateGraceMs;
+    return processAlive(record.supervisor) || (record.updater !== undefined && groupAlive(record.updater));
+  }
+
+  /** An update under way that this host did not start, or how one ended while no host was here: taken up from its record. */
+  private takeUp(spec: ProgramSpec): void {
+    if (this.closed || this.updates.get(spec.id)?.state === "running") return;
+    const file = this.recordOf(spec.id);
+    if (!existsSync(file)) return;
+    const record = this.readRecord(spec.id);
+    if (!record) {
+      // Of no use to anyone, and it would hold the lock for good.
+      rmSync(file, { force: true });
+      return;
+    }
+    const update: ProgramUpdate = { state: "running", startedAt: record.startedAt, ...(record.from !== undefined ? { from: record.from } : {}) };
+    this.updates.set(spec.id, update);
+    this.ending.set(spec.id, this.follow(spec, update).catch((error: Error) => this.gaveUp(spec, update, error)));
+  }
+
+  private gaveUp(spec: ProgramSpec, update: ProgramUpdate, error: Error): void {
+    // Never left running: a device would wait on it until the host restarted.
+    log.error("an update ended strangely", { program: spec.id, error: error.message });
+    update.state = "failed";
+    update.endedAt = Date.now();
+    update.tail = redacted(error.message);
   }
 
   /** Every program that is installed or has an agent here, the slower reads shared by every device that asks meanwhile. */
@@ -355,8 +499,8 @@ export class AgentPrograms {
     const listed = reports.filter((report): report is ProgramReport => report !== null);
     const sources = new Map<string, LatestSource>();
     for (const report of listed) {
-      const spec = specs.find(({ id }) => id === report.id)!;
-      if (report.installed && spec.latest) sources.set(spec.id, spec.latest);
+      const source = this.sourceOf(specs.find(({ id }) => id === report.id)!);
+      if (report.installed && source) sources.set(report.id, source);
     }
     this.latest.askIfDue(sources);
     return listed;
@@ -370,8 +514,9 @@ export class AgentPrograms {
     const spec = specs.find((candidate) => candidate.id === id);
     if (!spec) throw new ProgramRefused(`Portals does not know a program called ${id}.`);
     if (spec.onlyWhenOn && this.agentsOf(spec.id).length === 0) throw new ProgramRefused(`This host does not run ${spec.name}.`);
+    this.takeUp(spec);
     if (this.updates.get(spec.id)?.state !== "running") {
-      const path = spec.find(this.options.config, this.env, this.home);
+      const path = this.find(spec);
       if (!path) throw new ProgramRefused(`${spec.name} is not installed on this host.`);
       const installation = installationOf(spec, path, this.home);
       if (!installation.run) {
@@ -390,76 +535,73 @@ export class AgentPrograms {
   private start(spec: ProgramSpec, path: string, run: NonNullable<Installation["run"]>): void {
     const update: ProgramUpdate = { state: "running", startedAt: Date.now() };
     this.updates.set(spec.id, update);
-    this.ending.set(spec.id, this.runUpdate(spec, path, run, update).catch((error: Error) => {
-      // Never left running: a device would wait on it until the host restarted.
-      log.error("an update ended strangely", { program: spec.id, error: error.message });
-      update.state = "failed";
-      update.endedAt = Date.now();
-      update.tail = error.message;
-    }));
+    this.ending.set(spec.id, this.runUpdate(spec, path, run, update).catch((error: Error) => this.gaveUp(spec, update, error)));
   }
 
   private async runUpdate(spec: ProgramSpec, path: string, run: NonNullable<Installation["run"]>, update: ProgramUpdate): Promise<void> {
-    update.from = await spec.version(path, this.env);
-    const folder = join(this.options.paths.state, "program-updates");
-    mkdirSync(folder, { recursive: true });
-    const file = join(folder, `${spec.id}.log`);
-    this.logs.set(spec.id, file);
-    // Into a file, not a pipe: what it restarts may keep what it was given to print to, and
-    // would die writing to a pipe nobody reads any more (Hermes's gateways, started by hand).
-    const output = openSync(file, "w");
-    log.info(`updating ${spec.name}`, { command: [run.program, ...run.args].join(" ") });
-    let failure: string | null = null;
-    let timedOut = false;
+    update.from = (await this.readNow(spec)).version;
+    mkdirSync(this.folder(), { recursive: true });
+    const record: UpdateRecord = { startedAt: update.startedAt, deadlineAt: update.startedAt + (this.options.updateMs ?? spec.updateMs ?? updateMs), from: update.from };
+    // The lock: a link fails where a record is there already, which is then the one to
+    // follow; and a record is whole from the first, unlike a file being written.
+    const whole = `${this.recordOf(spec.id)}.${process.pid}`;
+    writeFileSync(whole, JSON.stringify(record), { mode: 0o600 });
     try {
-      const exit = await new Promise<number | null>((resolve) => {
-        // In its home folder, away from any project's npm settings; a group of its own, so
-        // that a timeout ends what it started too, and it goes on to its end should the host stop.
-        const child = spawn(run.program, [...run.args], {
-          cwd: this.home,
-          env: { ...this.env, PATH: [...run.folders, this.env.PATH].filter(Boolean).join(delimiter), NO_COLOR: "1", TERM: "dumb" },
-          stdio: ["ignore", output, output],
-          detached: true,
-        });
-        child.unref();
-        const timer = setTimeout(() => {
-          timedOut = true;
-          if (child.pid !== undefined) void endGroup(child.pid);
-        }, this.options.updateMs ?? spec.updateMs ?? updateMs);
-        timer.unref();
-        child.once("error", (error) => {
-          clearTimeout(timer);
-          failure = `Could not run ${run.program}: ${error.message}`;
-          resolve(null);
-        });
-        child.once("exit", (code) => {
-          clearTimeout(timer);
-          resolve(code);
-        });
-      });
-      const done = exit === 0 && !timedOut && failure === null;
-      const lines = plainLines(lastBytes(file));
-      const to = await this.readAgain(spec);
-      update.to = to;
-      update.endedAt = Date.now();
-      if (!done) {
-        const said = lines.slice(-tailLines).join("\n");
-        update.tail = failure ?? (said !== "" ? said : `It ended with code ${exit ?? "none"} and said nothing.`);
-        update.timedOut = timedOut || undefined;
-      }
-      update.state = done ? "done" : "failed";
-      log.info(done ? `updated ${spec.name}` : `could not update ${spec.name}`, { from: update.from, to, timedOut: timedOut || undefined, code: exit });
+      linkSync(whole, this.recordOf(spec.id));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      return this.follow(spec, update);
     } finally {
-      closeSync(output);
-      this.logs.delete(spec.id);
+      rmSync(whole, { force: true });
     }
+    log.info(`updating ${spec.name}`, { command: [run.program, ...run.args].join(" ") });
+    const job: UpdateJob = {
+      program: run.program, args: run.args, cwd: this.home, log: this.logOf(spec.id), record: this.recordOf(spec.id),
+      startedAt: update.startedAt, deadlineMs: record.deadlineAt - update.startedAt, from: update.from,
+    };
+    // Detached: it outlives this host if need be, and nothing of this host's holds it up.
+    const runner = fileURLToPath(new URL(import.meta.url.endsWith(".ts") ? "./programUpdateRun.ts" : "./programUpdateRun.js", import.meta.url));
+    const own = spawn(process.execPath, [runner, JSON.stringify(job)], {
+      cwd: this.home,
+      env: { ...updaterEnvironment(this.env), PATH: [...run.folders, this.env.PATH].filter(Boolean).join(delimiter), NO_COLOR: "1", TERM: "dumb" },
+      stdio: "ignore",
+      detached: true,
+    });
+    own.on("error", (error) => log.error("could not start an update", { program: spec.id, error: error.message }));
+    own.unref();
+    return this.follow(spec, update);
+  }
+
+  /** Follows the record of an update under way to its end, unless this host stops first. */
+  private async follow(spec: ProgramSpec, update: ProgramUpdate): Promise<void> {
+    let record = this.readRecord(spec.id);
+    while (!this.closed && record && !record.ended && this.isUnderWay(record)) {
+      await sleep(followEveryMs, undefined, { ref: false });
+      record = this.readRecord(spec.id);
+    }
+    if (this.closed) return;
+    const ended = record?.ended;
+    const done = ended !== undefined && ended.code === 0 && !ended.timedOut && ended.failure === undefined;
+    if (record?.from !== undefined) update.from = record.from;
+    const to = await this.readAgain(spec);
+    update.to = to;
+    update.endedAt = ended?.at ?? Date.now();
+    if (!done) {
+      const said = plainLines(redacted(lastBytes(this.logOf(spec.id)))).slice(-tailLines).join("\n");
+      update.tail = ended?.failure ? redacted(ended.failure) : said !== "" ? said : ended ? `It ended with code ${ended.code ?? "none"} and said nothing.` : "It stopped before it could say how it ended.";
+      update.timedOut = ended?.timedOut || undefined;
+    }
+    update.state = done ? "done" : "failed";
+    // Its lock goes last, with nothing of it left running.
+    rmSync(this.recordOf(spec.id), { force: true });
+    log.info(done ? `updated ${spec.name}` : `could not update ${spec.name}`, { from: update.from, to, timedOut: update.timedOut, code: ended?.code });
   }
 
   /** The version after an update, which the provider's own check takes too, so `/status` and a thread's refusal go by it at once. */
   private async readAgain(spec: ProgramSpec): Promise<string | null> {
     // A read begun before the update ended says what was there then.
     this.reading.delete(spec.id);
-    const read = await this.readNow(spec);
+    const read = await this.readNow(spec, true);
     const { version } = read;
     this.reads.set(spec.id, read);
     for (const check of this.checksOf(spec.id)) check.updated(version, spec.takesEffect === "service_restart");
@@ -482,7 +624,8 @@ export class AgentPrograms {
   /** `--version` as of the last minute: not again meanwhile, and not during an update, whose program may be half there. */
   private read(spec: ProgramSpec): Promise<VersionRead> {
     const kept = this.reads.get(spec.id);
-    if (kept && (Date.now() - kept.at < versionStandsMs || this.updates.get(spec.id)?.state === "running")) return Promise.resolve(kept);
+    const stands = spec.versionLooksForUpdates ? hermesVersionStandsMs : versionStandsMs;
+    if (kept && (Date.now() - kept.at < stands || this.updates.get(spec.id)?.state === "running")) return Promise.resolve(kept);
     const asking = this.reading.get(spec.id);
     if (asking) return asking;
     const reading: Promise<VersionRead> = this.readNow(spec).then((read) => {
@@ -491,28 +634,44 @@ export class AgentPrograms {
       this.reading.delete(spec.id);
       this.reads.set(spec.id, read);
       // A program updated by itself or by hand: `/status` and a thread's refusal go by it too.
-      if (read.path) for (const check of this.checksOf(spec.id)) check.installedIs(read.version);
+      if (read.path && read.at > 0) for (const check of this.checksOf(spec.id)) check.installedIs(read.version);
       return read;
     });
     this.reading.set(spec.id, reading);
     return reading;
   }
 
-  private async readNow(spec: ProgramSpec): Promise<VersionRead> {
-    const path = spec.find(this.options.config, this.env, this.home);
-    return { path, version: path ? await spec.version(path, this.env) : null, at: Date.now() };
+  /** `afterUpdate`: someone asked for one, which has just been to the network whatever the settings say. */
+  private async readNow(spec: ProgramSpec, afterUpdate = false): Promise<VersionRead> {
+    const path = this.find(spec);
+    if (!path) return { path, version: null, at: Date.now() };
+    // `at` 0: not read at all, what the provider knows; it is looked at again with the next look.
+    if (spec.versionLooksForUpdates && !afterUpdate && !this.options.config.updates.check) {
+      return { path, version: this.providersOf(spec.id)[0]?.version?.current()?.version ?? null, at: 0 };
+    }
+    return { path, version: await spec.version(path, this.env), at: Date.now() };
+  }
+
+  /** Where the latest release is said for the installation there is, which the host can update. */
+  private sourceOf(spec: ProgramSpec): LatestSource | null {
+    const path = this.reads.get(spec.id)?.path ?? this.find(spec);
+    if (!path) return null;
+    const installation = installationOf(spec, path, this.home);
+    return installation.run ? spec.latest(installation, this.env, this.home) : null;
   }
 
   private async report(spec: ProgramSpec): Promise<ProgramReport | null> {
     const agents = this.agentsOf(spec.id);
     if (spec.onlyWhenOn && agents.length === 0) return null;
+    this.takeUp(spec);
     const { path, version } = await this.read(spec);
     if (!path && agents.length === 0) return null;
     const installation = path ? installationOf(spec, path, this.home) : null;
     const update = this.updateNow(spec.id);
     // A release from where its updater looks; none for an installation that follows another
     // (Homebrew may be behind npm), or a build past its release, which says nothing of what is next.
-    const latest = installation?.run ? this.latest.version(spec.id) : undefined;
+    const source = this.sourceOf(spec);
+    const latest = source ? this.latest.version(spec.id, source) : undefined;
     const order = latest !== undefined && version !== null ? compareVersions(latest, version) : Number.NaN;
     const pastRelease = version?.includes("+") === true && order <= 0;
     const tested = typeof spec.tested === "string" ? [spec.tested] : [...spec.tested];
@@ -541,8 +700,7 @@ export class AgentPrograms {
   private updateNow(id: ProgramID): ProgramUpdate | undefined {
     const update = this.updates.get(id);
     if (update?.state !== "running") return update;
-    const file = this.logs.get(id);
-    const line = file ? plainLines(lastBytes(file)).at(-1) : undefined;
+    const line = plainLines(redacted(lastBytes(this.logOf(id)))).at(-1);
     return { ...update, ...(line ? { line } : {}) };
   }
 }

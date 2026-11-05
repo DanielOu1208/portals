@@ -375,6 +375,7 @@ export async function startBridge(options: BridgeOptions = {}): Promise<RunningB
         standby?.close();
         updates?.stop();
         disk.stop();
+        programs.close();
         pollNow.close();
         fileSearch.close();
         folderSearch.close();

@@ -191,16 +191,76 @@ import Testing
         #expect(memory.programs[hostID] == nil)
     }
 
-    /// With no thread to ask through, the panels' memory takes the answer all the same, for a chat's panel too.
-    @Test func usageAskedByAgentIsKeptForEveryone() async throws {
+    /// With no thread to ask through, what an agent says goes apart from what a thread's panel
+    /// goes by: a Hermes bot's default provider is not that of a thread on another.
+    @Test func usageAskedByAgentIsNotAThreadsWord() async throws {
         let memory = ThreadPanelMemory(file: FileManager.default.temporaryDirectory.appending(path: "programs-\(UUID().uuidString).json"))
         let host = Host()
         let claude = Agent.ID(host: hostID, name: "claude")
         try await memory.askUsage(of: claude, from: host)
         #expect(await host.usageAsked == ["claude"])
-        #expect((memory.usage[claude] ?? nil)?.windows.first?.percent == 42)
+        #expect(memory.usage[claude] == nil)
+        #expect(memory.pageUsage(of: claude)?.windows.first?.percent == 42)
         // Not again meanwhile, as with a thread's.
         try await memory.askUsage(of: claude, from: host)
         #expect(await host.usageAsked == ["claude"])
+
+        // A thread's own says nothing of the bot's, and goes on saying what it said.
+        let panel = ThreadHost(percent: 90)
+        try await memory.askUsage(of: claude, thread: ThreadRef.ID(rawValue: "t"), from: panel)
+        #expect((memory.usage[claude] ?? nil)?.windows.first?.percent == 90)
+        #expect(memory.pageUsage(of: claude)?.windows.first?.percent == 42)
+    }
+
+    /// A host that cannot be asked with no thread: the page goes by what its chats have heard.
+    @Test func thePageGoesByWhatChatsHeardUntilItsOwnAnswerComes() async throws {
+        let memory = ThreadPanelMemory(file: FileManager.default.temporaryDirectory.appending(path: "programs-\(UUID().uuidString).json"))
+        let claude = Agent.ID(host: hostID, name: "claude")
+        #expect(memory.pageUsage(of: claude) == nil)
+        try await memory.askUsage(of: claude, thread: ThreadRef.ID(rawValue: "t"), from: ThreadHost(percent: 90))
+        #expect(memory.pageUsage(of: claude)?.windows.first?.percent == 90)
+        try await memory.askUsage(of: claude, from: Host())
+        #expect(memory.pageUsage(of: claude)?.windows.first?.percent == 42)
+        memory.forget(host: hostID)
+        #expect(memory.pageUsage(of: claude) == nil)
+    }
+
+    private struct ThreadHost: ThreadPanelProviding {
+        let percent: Double
+        var readsUsage: Bool? { true }
+        var readsGitStatus: Bool? { false }
+        var opensFolders: Bool? { false }
+        func usage(of thread: ThreadRef.ID) async throws -> UsageLimits? {
+            UsageLimits(windows: [.init(name: "5-hour", percent: percent, resetsAt: nil)])
+        }
+        func gitStatus(of thread: ThreadRef.ID) async throws -> GitState { .noRepository }
+        func gitDiff(of thread: ThreadRef.ID) async throws -> (root: String, diff: TurnDiff, total: Int) { throw ThreadPanelError.unavailable }
+        func hostApps() async throws -> [HostApp] { [] }
+        func openFolder(of thread: ThreadRef.ID, in app: HostApp.ID) async throws {}
+    }
+
+    // MARK: Its line
+
+    @Test func aLaterReleaseIsAnArrowOnItsOneLineAndWordsToVoiceOver() {
+        var program = AgentProgram(id: "codex", name: "Codex", version: "0.166.0", latest: "0.170.2", updateAvailable: true)
+        #expect(program.stateLine == "0.166.0 → 0.170.2")
+        #expect(program.spokenStateLine == "0.166.0, update available: 0.170.2")
+        program.updateAvailable = false
+        #expect(program.stateLine == "0.166.0 · Up to date")
+        #expect(program.spokenStateLine == "0.166.0, Up to date")
+        program.updateAvailable = nil
+        #expect(program.stateLine == "0.166.0")
+        program.update = .init(state: .running, startedAt: .now)
+        #expect(program.stateLine == "0.166.0 · Updating…")
+        program.update = nil
+        program.isInstalled = false
+        program.version = nil
+        #expect(program.stateLine == "Not found on this host")
+    }
+
+    /// A later release known with no version to set beside it says so in words.
+    @Test func aLaterReleaseWithNoKnownVersionIsWords() {
+        let program = AgentProgram(id: "hermes", name: "Hermes", latest: "0.22.7", updateAvailable: true)
+        #expect(program.stateLine == "Update available: 0.22.7")
     }
 }

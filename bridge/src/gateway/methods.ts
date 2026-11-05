@@ -187,15 +187,18 @@ export function usageTitle(kind: string, agentName: string, plan: string | undef
 
 /** How long an agent's answer to `usage.read` serves every device: Claude Code may be started only to ask. */
 const usageMaxAgeMs = 60_000;
-const usageAsked = new WeakMap<Provider, { at: number; report: Promise<UsageReport> }>();
+const usageAsked = new WeakMap<Provider, Map<string, { at: number; report: Promise<UsageReport> }>>();
 
 /** The agent's usage as of the last minute, or that it could not say, asked once for every device that asks meanwhile. */
 function recentUsage(agent: Provider, thread: string | undefined): Promise<UsageReport> {
-  const kept = usageAsked.get(agent);
+  const scope = agent.usageScope?.(thread) ?? "";
+  let asked = usageAsked.get(agent);
+  if (!asked) usageAsked.set(agent, (asked = new Map()));
+  const kept = asked.get(scope);
   if (kept && Date.now() - kept.at < usageMaxAgeMs) return kept.report;
-  const report = agent.usage!(thread);
+  const report = agent.usage!(thread, { recent: true });
   // One that failed stands too: an expired sign-in or a 429 is not asked again sooner.
-  usageAsked.set(agent, { at: Date.now(), report });
+  asked.set(scope, { at: Date.now(), report });
   return report;
 }
 
@@ -647,7 +650,7 @@ export const methods: Record<string, MethodSpec> = {
 
   "programs.list": {
     summary:
-      "The programs of the agents on this computer (feature agent_programs): for each that is installed or has an agent here, its id, name, installed, version (null when it did not say), standing (tested, newer, untested, too old, missing), tested, minimum, how it was installed (own, npm, homebrew, app, other, null when it is not), can_update, command (what updates it, or what to run on this computer where the host cannot), latest and update_available where that can be found, agents (the agents it runs), takes_effect (when threads at work move to a new release: next_start, service_restart, gateway_restart), running_version (what a service that stays up runs, where that is not version), and update, the last update while the bridge has run: state running, done or failed, started_at, ended_at, from, to, timed_out, line (the last thing it printed, while it runs), tail (the end of what it printed, once it has failed). A version is read at most once a minute, and the latest releases are asked for at most every eight hours and only as this is asked.",
+      "The programs of the agents on this computer (feature agent_programs): for each that is installed or has an agent here, its id, name, installed, version (null when it did not say), standing (tested, newer, untested, too old, missing), tested, minimum, how it was installed (own, npm, homebrew, app, other, null when it is not), can_update, command (what updates it, or what to run on this computer where the host cannot), latest and update_available where that can be found, agents (the agents it runs), takes_effect (when threads at work move to a new release: next_start, service_restart, gateway_restart), running_version (what a service that stays up runs, where that is not version), and update, the last update known, one under way or that ended while the host was down taken up from its record: state running, done or failed, started_at, ended_at, from, to, timed_out, line (the last thing it printed, while it runs), tail (the end of what it printed, once it has failed). A version is read at most once a minute, Hermes's at most once an hour and with updates.check false only after an update someone asked for, and the latest releases are asked for at most every eight hours and only as this is asked.",
     params: { profile: "string" },
     async handle(_params, { gateway }) {
       return { programs: (await gateway.programs.list()).map(programFields) };
@@ -656,7 +659,7 @@ export const methods: Record<string, MethodSpec> = {
 
   "program.update": {
     summary:
-      "Starts updating one of the programs of programs.list with its own update command (feature agent_programs), the host's choice by how it was installed: the program's id is all it takes. Answers at once with the program as programs.list says it; programs.list follows the update from there. One at a time per program: asked again while one runs, it answers with that one. Refused with why (-32602) for a program it cannot update. Stops and restarts nothing, but for Hermes, whose own update restarts its gateways.",
+      "Starts updating one of the programs of programs.list with its own update command (feature agent_programs), the host's choice by how it was installed: the program's id is all it takes. Answers at once with the program as programs.list says it; programs.list follows the update from there. One at a time per program, through a restart of the host too: asked again while one runs, it answers with that one. It runs in a process of its own without the host's or the agents' sign-ins, and is over only once what it started has gone where it failed or ran out of time. Refused with why (-32602) for a program it cannot update. Stops and restarts nothing, but for Hermes, whose own update restarts its gateways.",
     params: { program: "string", profile: "string" },
     required: ["program"],
     async handle(params, { gateway }) {

@@ -1,7 +1,7 @@
 import AgentCore
 import SwiftUI
 
-/// A program on a host: its version, what Portals was tested with, updating it, how much of
+/// A program on a host: its version, updating it, how much of
 /// its plan is left and when that resets, and how its agents look. The host's word on it is
 /// asked for by the page beneath (`AgentSettings`), which stays on screen under this sheet.
 struct AgentProgramDetail: View {
@@ -87,9 +87,6 @@ struct AgentProgramDetail: View {
             value("Installed", program.isInstalled ? program.version ?? "Unknown" : "Not found on this host")
             if let latest = program.latest {
                 value("Latest", latest)
-            }
-            if let tested = program.tested.last {
-                value("Tested with", tested)
             }
             if program.standing == .tooOld, let minimum = program.minimum {
                 value("Portals needs", "\(minimum) or newer")
@@ -287,21 +284,21 @@ struct AgentProgramDetail: View {
                 if let note = group.limits.note {
                     Text(note).font(.app.caption).foregroundStyle(.secondary).listRowOnMac()
                 }
-                if let failure = ThreadPanelMemory.shared.usageFailures[group.agent.id] {
+                if let failure = ThreadPanelMemory.shared.pageUsageFailure(of: group.agent.id) {
                     Text(failure).font(.app.caption).foregroundStyle(.orange).listRowOnMac()
                 }
             } header: {
                 Text(group.limits.title ?? (limitGroups.count > 1 ? group.agent.displayName : "Limits"))
                     .formHeader()
             } footer: {
-                if let asOf = ThreadPanelMemory.shared.usageAsOf(of: group.agent.id, isConnected: host?.isConnected == true) {
+                if let asOf = ThreadPanelMemory.shared.pageUsageAsOf(of: group.agent.id, isConnected: host?.isConnected == true) {
                     Text(UsagePart.asOf(asOf)).formFooter()
                 }
             }
             .settingsRows()
         }
         // A limit that turns work away, where the host has no window to draw for it.
-        if limitGroups.isEmpty, let note = agents.lazy.compactMap({ (ThreadPanelMemory.shared.usage[$0.id] ?? nil)?.blockingNote }).first {
+        if limitGroups.isEmpty, let note = agents.lazy.compactMap({ ThreadPanelMemory.shared.pageUsage(of: $0.id)?.blockingNote }).first {
             Section {
                 Text(note).foregroundStyle(.orange).listRowOnMac()
             }
@@ -312,7 +309,7 @@ struct AgentProgramDetail: View {
     private var limitGroups: [(agent: Agent, limits: UsageLimits)] {
         var groups: [(agent: Agent, limits: UsageLimits)] = []
         for agent in agents {
-            guard let limits = ThreadPanelMemory.shared.usage[agent.id] ?? nil, !limits.windows.isEmpty else { continue }
+            guard let limits = ThreadPanelMemory.shared.pageUsage(of: agent.id), !limits.windows.isEmpty else { continue }
             if !groups.contains(where: { $0.limits.windows == limits.windows }) { groups.append((agent, limits)) }
         }
         return groups

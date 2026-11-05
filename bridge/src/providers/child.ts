@@ -218,7 +218,7 @@ export class JsonChild {
 }
 
 /** Whether any process of the group `pid` heads is left. */
-function groupAlive(pid: number): boolean {
+export function groupAlive(pid: number): boolean {
   try {
     process.kill(-pid, 0);
     return true;

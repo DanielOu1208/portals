@@ -63,14 +63,20 @@ import Testing
         }
     }
 
-    @Test func aWindowsShortNameFitsARing() {
-        func short(_ name: String) -> String { UsageLimits.Window(name: name, percent: 1, resetsAt: nil).shortName }
+    /// A name a ring can hold and still say what it means; none for the rest, which the
+    /// program's page gives in full.
+    @Test func aWindowsShortNameIsOneThatReadsClearly() {
+        func short(_ name: String) -> String? { UsageLimits.Window(name: name, percent: 1, resetsAt: nil).shortName }
         #expect(short("5-hour") == "5h")
+        #expect(short("24-hour") == "24h")
         #expect(short("weekly") == "W")
         #expect(short("monthly") == "Mo")
-        #expect(short("weekly Opus") == "O")
-        #expect(short("included") == "I")
-        #expect(short("API") == "A")
+        #expect(short("weekly Opus") == nil)
+        #expect(short("weekly Fable") == nil)
+        #expect(short("included") == nil)
+        #expect(short("Auto") == nil)
+        #expect(short("API") == nil)
+        #expect(short("credits") == nil)
     }
 
     private let hostID = HostID(rawValue: "mac")

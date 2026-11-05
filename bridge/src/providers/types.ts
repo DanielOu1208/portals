@@ -818,9 +818,17 @@ export interface Provider {
   /**
    * How much of the user's plan the agent has used (`/usage`), asked of the agent now
    * where it can be, else as it last said. `thread`: the thread asking, whose own agent
-   * is asked first; absent when none is (Settings > Agents).
+   * is asked first; absent when none is (Settings > Agents). `fresh`, for a person typing
+   * `/usage`: not an earlier answer. `recent`, for `usage.read`, which holds each answer a
+   * minute: what the agent said within that minute serves too, for reads of another `usageScope`.
    */
-  usage?(thread: string | undefined, options?: { fresh?: boolean }): Promise<UsageReport>;
+  usage?(thread: string | undefined, options?: { fresh?: boolean; recent?: boolean }): Promise<UsageReport>;
+  /**
+   * What `usage` depends on of the thread, where its answer differs by thread (a Hermes thread
+   * on another model provider than its bot's default): reads of different scopes do not stand
+   * in for one another. Absent: every thread's is the agent's.
+   */
+  usageScope?(thread: string | undefined): string;
   /** The release of the agent's program the bridge knows of, and where it stands against the tested ones, for `/status`. */
   readonly version?: VersionCheck;
   /**

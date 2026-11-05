@@ -13,7 +13,7 @@ struct AgentSettings: View {
 
     @Environment(\.showSettingsSheet) private var showSheet
     @Environment(\.scenePhase) private var scenePhase
-    /// Moves the rings and their times on with each round of asking.
+    /// What the rings and their times go by, moved on while the page can be seen.
     @State private var now = Date.now
     /// `PORTALS_DEBUG_AGENT_PROGRAM` has opened its page.
     @State private var openedForDebug = false
@@ -51,16 +51,29 @@ struct AgentSettings: View {
             .settingsRows()
         }
         // Asked only while this page is on screen and can be seen.
-        .task(id: Asking(hosts: Set(fleet.hosts.filter { $0.isConnected && $0.listsPrograms }.map(\.id)), isSeen: scenePhase != .background && !WindowVisibility.shared.isHidden)) {
-            guard scenePhase != .background, !WindowVisibility.shared.isHidden else { return }
+        .task(id: Asking(hosts: Set(fleet.hosts.filter { $0.isConnected && $0.listsPrograms }.map(\.id)), isSeen: isSeen)) {
+            guard isSeen else { return }
             await withTaskGroup(of: Void.self) { group in
                 for host in fleet.hosts where host.isConnected && host.listsPrograms {
                     group.addTask { await keepAsking(host) }
                 }
             }
         }
+        // The rings' time, whether or not any host can be asked: asks nothing of one, and a
+        // window that has reset leaves its ring, an older host's too.
+        .task(id: isSeen) {
+            guard isSeen else { return }
+            while !Task.isCancelled {
+                now = .now
+                try? await Task.sleep(for: .seconds(Self.clockEvery))
+            }
+        }
         .onChange(of: AgentProgramsMemory.shared.programs) { openForDebug() }
     }
+
+    private var isSeen: Bool { scenePhase != .background && !WindowVisibility.shared.isHidden }
+
+    private static let clockEvery = 30
 
     private struct Asking: Hashable {
         let hosts: Set<HostID>
@@ -76,7 +89,6 @@ struct AgentSettings: View {
             let isDue = asked.map { $0.duration(to: .now) >= .seconds(60) } ?? true
             if isDue {
                 asked = .now
-                now = .now
                 for agent in fleet.arrangedAgents(on: host.id) {
                     // Each on its own: Claude Code may be started only to be asked.
                     Task { try? await ThreadPanelMemory.shared.askUsage(of: agent.id, from: provider) }
@@ -154,7 +166,7 @@ private struct AgentProgramRow: View {
     /// bots mostly share one.
     private var limits: (limits: UsageLimits, agent: Agent)? {
         for agent in agents {
-            if let known = ThreadPanelMemory.shared.usage[agent.id] ?? nil, !known.windows.isEmpty { return (known, agent) }
+            if let known = ThreadPanelMemory.shared.pageUsage(of: agent.id), !known.windows.isEmpty { return (known, agent) }
         }
         return nil
     }
@@ -164,7 +176,7 @@ private struct AgentProgramRow: View {
     }
 
     var body: some View {
-        AgentRowContent(style: style, name: name, line: line, lineIsLoud: lineIsLoud) {
+        AgentRowContent(style: style, name: name, line: line, spokenLine: spokenLine, lineIsLoud: lineIsLoud) {
             if let limits {
                 UsageRings(limits: limits.limits, now: now, tint: tint(limits.agent))
             }
@@ -173,11 +185,15 @@ private struct AgentProgramRow: View {
         }
     }
 
-    /// Its bots, for Hermes; its version and how it stands.
+    /// Its bots, for Hermes; its version and how it stands, in the row's one line.
     private var line: String? {
         guard let program else { return bots }
-        let word = isConnected ? AgentProgramWords.state(of: program) : nil
-        return [bots, program.isInstalled ? program.version : nil, word].compactMap(\.self).joined(separator: " · ")
+        return [bots, isConnected ? program.stateLine : program.version].compactMap(\.self).joined(separator: " · ")
+    }
+
+    private var spokenLine: String? {
+        guard let program else { return bots }
+        return [bots, isConnected ? program.spokenStateLine : program.version].compactMap(\.self).joined(separator: ", ")
     }
 
     private var bots: String? {
@@ -202,8 +218,8 @@ private struct AgentSettingsRow: View {
     let now: Date
 
     var body: some View {
-        AgentRowContent(style: style, name: agent.displayName, line: maker, lineIsLoud: false) {
-            if let known = ThreadPanelMemory.shared.usage[agent.id] ?? nil {
+        AgentRowContent(style: style, name: agent.displayName, line: maker, spokenLine: maker, lineIsLoud: false) {
+            if let known = ThreadPanelMemory.shared.pageUsage(of: agent.id) {
                 UsageRings(limits: known, now: now, tint: style.tint)
             }
         } end: {
@@ -221,6 +237,7 @@ private struct AgentRowContent<Rings: View, End: View>: View {
     let style: AgentAvatarStyle
     let name: String
     let line: String?
+    let spokenLine: String?
     let lineIsLoud: Bool
     @ViewBuilder let rings: Rings
     @ViewBuilder let end: End
@@ -237,7 +254,10 @@ private struct AgentRowContent<Rings: View, End: View>: View {
                     Text(line)
                         .font(.app.footnote)
                         .foregroundStyle(lineIsLoud ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
-                        .lineLimit(2)
+                        // A later release is one line, however tight: it shrinks a little rather than breaks.
+                        .lineLimit(line.contains("→") ? 1 : 2)
+                        .minimumScaleFactor(line.contains("→") ? 0.8 : 1)
+                        .accessibilityLabel(spokenLine ?? line)
                 }
             }
             Spacer(minLength: Theme.grid)
@@ -252,22 +272,6 @@ private struct AgentRowContent<Rings: View, End: View>: View {
     }
 
     private static var avatar: CGFloat { Platform.isMac ? 30 : 36 }
-}
-
-/// The words for how a program stands, the same on its row and its page.
-enum AgentProgramWords {
-    /// nil where there is nothing to add to its version.
-    static func state(of program: AgentProgram) -> String? {
-        switch program.state {
-        case .notFound: "Not found on this host"
-        case .updating: "Updating…"
-        case .updateFailed: "Update failed"
-        case let .tooOld(needs): needs.map { "Older than Portals needs (\($0))" } ?? "Older than Portals needs"
-        case let .updateAvailable(latest): "Update available: \(latest)"
-        case .upToDate: "Up to date"
-        case .unknown: nil
-        }
-    }
 }
 
 // MARK: Rings
@@ -305,7 +309,7 @@ struct UsageRing: View {
     let tint: Color?
     var size: CGFloat = 24
     var lineWidth: CGFloat = 2.5
-    /// In the middle: its short name, or at a larger size, how much is left.
+    /// In the middle: its short name where it has one that reads clearly, or at a larger size, how much is left.
     var label: String?
 
     private var left: Double { window.left ?? 0 }
@@ -323,12 +327,14 @@ struct UsageRing: View {
                     .stroke((left <= 10 ? Color.red : tint ?? .accentColor).opacity(0.8), style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
                     .rotationEffect(.degrees(-90))
             }
-            Text(label ?? window.shortName)
-                .font(.system(size: size * 0.36, weight: .semibold, design: .rounded))
-                .foregroundStyle(.secondary)
-                .minimumScaleFactor(0.7)
-                .lineLimit(1)
-                .padding(.horizontal, lineWidth + 1)
+            if let text = label ?? window.shortName {
+                Text(text)
+                    .font(.system(size: size * 0.36, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary)
+                    .minimumScaleFactor(0.7)
+                    .lineLimit(1)
+                    .padding(.horizontal, lineWidth + 1)
+            }
         }
         .frame(width: size, height: size)
         .accessibilityElement(children: .ignore)

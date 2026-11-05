@@ -12,7 +12,7 @@ import { readJSON, writeJSON } from "../store/jsonFile.ts";
 /** Where a program's latest release is said. */
 export type LatestSource =
   /** A dist-tag of an npm package. */
-  | { kind: "npm"; package: string; tag(env: NodeJS.ProcessEnv): string }
+  | { kind: "npm"; package: string; tag: string }
   /** A page that names the release in its text: Cursor's install script. */
   | { kind: "page"; url: string; pattern: RegExp }
   /** The latest release of a repository on GitHub, whose tag is the version with a v before it. */
@@ -30,6 +30,15 @@ const answerMs = 15_000;
 const mostBytes = 1024 * 1024;
 
 const release = /^\d+\.\d+\.\d+/;
+
+/** Which source it is: an answer from another says nothing of this one. */
+function identity(source: LatestSource): string {
+  switch (source.kind) {
+    case "npm": return `npm:${source.package}#${source.tag}`;
+    case "page": return `page:${source.url}`;
+    case "github": return `github:${source.repository}`;
+  }
+}
 
 /** The dist-tags of an npm package: a small answer, without the package's whole description. */
 function distTags(name: string): string {
@@ -58,6 +67,8 @@ interface Named {
   version: string;
   /** When it was said, in milliseconds since 1970. */
   at: number;
+  /** Where it was said (`identity`). */
+  source: string;
 }
 
 export interface LatestOptions {
@@ -65,7 +76,6 @@ export interface LatestOptions {
   file: string;
   /** False: nothing is asked (`updates.check`). */
   check: boolean;
-  env?: NodeJS.ProcessEnv;
   everyMs?: number;
   answerMs?: number;
   now?: () => number;
@@ -87,15 +97,18 @@ export class LatestReleases {
     if (Number.isFinite(when)) this.checked = when;
     if (kept.latest && typeof kept.latest === "object") {
       for (const [id, entry] of Object.entries(kept.latest as Record<string, Partial<Named>>)) {
-        if (typeof entry?.version === "string" && release.test(entry.version) && typeof entry.at === "number") this.named.set(id, { version: entry.version, at: entry.at });
+        if (typeof entry?.version === "string" && release.test(entry.version) && typeof entry.at === "number" && typeof entry.source === "string") this.named.set(id, { version: entry.version, at: entry.at, source: entry.source });
       }
     }
   }
 
-  /** The latest release of `id` as last heard, unless that was too long ago to hold. */
-  version(id: string): string | undefined {
+  /**
+   * The latest release of `id` as `source` last said it, unless that was too long ago to
+   * hold. What another source said is not this one's word: nothing until the next round asks.
+   */
+  version(id: string, source: LatestSource): string | undefined {
     const named = this.named.get(id);
-    return named && this.now() - named.at < latestStandsMs ? named.version : undefined;
+    return named && named.source === identity(source) && this.now() - named.at < latestStandsMs ? named.version : undefined;
   }
 
   /** The asking under way, if any (tests wait for it). */
@@ -116,7 +129,7 @@ export class LatestReleases {
     this.keep();
     this.asking = Promise.all([...sources].map(async ([id, source]) => {
       const version = await this.ask(source);
-      if (version !== undefined) this.named.set(id, { version, at: this.now() });
+      if (version !== undefined) this.named.set(id, { version, at: this.now(), source: identity(source) });
     })).then(() => {
       this.keep();
       this.asking = undefined;
@@ -135,7 +148,7 @@ export class LatestReleases {
       const said = source.kind === "page"
         ? source.pattern.exec(text)?.[1]
         : source.kind === "npm"
-          ? (JSON.parse(text) as Record<string, unknown>)[source.tag(this.options.env ?? process.env)]
+          ? (JSON.parse(text) as Record<string, unknown>)[source.tag]
           : (JSON.parse(text) as { tag_name?: unknown }).tag_name;
       if (typeof said !== "string") throw new Error("it named no release");
       const version = said.replace(/^v/, "");
