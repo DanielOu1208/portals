@@ -114,10 +114,13 @@ import Testing
             Set(try #require(try JSONValue(encoding: params).objectValue).keys)
         }
         #expect(try sent(BridgeWire.ThreadParams(sessionID: "s1")) == keys(BridgeWire.Method.gitStatus))
-        #expect(try sent(BridgeWire.ThreadParams(sessionID: "s1")) == keys(BridgeWire.Method.usageRead))
+        // One or the other: a thread, or an agent where there is none to ask through.
+        #expect(try sent(BridgeWire.ThreadParams(sessionID: "s1")).union(sent(BridgeWire.AgentUsageParams(agent: "claude"))) == keys(BridgeWire.Method.usageRead))
         #expect(try sent(BridgeWire.ThreadParams(sessionID: "s1")) == keys(BridgeWire.Method.gitDiff))
         #expect(try sent(BridgeWire.FolderOpenParams(sessionID: "s1", app: "finder")) == keys(BridgeWire.Method.folderOpen))
         #expect(try sent(BridgeWire.NoParams()) == keys(BridgeWire.Method.hostApps))
+        #expect(try sent(BridgeWire.NoParams()) == keys(BridgeWire.Method.programsList))
+        #expect(try sent(BridgeWire.ProgramParams(program: "claude")) == keys(BridgeWire.Method.programUpdate))
     }
 
     @Test func paceSaysTheReserveAndWhenItRunsOut() throws {

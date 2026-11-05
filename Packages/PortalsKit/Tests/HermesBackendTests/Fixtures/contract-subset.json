@@ -167,7 +167,8 @@
    "message_fork",
    "turn_file_undo",
    "disk_space",
-   "subagent_read"
+   "subagent_read",
+   "agent_programs"
   ],
   "events": {
    "mcp.auth": {
@@ -283,7 +284,18 @@
    "usage.read": {
     "feature": "usage_read",
     "params": [
-     "session_id"
+     "session_id",
+     "agent"
+    ]
+   },
+   "programs.list": {
+    "feature": "agent_programs",
+    "params": []
+   },
+   "program.update": {
+    "feature": "agent_programs",
+    "params": [
+     "program"
     ]
    },
    "host.apps": {

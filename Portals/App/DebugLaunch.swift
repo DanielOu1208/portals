@@ -146,6 +146,10 @@ enum DebugLaunch {
     /// or `about` (`SettingsSection`).
     static var settingsSection: SettingsSection? { value("PORTALS_DEBUG_SETTINGS").flatMap(SettingsSection.init(rawValue:)) }
 
+    /// `PORTALS_DEBUG_AGENT_PROGRAM`: the id of a program whose page opens from Settings'
+    /// Agents, on the first host that lists it (`claude`, `hermes`), for a look at it.
+    static var opensAgentProgram: String? { value("PORTALS_DEBUG_AGENT_PROGRAM") }
+
     /// The part Settings opens at for a development switch: `settingsSection`, or Net for
     /// the switches that look at the hosts and the net (`PORTALS_DEBUG_HOST_SETTINGS`
     /// `list`, `device`, `devices`; `PORTALS_DEBUG_NET_REMOVE`, `PORTALS_DEBUG_RENAME_DEVICE`);

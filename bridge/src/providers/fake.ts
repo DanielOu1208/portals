@@ -117,7 +117,7 @@ export class FakeProvider implements Provider {
   }
 
   /** With `FakeOptions.usage` only, so the usual fake offers no `/usage`. */
-  readonly usage?: (thread: string) => Promise<UsageReport>;
+  readonly usage?: (thread: string | undefined) => Promise<UsageReport>;
 
   constructor(options: FakeOptions) {
     this.options = options;

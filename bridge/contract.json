@@ -473,7 +473,7 @@
     },
     {
       "name": "usage.read",
-      "summary": "How much of the user's plan the thread's agent has used, as the agent tells it (feature usage_read), what /usage says: available false for an agent that cannot say; else its plan, the plan as people name it (title: \"Claude Max\", \"Codex Pro 100\"), each window (name, percent used, resets_at in Unix seconds, reached, window_seconds, how long it is, where known, and heard_at, in milliseconds since 1970, for a window kept from an earlier answer because this one did not say it, or that a turn has reported since this answer), heard_at for limits not asked of it just now, as last heard, and a note. An agent is asked at most once a minute, whoever asks, and an answer it could not give stands for that minute as a good one does. Claude Code with none running is started to ask at most every ten minutes while it reads the limits (its last answer stands between, with heard_at, and what a turn has reported since is over it); after an answer without them, a minute later, then after 2, 4, 8 and 10.",
+      "summary": "How much of the user's plan an agent has used, as the agent tells it (feature usage_read), what /usage says: the thread's agent for session_id, or, with feature agent_programs, the agent named by agent, for a page that has no thread. Available false for an agent that cannot say; else its plan, the plan as people name it (title: \"Claude Max\", \"Codex Pro 100\"), each window (name, percent used, resets_at in Unix seconds, reached, window_seconds, how long it is, where known, and heard_at, in milliseconds since 1970, for a window kept from an earlier answer because this one did not say it, or that a turn has reported since this answer), heard_at for limits not asked of it just now, as last heard, and a note. An agent is asked at most once a minute, whoever asks, and an answer it could not give stands for that minute as a good one does. Claude Code with none running is started to ask at most every ten minutes while it reads the limits (its last answer stands between, with heard_at, and what a turn has reported since is over it); after an answer without them, a minute later, then after 2, 4, 8 and 10.",
       "params": [
         {
           "name": "params",
@@ -483,12 +483,54 @@
               "session_id": {
                 "type": "string"
               },
+              "agent": {
+                "type": "string"
+              },
+              "profile": {
+                "type": "string"
+              }
+            },
+            "required": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "programs.list",
+      "summary": "The programs of the agents on this computer (feature agent_programs): for each that is installed or has an agent here, its id, name, installed, version (null when it did not say), standing (tested, newer, untested, too old, missing), tested, minimum, how it was installed (own, npm, homebrew, app, other, null when it is not), can_update, command (what updates it, or what to run on this computer where the host cannot), latest and update_available where that can be found, agents (the agents it runs), takes_effect (when threads at work move to a new release: next_start, service_restart, gateway_restart), running_version (what a service that stays up runs, where that is not version), and update, the last update while the bridge has run: state running, done or failed, started_at, ended_at, from, to, timed_out, line (the last thing it printed, while it runs), tail (the end of what it printed, once it has failed). A version is read at most once a minute, and the latest releases are asked for at most every eight hours and only as this is asked.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "profile": {
+                "type": "string"
+              }
+            },
+            "required": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "program.update",
+      "summary": "Starts updating one of the programs of programs.list with its own update command (feature agent_programs), the host's choice by how it was installed: the program's id is all it takes. Answers at once with the program as programs.list says it; programs.list follows the update from there. One at a time per program: asked again while one runs, it answers with that one. Refused with why (-32602) for a program it cannot update. Stops and restarts nothing, but for Hermes, whose own update restarts its gateways.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "program": {
+                "type": "string"
+              },
               "profile": {
                 "type": "string"
               }
             },
             "required": [
-              "session_id"
+              "program"
             ]
           }
         }
@@ -2150,7 +2192,8 @@
     "open_on_host",
     "steer_withdrawn",
     "disk_space",
-    "subagent_read"
+    "subagent_read",
+    "agent_programs"
   ],
   "x-lean-deltas": {
     "capability": "lean_deltas",

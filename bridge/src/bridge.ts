@@ -23,6 +23,7 @@ import { Net } from "./net/net.ts";
 import { machineID, SidebarOrder } from "./order.ts";
 import { ClaudeProvider } from "./providers/claude/provider.ts";
 import { makeProviders, startProviders } from "./providers/index.ts";
+import { AgentPrograms, type ProgramsOptions } from "./providers/programs.ts";
 import type { Provider } from "./providers/types.ts";
 import { Apns, DryRun, type Sender } from "./push/apns.ts";
 import { Relay } from "./push/relay.ts";
@@ -69,6 +70,8 @@ export interface BridgeOptions {
   updates?: Partial<Omit<UpdateCheckOptions, "own" | "file" | "changed">>;
   /** For the reading of the free space on the bridge's disk: a stand-in for `statfs`, other timing (tests; feature disk_space). */
   disk?: Partial<Pick<DiskSpaceOptions, "statfs" | "everyMs">>;
+  /** For the agents' programs: another home folder, environment, update time or source of latest releases (tests; feature agent_programs). */
+  programs?: Partial<Pick<ProgramsOptions, "home" | "env" | "updateMs" | "latest">>;
 }
 
 /** How long telling another Mac which of its threads threads here keep at work may take. */
@@ -86,6 +89,8 @@ export interface RunningBridge {
   updates: UpdateCheck | undefined;
   /** The free space on the bridge's disk: for tests, which wait for its reading. */
   disk: DiskSpace;
+  /** The agents' programs: for tests, which wait for an update's end. */
+  programs: AgentPrograms;
   /** Signal shutdown budget; normally eight seconds, at most sixteen. */
   readonly stopDeadlineMs?: number;
   /** Stops everything; once, however often it is called. */
@@ -230,7 +235,9 @@ export async function startBridge(options: BridgeOptions = {}): Promise<RunningB
   const updates = config.updates.check
     ? new UpdateCheck({ own: version, file: paths.update, changed: () => pollNow.moved(), ...options.updates })
     : undefined;
-  const gateway = new Gateway({ config, sessions, providers, folders, desk, fleet, looks, order, machine, pollNow, files, fileSearch, folderSearch, net, search, updates, disk });
+  // Which programs are installed, and updating them (feature agent_programs).
+  const programs = new AgentPrograms({ config, paths, providers, ...options.programs });
+  const gateway = new Gateway({ config, sessions, providers, folders, desk, fleet, looks, order, machine, pollNow, files, fileSearch, folderSearch, net, search, updates, disk, programs });
   net.listener = {
     moved: () => pollNow.moved(),
     // Set from the app, here or on another Mac: what this Mac passes on says it at once.
@@ -351,6 +358,7 @@ export async function startBridge(options: BridgeOptions = {}): Promise<RunningB
     fleet,
     updates,
     disk,
+    programs,
     get stopDeadlineMs() {
       return Math.min(16_000, Math.max(stopDeadlineMs, ...[...providers.values()].map((provider) => provider.stopDeadlineMs ?? 0)));
     },

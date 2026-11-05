@@ -17,6 +17,7 @@ struct RootView: View {
         /// acknowledgements.
         case addPortal
         case look(Agent)
+        case agentProgram(HostID, AgentProgram.ID)
         case acknowledgements
         /// Adding, or updating, the Mac a link is for; or joining the net a link is a way into.
         case link(PortalsLink)
@@ -28,6 +29,7 @@ struct RootView: View {
             case let .edit(host): "edit-\(host.rawValue)"
             case .addPortal: "add-portal"
             case let .look(agent): "look-\(agent.id.host.rawValue)-\(agent.id.name)"
+            case let .agentProgram(host, program): "agent-program-\(host.rawValue)-\(program)"
             case .acknowledgements: "acknowledgements"
             case let .link(link): "link-\(link.hashValue)"
             }
@@ -139,6 +141,8 @@ struct RootView: View {
                 AgentLookEditor(agent: agent, look: shown.look(for: agent.id), logo: shown.logo(for: agent.id)) { look in
                     shown.setLook(look, for: agent.id)
                 }
+            case let .agentProgram(host, program):
+                AgentProgramDetail(fleet: shown, hostID: host, programID: program, onDone: { self.sheet = nil })
             case .acknowledgements:
                 PanelChrome(title: "Acknowledgements", onDone: { self.sheet = nil }) {
                     Acknowledgements()
@@ -224,6 +228,7 @@ extension RootView {
         case let .editHost(id): .edit(id)
         case .addPortal: .addPortal
         case let .look(agent): .look(agent)
+        case let .agentProgram(host, program): .agentProgram(host, program)
         case .acknowledgements: .acknowledgements
         }
     }

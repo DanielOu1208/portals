@@ -46,6 +46,8 @@ export interface TestBridgeOptions {
   updates?: BridgeOptions["updates"];
   /** For the reading of the free space on the bridge's disk (feature disk_space): its own `statfs`. Else a disk with plenty of room, whatever the test machine's has. */
   disk?: BridgeOptions["disk"];
+  /** For the agents' programs (feature agent_programs): its own home folder, environment and source of latest releases. */
+  programs?: BridgeOptions["programs"];
 }
 
 /** A volume of 500 GB with 200 GB free, for the tests that do not look at the disk: a full one on the test machine does not tell their threads so. */
@@ -100,7 +102,7 @@ export async function startTestBridge(options: TestBridgeOptions = {}): Promise<
     };
     writeFileSync(join(home, "config.json"), JSON.stringify(config));
   }
-  const bridge = await startBridge({ home, logCapacity: options.logCapacity, providers: options.providers, temporaryFolders: options.temporaryFolders, userHome: options.userHome, held: options.held, noticeRetries: options.noticeRetries, updates: options.updates, disk: { statfs: roomyDisk, ...options.disk } });
+  const bridge = await startBridge({ home, logCapacity: options.logCapacity, providers: options.providers, temporaryFolders: options.temporaryFolders, userHome: options.userHome, held: options.held, noticeRetries: options.noticeRetries, updates: options.updates, programs: options.programs, disk: { statfs: roomyDisk, ...options.disk } });
   return {
     ...bridge,
     get stopDeadlineMs() { return bridge.stopDeadlineMs; },

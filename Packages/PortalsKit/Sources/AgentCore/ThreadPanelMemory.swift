@@ -68,6 +68,15 @@ public final class ThreadPanelMemory {
     }
 
     public func askUsage(of agent: Agent.ID, thread: ThreadRef.ID, from provider: any ThreadPanelProviding) async throws {
+        try await askUsage(of: agent) { try await provider.usage(of: thread) }
+    }
+
+    /// With no thread to ask through, for a page of agents (Settings > Agents).
+    public func askUsage(of agent: Agent.ID, from provider: any AgentProgramsProviding) async throws {
+        try await askUsage(of: agent) { try await provider.usage(ofAgent: agent.name) }
+    }
+
+    private func askUsage(of agent: Agent.ID, asking: () async throws -> UsageLimits?) async throws {
         if let answered = usageAnswered[agent], Date.now.timeIntervalSince(answered) < Self.usageStands { return }
         let times = forgotten[agent.host]
         let connection = connections[agent.host]
@@ -76,7 +85,7 @@ public final class ThreadPanelMemory {
         var isOver: Bool { forgotten[agent.host] != times || connections[agent.host] != connection }
         let answer: UsageLimits?
         do {
-            answer = try await provider.usage(of: thread)
+            answer = try await asking()
         } catch {
             if isOver { return }
             usageFailures[agent] = error.localizedDescription

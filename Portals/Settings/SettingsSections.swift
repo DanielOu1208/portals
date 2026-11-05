@@ -2,7 +2,7 @@ import AgentCore
 import SwiftUI
 import UserNotifications
 
-// The parts of Settings after Net (`NetSettings`), each a form (`SettingsPage`).
+// The parts of Settings after Net (`NetSettings`), each a form (`SettingsPage`); Agents has a file of its own (`AgentSettings`).
 
 // MARK: Chat
 
@@ -79,96 +79,6 @@ struct ChatSettings: View {
             }
         }
     }
-}
-
-// MARK: Agents
-
-/// Every Mac's agents, each with its look: tap one to change it.
-struct AgentSettings: View {
-    let fleet: Fleet
-
-    /// Changing an agent's look: shown by the app's top, as from the chat (`SettingsSheet`).
-    @Environment(\.showSettingsSheet) private var showSheet
-
-    var body: some View {
-        Form {
-            ForEach(fleet.hosts) { host in
-                let agents = fleet.arrangedAgents(on: host.id)
-                Section {
-                    if agents.isEmpty {
-                        Text(host.isConnected ? "No agents on this host." : "Its agents show once it is connected.")
-                            .foregroundStyle(.secondary)
-                            .listRowOnMac()
-                    }
-                    ForEach(agents) { agent in
-                        Button { showSheet(.look(agent)) } label: {
-                            AgentSettingsRow(agent: agent, style: fleet.style(for: agent.id), maker: maker(of: agent, on: host))
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("agent-row-\(agent.id.name)")
-                    }
-                } header: {
-                    Text(host.host.name)
-                        .formHeader()
-                }
-                .settingsRows()
-            }
-            Section {
-                if fleet.hosts.isEmpty {
-                    Text("Add a host in Net to see its agents.")
-                        .foregroundStyle(.secondary)
-                }
-            } footer: {
-                Text("An agent's look is how it shows in the sidebar, its chats and its notifications, on every device. Which model and mode a thread runs on is chosen in the thread.")
-                    .formFooter()
-            }
-            .settingsRows()
-        }
-    }
-
-    /// Whose agent it is: a coding agent's maker, or Hermes for a bot.
-    private func maker(of agent: Agent, on host: HostModel) -> String? {
-        if let logo = fleet.logo(for: agent.id) { return logo.brand }
-        // A Hermes profile, through a bridge or from Hermes on its own; nothing for a
-        // development switch's scripted agents, which are no one's.
-        return agent.kind == "hermes" || host.runsHermesAlone ? "Hermes" : nil
-    }
-}
-
-/// An agent in Agents: its avatar as it rests, its name and whose it is.
-private struct AgentSettingsRow: View {
-    let agent: Agent
-    let style: AgentAvatarStyle
-    let maker: String?
-
-    var body: some View {
-        HStack(spacing: Theme.grid * 1.5) {
-            AgentAvatarView(state: .idle, frozenAt: 1, size: Self.avatar, style: style)
-                .frame(width: Self.avatar, height: Self.avatar)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(agent.displayName)
-                    .font(.app.body.weight(.medium))
-                    .lineLimit(1)
-                if let maker {
-                    Text(maker)
-                        .font(.app.footnote)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-            }
-            Spacer(minLength: Theme.grid)
-            Text("Change Look")
-                .font(.app.footnote)
-                .foregroundStyle(.secondary)
-            Image(systemName: "chevron.forward")
-                .font(.app.caption.weight(.semibold))
-                .foregroundStyle(.tertiary)
-        }
-        .listRowOnMac()
-        .contentShape(.rect)
-    }
-
-    private static let avatar: CGFloat = Platform.isMac ? 30 : 36
 }
 
 // MARK: Notifications

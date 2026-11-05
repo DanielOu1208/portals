@@ -373,6 +373,11 @@
 //   `subagent.list`): Claude Code's subagents (the file it keeps for each,
 //   `getSubagentMessages`) and Codex's sub-agents (each its own thread, `thread/read`), not
 //   workflows or commands.
+// - `agent_programs`: `programs.list` says which agents' programs are on this host, their
+//   versions, how each was installed and whether a later release is out; `program.update`
+//   updates one with its own command, the host's choice by how it was installed, and
+//   `usage.read` takes `agent` in place of `session_id`, for Settings > Agents, which has no
+//   thread to ask with (src/providers/programs.ts).
 
 export const bridgeFeatures = [
   "turn_file_undo",
@@ -450,6 +455,7 @@ export const bridgeFeatures = [
   "steer_withdrawn",
   "disk_space",
   "subagent_read",
+  "agent_programs",
 ] as const;
 
 export const bridgeProtocol = 1;

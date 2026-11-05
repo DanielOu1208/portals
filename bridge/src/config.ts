@@ -31,6 +31,8 @@ import { ensureDirectory, readJSON, writeJSON } from "./store/jsonFile.ts";
 //   state/droid/        Droid session identities and display conversations
 //   state/hermes.json   Hermes's profiles, as it last listed them
 //   state/update.json   when npm's registry was last asked for the latest portals-host, and what it said (src/updates.ts)
+//   state/programs.json when the latest releases of the agents' programs were last asked for, and what was said (src/providers/programLatest.ts)
+//   state/program-updates/ what the last update of each agent's program printed (src/providers/programs.ts)
 //   hermes-serve.log    what a `hermes serve` the bridge started printed
 //   opencode-serve.log  what an `opencode serve` of the bridge's own printed
 //   counters.log        a line of counts a minute while `counters` is on (src/counters.ts); counters.log.1 is the file before it
@@ -350,6 +352,8 @@ export interface Paths {
   counters: string;
   /** When npm's registry was last asked for the latest version, and what it said (src/updates.ts). */
   update: string;
+  /** When the latest releases of the agents' programs were last asked for, and what was said (src/providers/programLatest.ts). */
+  programs: string;
 }
 
 /** The deployed relay (relay/README.md): notifications (`push.relay`) and the tunnel (`relay.url`). */
@@ -430,6 +434,7 @@ export function pathsFor(home: string): Paths {
     opencodeLog: join(home, "opencode-serve.log"),
     counters: join(home, "counters.log"),
     update: join(state, "update.json"),
+    programs: join(state, "programs.json"),
   };
 }
 

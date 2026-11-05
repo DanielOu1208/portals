@@ -711,10 +711,10 @@ export class HermesProvider implements Provider {
    * plan's gauges, with a Nous plan's credits (`usage.bars`). Hermes keeps the windows as
    * it last heard them and asks again as it is asked, so a first answer may have none.
    */
-  async usage(thread: string): Promise<UsageReport> {
+  async usage(thread: string | undefined): Promise<UsageReport> {
     const profile = this.described.profile;
     const options = await this.host.call<Frame>("model.options", { profile });
-    const slug = this.host.sessionFor(thread)?.settings().provider || (typeof options.provider === "string" ? options.provider : "");
+    const slug = (thread === undefined ? undefined : this.host.sessionFor(thread)?.settings().provider) || (typeof options.provider === "string" ? options.provider : "");
     const row: Frame = (Array.isArray(options.providers) ? options.providers : []).find((entry: Frame) => entry?.slug === slug) ?? {};
     const report: UsageReport = { limits: [...windowLimits(row.usage), ...gaugeLimits(row.plan_usage)] };
     if (typeof row.plan_usage?.plan === "string" && row.plan_usage.plan !== "") report.plan = row.plan_usage.plan;

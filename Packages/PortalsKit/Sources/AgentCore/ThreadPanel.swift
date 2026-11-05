@@ -43,6 +43,19 @@ public struct UsageLimits: Hashable, Codable, Sendable {
             isUsedUp ? 0 : percent.map { min(max(100 - $0, 0), 100) }
         }
 
+        /// Its name in a letter or two, for a ring too small to hold more: "5h" for "5-hour", "W"
+        /// for "weekly". A window of one model goes by the model ("O" for "weekly Opus"), with
+        /// the plain weekly's "W" beside it.
+        public var shortName: String {
+            let words = name.split(separator: " ")
+            let first = words.first.map(String.init) ?? name
+            let length = first.split(separator: "-")
+            if length.count == 2, let unit = length[1].first, Int(length[0]) != nil { return "\(length[0])\(unit.lowercased())" }
+            if words.count > 1, let letter = words.last?.first { return letter.uppercased() }
+            if first.lowercased() == "monthly" { return "Mo" }
+            return first.prefix(1).uppercased()
+        }
+
         /// The time it counts has ended, so nothing said of it holds any more, used up or not.
         public func hasReset(at now: Date = .now) -> Bool {
             resetsAt.map { $0 <= now } ?? false

@@ -818,9 +818,9 @@ export interface Provider {
   /**
    * How much of the user's plan the agent has used (`/usage`), asked of the agent now
    * where it can be, else as it last said. `thread`: the thread asking, whose own agent
-   * is asked first.
+   * is asked first; absent when none is (Settings > Agents).
    */
-  usage?(thread: string, options?: { fresh?: boolean }): Promise<UsageReport>;
+  usage?(thread: string | undefined, options?: { fresh?: boolean }): Promise<UsageReport>;
   /** The release of the agent's program the bridge knows of, and where it stands against the tested ones, for `/status`. */
   readonly version?: VersionCheck;
   /**

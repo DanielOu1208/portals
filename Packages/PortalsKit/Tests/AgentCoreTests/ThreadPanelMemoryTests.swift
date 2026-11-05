@@ -63,6 +63,16 @@ import Testing
         }
     }
 
+    @Test func aWindowsShortNameFitsARing() {
+        func short(_ name: String) -> String { UsageLimits.Window(name: name, percent: 1, resetsAt: nil).shortName }
+        #expect(short("5-hour") == "5h")
+        #expect(short("weekly") == "W")
+        #expect(short("monthly") == "Mo")
+        #expect(short("weekly Opus") == "O")
+        #expect(short("included") == "I")
+        #expect(short("API") == "A")
+    }
+
     private let hostID = HostID(rawValue: "mac")
     private var agent: Agent.ID { Agent.ID(host: hostID, name: "claude") }
     private var key: ThreadKey { ThreadKey(host: hostID, id: ThreadRef.ID(rawValue: "t")) }

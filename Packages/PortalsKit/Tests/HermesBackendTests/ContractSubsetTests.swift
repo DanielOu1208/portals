@@ -143,6 +143,7 @@ import Testing
             BridgeWire.Feature.gitStatus, BridgeWire.Feature.usageRead, BridgeWire.Feature.openOnHost, BridgeWire.Feature.diskSpace,
             BridgeWire.Feature.steerWithdrawn,
             BridgeWire.Feature.subagentRead,
+            BridgeWire.Feature.agentPrograms,
         ])
         // What one subagent did: named as Stop names it, and never sent to Hermes.
         let subagentRead = try #require(subset["bridge"]?["methods"]?[BridgeWire.Method.subagentRead])
