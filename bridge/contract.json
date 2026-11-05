@@ -2,7 +2,7 @@
   "openrpc": "1.3.2",
   "info": {
     "title": "portals-bridge gateway",
-    "version": "0.3.2",
+    "version": "0.3.3",
     "description": "The part of the Hermes gateway protocol Portals uses, as portals-bridge serves it. Params not listed are ignored."
   },
   "methods": [
