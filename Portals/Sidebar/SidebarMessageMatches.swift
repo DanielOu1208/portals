@@ -14,6 +14,7 @@ struct SidebarMessageMatches<Content: View, Row: View>: View {
     @State private var search = SidebarMessageSearch()
     @State private var hover = RowHover()
     @Environment(\.isOutOfSight) private var isOutOfSight
+    @Environment(\.imageLightbox) private var lightbox
 
     private var hosts: [SidebarMessageSearch.Host] {
         var machines: Set<String> = []
@@ -31,7 +32,7 @@ struct SidebarMessageMatches<Content: View, Row: View>: View {
     }
 
     var body: some View {
-        let isVisible = self.isVisible && !isOutOfSight
+        let isVisible = self.isVisible && !isOutOfSight && lightbox?.isOpen != true
         let hosts = isVisible ? self.hosts : []
         ScrollView {
             LazyVStack(alignment: .leading, spacing: RowMetrics.spacing) {
