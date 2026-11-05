@@ -133,7 +133,19 @@ struct AgentProgramDetail: View {
     @ViewBuilder
     private func updateSection(_ program: AgentProgram) -> some View {
         Section {
-            if program.isUpdating {
+            if let file = program.update?.cannotTellFile {
+                VStack(alignment: .leading, spacing: Theme.grid * 0.5) {
+                    Text(AgentProgram.Update.cannotTellWords)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(file)
+                        .font(.app.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .listRowOnMac()
+                .accessibilityIdentifier("program-update-cannot-tell")
+            } else if program.isUpdating {
                 HStack(spacing: Theme.grid) {
                     ProgressView().controlSize(.small)
                     Text(program.stateWords ?? "Updating…")

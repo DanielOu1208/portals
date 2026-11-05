@@ -11,7 +11,8 @@ import { groupAlive, processOf, type ProcessIdentity } from "./child.ts";
 //   once the last job holds nothing. Nothing is renamed or overwritten to do it.
 // - A job holds the lock until it says it ended, or both its process and its updater's group
 //   are gone, by who they are (`ProcessIdentity`), not by their numbers alone. Time alone frees
-//   nothing.
+//   nothing, and a record that cannot be read holds too: it may be of a job still at work. A
+//   person who is sure it is not removes the file.
 
 export interface UpdateRecord {
   id: number;
@@ -43,8 +44,17 @@ export interface UpdateJob {
   startBy: number;
 }
 
-function fileOf(folder: string, program: string, id: number): string {
+export function fileOf(folder: string, program: string, id: number): string {
   return join(folder, `${program}.${id}.json`);
+}
+
+/** A number a job can have, with one after it. A name that says anything else is no job's. */
+function isJobId(id: number): boolean {
+  return id > 0 && Number.isSafeInteger(id + 1);
+}
+
+function isIdentity(value: Partial<ProcessIdentity> | undefined): boolean {
+  return Number.isSafeInteger(value?.pid) && value!.pid! > 0 && Number.isSafeInteger(value?.group) && value!.group! > 0 && typeof value?.start === "string" && value.start !== "";
 }
 
 function jobIds(folder: string, program: string): number[] {
@@ -52,7 +62,7 @@ function jobIds(folder: string, program: string): number[] {
   try {
     return readdirSync(folder).flatMap((name) => {
       const id = named.exec(name)?.[1];
-      return id === undefined ? [] : [Number(id)];
+      return id !== undefined && String(Number(id)) === id && isJobId(Number(id)) ? [Number(id)] : [];
     });
   } catch {
     return [];
@@ -64,13 +74,16 @@ export function latestJob(folder: string, program: string): number {
   return Math.max(0, ...jobIds(folder, program));
 }
 
-/** A job's record; null for one that is not there or cannot be read, which holds nothing. */
-export function readJob(folder: string, program: string, id: number): UpdateRecord | null {
+/** A job's record: null for one that is not there, "unreadable" for one that cannot be read or makes no sense. */
+export function readJob(folder: string, program: string, id: number): UpdateRecord | "unreadable" | null {
+  if (!isJobId(id)) return null;
   try {
     const record = JSON.parse(readFileSync(fileOf(folder, program, id), "utf8")) as UpdateRecord;
-    return record.id === id && typeof record.supervisor?.pid === "number" && typeof record.deadlineAt === "number" ? record : null;
-  } catch {
-    return null;
+    const makesSense = record?.id === id && typeof record.deadlineAt === "number" && typeof record.startedAt === "number" && isIdentity(record.supervisor)
+      && (record.updater === undefined || isIdentity(record.updater));
+    return makesSense ? record : "unreadable";
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? null : "unreadable";
   }
 }
 
@@ -130,7 +143,7 @@ export function saveJob(folder: string, program: string, record: UpdateRecord): 
 export function claim(folder: string, program: string, make: (id: number) => UpdateRecord): UpdateRecord | null {
   const last = latestJob(folder, program);
   const held = readJob(folder, program, last);
-  if (held && holdsLock(held)) return null;
+  if (held === "unreadable" || (held && holdsLock(held))) return null;
   const record = make(last + 1);
   const file = fileOf(folder, program, record.id);
   const whole = `${file}.${process.pid}`;

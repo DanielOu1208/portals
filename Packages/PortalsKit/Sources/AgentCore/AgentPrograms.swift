@@ -45,8 +45,14 @@ public struct AgentProgram: Hashable, Sendable, Identifiable {
         public var tail: String?
         /// Running with nothing to hold it to its time, what looked after it on the host having gone.
         public var isUnattended: Bool
+        /// Its record cannot be read, or it is past its time with nothing to prove what is left
+        /// is its own: the file a person may remove on the host, sure it is not running.
+        public var cannotTellFile: String?
 
-        public init(state: State, startedAt: Date, endedAt: Date? = nil, from: String? = nil, to: String? = nil, timedOut: Bool = false, line: String? = nil, tail: String? = nil, isUnattended: Bool = false) {
+        /// What goes before that file, wherever it is shown.
+        public static let cannotTellWords = "Portals cannot tell whether this update is still running. If you are sure it is not, remove this file on the host:"
+
+        public init(state: State, startedAt: Date, endedAt: Date? = nil, from: String? = nil, to: String? = nil, timedOut: Bool = false, line: String? = nil, tail: String? = nil, isUnattended: Bool = false, cannotTellFile: String? = nil) {
             self.state = state
             self.startedAt = startedAt
             self.endedAt = endedAt
@@ -56,6 +62,7 @@ public struct AgentProgram: Hashable, Sendable, Identifiable {
             self.line = line
             self.tail = tail
             self.isUnattended = isUnattended
+            self.cannotTellFile = cannotTellFile
         }
     }
 
@@ -136,7 +143,7 @@ public struct AgentProgram: Hashable, Sendable, Identifiable {
     public var stateWords: String? {
         switch state {
         case .notFound: "Not found on this host"
-        case .updating: update?.isUnattended == true ? "Still running on the host" : "Updating…"
+        case .updating: update?.cannotTellFile != nil ? "Cannot tell if it is still running" : update?.isUnattended == true ? "Still running on the host" : "Updating…"
         case .updateFailed: "Update failed"
         case let .tooOld(needs): needs.map { "Older than Portals needs (\($0))" } ?? "Older than Portals needs"
         case let .updateAvailable(latest): "Update available: \(latest)"

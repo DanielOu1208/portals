@@ -254,6 +254,9 @@ import Testing
         #expect(program.stateLine == "0.166.0 · Updating…")
         program.update = .init(state: .running, startedAt: .now, isUnattended: true)
         #expect(program.stateLine == "0.166.0 · Still running on the host")
+        program.update = .init(state: .running, startedAt: .now, isUnattended: true, cannotTellFile: "/x/claude.1.json")
+        #expect(program.stateLine == "0.166.0 · Cannot tell if it is still running")
+        #expect(!program.offersUpdate)
         program.update = nil
         program.isInstalled = false
         program.version = nil

@@ -44,9 +44,11 @@ extension BridgeWire {
             public var line: String?
             public var tail: String?
             public var unattended: Bool?
+            public var cannotTellFile: String?
 
             enum CodingKeys: String, CodingKey {
                 case state, from, to, line, tail, unattended
+                case cannotTellFile = "cannot_tell_file"
                 case startedAt = "started_at"
                 case endedAt = "ended_at"
                 case timedOut = "timed_out"
@@ -57,7 +59,7 @@ extension BridgeWire {
                 AgentProgram.Update.State(rawValue: state).map {
                     AgentProgram.Update(
                         state: $0, startedAt: Date(timeIntervalSince1970: startedAt / 1000), endedAt: endedAt.map { Date(timeIntervalSince1970: $0 / 1000) },
-                        from: from, to: to, timedOut: timedOut ?? false, line: line, tail: tail, isUnattended: unattended ?? false
+                        from: from, to: to, timedOut: timedOut ?? false, line: line, tail: tail, isUnattended: unattended ?? false, cannotTellFile: cannotTellFile
                     )
                 }
             }

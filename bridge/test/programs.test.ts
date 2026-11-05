@@ -14,6 +14,7 @@ import { defaults, pathsFor } from "../src/config.ts";
 import { FakeProvider } from "../src/providers/fake.ts";
 import { VersionCheck } from "../src/providers/program.ts";
 import { latestEveryMs, LatestReleases, type LatestSource } from "../src/providers/programLatest.ts";
+import { claim } from "../src/providers/programUpdateLock.ts";
 import { AgentPrograms, installationOf, plainLines, type ProgramsOptions } from "../src/providers/programs.ts";
 import type { Provider, UsageReport } from "../src/providers/types.ts";
 import { startTestBridge, TestClient } from "./helpers.ts";
@@ -974,7 +975,7 @@ test("a killed supervisor's group that cannot be proved the same is not signalle
     // The updater leaves something behind and ends by itself, so its own process can no longer prove whose the group is.
     body: (home) => `(while [ ! -e "${home}/stop" ] && [ -d "${home}" ]; do sleep 0.03; done) &\necho $! > "${home}/descendant"\nwhile [ ! -e "${home}/leader-go" ] && [ -d "${home}" ]; do sleep 0.03; done\nexit 0`,
   });
-  const programs = lock.manager({ updateMs: 300 });
+  const programs = lock.manager({ updateMs: 2500 });
   await programs.update("claude");
   assert.ok(await until(() => existsSync(join(lock.home, "descendant")), 8000));
   const descendant = Number(readFileSync(join(lock.home, "descendant"), "utf8"));
@@ -985,20 +986,35 @@ test("a killed supervisor's group that cannot be proved the same is not signalle
   const [updater] = lock.pids();
   assert.ok(await until(() => !alive(updater), 8000));
 
-  // Well past its time.
-  await sleep(2500);
-  assert.equal(alive(descendant), true, "a group not proved the same was signalled");
-  const during = await claudeOf(programs);
-  assert.equal(during.update?.state, "running");
+  // Within its time: nothing to say yet but that it runs.
+  let during = await claudeOf(programs);
+  for (let tries = 0; tries < 30 && !during.update?.unattended; tries++) {
+    await sleep(50);
+    during = await claudeOf(programs);
+  }
   assert.equal(during.update?.unattended, true);
+  assert.equal(during.update?.cannotTellFile, undefined);
+
+  // Well past its time.
+  await sleep(4000);
+  assert.equal(alive(descendant), true, "a group not proved the same was signalled");
+  during = await claudeOf(programs);
+  assert.equal(during.update?.state, "running");
+  const file = join(lock.state, "program-updates/claude.1.json");
+  assert.equal(during.update?.cannotTellFile, file);
   await programs.update("claude");
   await sleep(200);
   assert.equal(lock.pids().length, 1);
 
+  // The file removed, on someone's word that it is not running: free, whatever is left.
+  rmSync(file);
+  await programs.settled("claude");
+  await programs.update("claude");
+  assert.ok(await until(() => lock.pids().length === 2, 8000));
   writeFileSync(join(lock.home, "stop"), "");
+  writeFileSync(join(lock.home, "leader-go"), "");
   assert.ok(await until(() => !alive(descendant), 8000));
   await programs.settled("claude");
-  assert.equal((await claudeOf(programs)).update?.state, "failed");
 });
 
 test("nothing of an update runs until its record names it: a record that cannot be written ends it before the updater starts", async (t) => {
@@ -1035,16 +1051,109 @@ test("two hosts' asking at once runs one updater", async (t) => {
   assert.equal((await claudeOf(two)).update?.state, "done");
 });
 
-test("a record that cannot be read holds nothing", async (t) => {
+test("a record that cannot be read stays held, says so naming its file, and removing the file frees it", async (t) => {
+  for (const damage of ["not json", "unreadable"]) {
+    if (damage === "unreadable" && process.getuid?.() === 0) continue;
+    const lock = lockFixture(t);
+    const folder = join(lock.state, "program-updates");
+    mkdirSync(folder, { recursive: true });
+    const file = join(folder, "claude.1.json");
+    writeFileSync(file, "not json");
+    if (damage === "unreadable") chmodSync(file, 0o000);
+    const programs = lock.manager();
+    const during = await programs.update("claude");
+    assert.equal(during.update?.state, "running");
+    assert.equal(during.update?.cannotTellFile, file);
+    assert.equal(claim(folder, "claude", () => { throw new Error("claimed over a record that cannot be read"); }), null);
+    await sleep(300);
+    assert.equal(lock.pids().length, 0);
+
+    rmSync(file);
+    await programs.update("claude");
+    assert.ok(await until(() => lock.pids().length === 1, 8000));
+    lock.release(1);
+    await programs.settled("claude");
+    assert.equal((await claudeOf(programs)).update?.state, "done");
+  }
+});
+
+test("a running job's record damaged: no second updater, and its own process's end puts it right", async (t) => {
   const lock = lockFixture(t);
   const programs = lock.manager();
-  mkdirSync(join(lock.state, "program-updates"), { recursive: true });
-  for (const name of ["claude.json", "claude.1.json"]) writeFileSync(join(lock.state, "program-updates", name), "not json");
   await programs.update("claude");
   assert.ok(await until(() => lock.pids().length === 1, 8000));
+  const file = join(lock.state, "program-updates/claude.1.json");
+  writeFileSync(file, "not json");
+
+  const other = lock.manager();
+  assert.equal((await other.update("claude")).update?.cannotTellFile, file);
+  await sleep(300);
+  assert.equal(lock.pids().length, 1, "a second updater ran beside the first");
+
   lock.release(1);
   await programs.settled("claude");
   assert.equal((await claudeOf(programs)).update?.state, "done");
+});
+
+test("identities and ids that make no sense: a pid of 0 is a record that cannot be read, and a name that is no id is no job", async (t) => {
+  const lock = lockFixture(t);
+  const folder = join(lock.state, "program-updates");
+  mkdirSync(folder, { recursive: true });
+  for (const name of ["claude.9007199254740992.json", "claude.9007199254740991.json", "claude.007.json", "claude.0.json"]) writeFileSync(join(folder, name), "{}");
+  const file = join(folder, "claude.3.json");
+  writeFileSync(file, JSON.stringify({ id: 3, startedAt: 1, deadlineAt: 2, from: null, supervisor: { pid: 0, start: "x", group: 0 } }));
+  const programs = lock.manager();
+  assert.equal((await programs.update("claude")).update?.cannotTellFile, file);
+  await sleep(300);
+  assert.equal(lock.pids().length, 0);
+
+  rmSync(file);
+  await programs.update("claude");
+  assert.ok(await until(() => lock.pids().length === 1, 8000));
+  assert.ok(await until(() => existsSync(join(folder, "claude.1.json")), 8000));
+  lock.release(1);
+  await programs.settled("claude");
+  assert.equal((await claudeOf(programs)).update?.state, "done");
+});
+
+test("an old job's version read does not overwrite a newer job's, in the report or the host's check", async (t) => {
+  const lock = lockFixture(t, {
+    // Its first read after an update takes the version there and then waits, as a slow read does.
+    versionBody: (home) => `if [ -e "${home}/first-done" ] && [ ! -e "${home}/gate-passed" ]; then v=$(cat "$0.version"); touch "${home}/gate-passed"; while [ ! -e "${home}/version-release" ] && [ -d "${home}" ]; do sleep 0.03; done; echo "$v"; exit 0; fi`,
+    body: (home, file) => `while [ ! -e "${home}/release-$count" ] && [ -d "${home}" ]; do sleep 0.03; done\nif [ "$count" = 1 ]; then printf '2.1.320\\n'; else printf '2.1.400\\n'; fi > "${file}.version"\ntouch "${home}/first-done"`,
+  });
+  const provider = agent("claude", "claude", "2.1.318");
+  const programs = lock.manager({ providers: new Map([["claude", provider]]) });
+  await programs.update("claude");
+  assert.ok(await until(() => lock.pids().length === 1, 8000));
+  lock.release(1);
+  assert.ok(await until(() => existsSync(join(lock.home, "gate-passed")), 8000));
+  const firstEnding = programs.settled("claude");
+
+  await programs.update("claude");
+  assert.ok(await until(() => lock.pids().length === 2, 8000));
+  lock.release(2);
+  assert.ok(await until(() => readFileSync(`${lock.file}.version`, "utf8").includes("2.1.400"), 8000));
+  await programs.settled("claude");
+  assert.ok(await until(() => provider.version!.current()?.version === "2.1.400", 8000));
+  assert.equal((await claudeOf(programs)).version, "2.1.400");
+
+  writeFileSync(join(lock.home, "version-release"), "");
+  await firstEnding;
+  assert.equal((await claudeOf(programs)).version, "2.1.400", "the old job's read put back the old version");
+  assert.equal(provider.version!.current()?.version, "2.1.400");
+});
+
+test("a long line cut off with no newline is not published: what said it was a credential is gone", async (t) => {
+  const home = scratch(t);
+  const path = standIn(join(home, ".local/share/claude/versions/2.1.300"), "2.1.300\n", `printf 'Authorization: Bearer '; head -c 6000 /dev/zero | tr '\\0' 'x'; exit 2`);
+  const programs = new AgentPrograms({ config: { ...defaults, ...nowhere, updates: { check: false }, claude: { ...defaults.claude, path } } as never, paths: { state: join(home, "state"), programs: join(home, "state/programs.json") }, providers: new Map(), home, env: { PATH: "/usr/bin:/bin" }, updateMs: 60_000 });
+  t.after(() => programs.close());
+  await programs.update("claude");
+  await programs.settled("claude");
+  const after = await claudeOf(programs);
+  assert.equal(after.update?.state, "failed");
+  assert.ok(!(after.update?.tail ?? "").includes("xxxx"), after.update?.tail);
 });
 
 test("the last update's end is said for a day, whichever host saw it, and holds nothing", async (t) => {

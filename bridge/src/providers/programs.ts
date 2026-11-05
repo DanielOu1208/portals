@@ -21,7 +21,7 @@ import { minimumOpenCodeVersion, opencodeProgram, testedOpenCodeVersion } from "
 import { minimumPiVersion, piVersion, testedPiVersions } from "./pi/options.ts";
 import { compareVersions, programVersion, versionStanding, type VersionCheck, type VersionStanding } from "./program.ts";
 import { claudeChannel, LatestReleases, type LatestOptions, type LatestSource } from "./programLatest.ts";
-import { holdsLock, latestJob, provedSame, readJob, standing, type UpdateJob } from "./programUpdateLock.ts";
+import { fileOf, holdsLock, latestJob, provedSame, readJob, standing, type UpdateJob } from "./programUpdateLock.ts";
 import { redacted } from "../push/notifier.ts";
 import type { Provider } from "./types.ts";
 
@@ -286,6 +286,8 @@ export interface ProgramUpdate {
   tail?: string;
   /** Running with nothing to hold it to its time, its own process having gone. */
   unattended?: boolean;
+  /** Its record cannot be read, or it is past its time with nothing to prove what is left is its own: the file a person may remove, sure it is not running. */
+  cannotTellFile?: string;
 }
 
 /** One program as `programs.list` says it. */
@@ -360,6 +362,7 @@ interface FollowedJob {
   id: number;
   over: boolean;
   unattended: boolean;
+  cannotTell?: boolean;
   ending: Promise<void>;
   to?: string | null;
   tail?: string;
@@ -393,7 +396,9 @@ function lastBytes(file: string): string {
       readSync(fd, buffer, 0, length, size - length);
       const text = buffer.toString("utf8");
       // Not a line cut through, which could leave a credential without what says it is one.
-      return length < size ? text.slice(text.indexOf("\n") + 1) : text;
+      if (length === size) return text;
+      const firstLineEnds = text.indexOf("\n");
+      return firstLineEnds < 0 ? "" : text.slice(firstLineEnds + 1);
     } finally {
       closeSync(fd);
     }
@@ -468,7 +473,7 @@ export class AgentPrograms {
     if (!spec) throw new ProgramRefused(`Portals does not know a program called ${id}.`);
     if (spec.onlyWhenOn && this.agentsOf(spec.id).length === 0) throw new ProgramRefused(`This host does not run ${spec.name}.`);
     const last = readJob(this.folder(), spec.id, latestJob(this.folder(), spec.id));
-    const isHeld = this.starting.get(spec.id)?.state === "running" || (last !== null && holdsLock(last));
+    const isHeld = this.starting.get(spec.id)?.state === "running" || last === "unreadable" || (last !== null && holdsLock(last));
     if (!isHeld) {
       const path = this.find(spec);
       if (!path) throw new ProgramRefused(`${spec.name} is not installed on this host.`);
@@ -552,37 +557,47 @@ export class AgentPrograms {
     const folder = this.folder();
     let wasUnderWay = false;
     let looked = 0;
-    for (let record = readJob(folder, spec.id, job.id); record && !record.ended; record = readJob(folder, spec.id, job.id)) {
-      if (Date.now() - looked >= lookEveryMs) {
+    for (let record = readJob(folder, spec.id, job.id); record === "unreadable" || (record && !record.ended); record = readJob(folder, spec.id, job.id)) {
+      if (record !== "unreadable" && Date.now() - looked >= lookEveryMs) {
         looked = Date.now();
         const now = standing(record);
         if (now === "gone") break;
         job.unattended = now === "unattended";
-        if (job.unattended && record.updater && Date.now() >= record.deadlineAt && provedSame(record.updater)) await endGroup(record.updater.pid);
+        job.cannotTell = false;
+        if (job.unattended && record.updater && Date.now() >= record.deadlineAt) {
+          if (provedSame(record.updater)) await endGroup(record.updater.pid);
+          else job.cannotTell = true;
+        }
       }
       wasUnderWay = true;
       await sleep(followEveryMs);
       if (this.closed) return;
     }
     job.unattended = false;
-    const ended = readJob(folder, spec.id, job.id)?.ended;
+    job.cannotTell = false;
+    const last = readJob(folder, spec.id, job.id);
+    const ended = last && last !== "unreadable" ? last.ended : undefined;
     const done = ended !== undefined && ended.code === 0 && !ended.timedOut;
     // Read afresh only for an update this host saw end: not again with each restart.
-    job.to = wasUnderWay || (ended !== undefined && ended.at >= this.startedAt) ? await this.readAgain(spec) : (await this.read(spec)).version;
+    job.to = wasUnderWay || (ended !== undefined && ended.at >= this.startedAt) ? await this.readAgain(spec, job.id) : (await this.read(spec)).version;
     if (!done) {
       const said = publishedLines(lastBytes(this.logOf(spec.id))).slice(-tailLines).join("\n");
       job.tail = said !== "" ? said : ended ? `It ended with code ${ended.code ?? "none"} and said nothing.` : "It stopped before it could say how it ended.";
     }
     job.over = true;
+    // Its file removed by hand: the same number may be a new job's.
+    if (last === null && this.followed.get(spec.id) === job) this.followed.delete(spec.id);
     log.info(done ? `updated ${spec.name}` : `could not update ${spec.name}`, { job: job.id, to: job.to, timedOut: ended?.timedOut, code: ended?.code });
   }
 
   /** The version after an update, which the provider's own check takes too, so `/status` and a thread's refusal go by it at once. */
-  private async readAgain(spec: ProgramSpec): Promise<string | null> {
+  private async readAgain(spec: ProgramSpec, job: number): Promise<string | null> {
     // A read begun before the update ended says what was there then.
     this.reading.delete(spec.id);
     const read = await this.readNow(spec, true);
     const { version } = read;
+    // A newer job has overtaken this read: what it says is older than what is there.
+    if (latestJob(this.folder(), spec.id) !== job) return version;
     this.reads.set(spec.id, read);
     for (const check of this.checksOf(spec.id)) check.updated(version, spec.takesEffect === "service_restart");
     return version;
@@ -613,10 +628,12 @@ export class AgentPrograms {
     if (kept && (Date.now() - kept.at < stands || this.isUpdating(spec.id))) return Promise.resolve(kept);
     const asking = this.reading.get(spec.id);
     if (asking) return asking;
+    const job = latestJob(this.folder(), spec.id);
     const reading: Promise<VersionRead> = this.readNow(spec).then((read) => {
-      // Not an answer that an update has overtaken (`readAgain`).
-      if (this.reading.get(spec.id) !== reading) return this.reads.get(spec.id) ?? read;
-      this.reading.delete(spec.id);
+      const isCurrent = this.reading.get(spec.id) === reading;
+      if (isCurrent) this.reading.delete(spec.id);
+      // Not an answer that an update has overtaken (`readAgain`), or a newer job since it began.
+      if (!isCurrent || latestJob(this.folder(), spec.id) !== job) return this.reads.get(spec.id) ?? read;
       this.reads.set(spec.id, read);
       // A program updated by itself or by hand: `/status` and a thread's refusal go by it too.
       if (read.path && !read.heard) for (const check of this.checksOf(spec.id)) check.installedIs(read.version);
@@ -698,12 +715,13 @@ export class AgentPrograms {
     this.starting.delete(spec.id);
     const record = readJob(folder, spec.id, latest);
     if (!record) return undefined;
+    if (record === "unreadable") return { state: "running", startedAt: 0, cannotTellFile: fileOf(folder, spec.id, latest) };
     void this.follow(spec, record.id);
     const job = this.followed.get(spec.id)!;
     const update: ProgramUpdate = { state: "running", startedAt: record.startedAt, from: record.from };
     if (!job.over) {
       const line = publishedLines(lastBytes(this.logOf(spec.id))).at(-1);
-      return { ...update, ...(line ? { line } : {}), ...(job.unattended ? { unattended: true } : {}) };
+      return { ...update, ...(line ? { line } : {}), ...(job.unattended ? { unattended: true } : {}), ...(job.cannotTell ? { cannotTellFile: fileOf(folder, spec.id, record.id) } : {}) };
     }
     const endedAt = record.ended?.at ?? record.deadlineAt;
     if (Date.now() - endedAt >= lastResultStandsMs) return undefined;
