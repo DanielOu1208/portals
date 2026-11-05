@@ -1,6 +1,6 @@
 {
   "name": "portals-host",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Runs Claude Code, Codex, Pi, Cursor, Droid, Hermes and OpenCode on your Mac or Linux computer for the Portals app.",
   "license": "MIT",
   "homepage": "https://portals.build",
