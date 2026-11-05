@@ -38,10 +38,10 @@ function slashNames(skills: readonly SkillInfo[]): Map<string, SkillInfo> {
   return named;
 }
 
-/** OpenCode's skills as the app's commands, but for a name `taken`, a command of OpenCode's or the bridge's, already offers. */
+/** OpenCode's skills as the app's commands, but for a name `taken`, in any case, by a command of OpenCode's or the bridge's. */
 export function skillCommands(skills: readonly SkillInfo[], taken: readonly string[]): AgentCommand[] {
   const named = slashNames(skills);
-  const seen = new Set(taken);
+  const seen = new Set(taken.map((name) => name.toLowerCase()));
   return skills.flatMap((skill): AgentCommand[] => {
     const name = typeof skill.name === "string" ? skill.name.toLowerCase() : "";
     if (named.get(name) !== skill || seen.has(name)) return [];
@@ -76,9 +76,10 @@ export async function submit(api: OpenCodeApi, id: string, directory: string, pr
     if (admission && !await admission.current("compact")) return;
     return api.compact(id, admission?.id);
   }
-  if (command && (await api.commands(directory)).some((entry) => entry.name === command[1])) {
+  const native = command ? commandNamed(await api.commands(directory), command[1]) : undefined;
+  if (command && native) {
     if (admission && !await admission.current("command")) return;
-    await api.command(id, command[1], command[2] ?? "", files);
+    await api.command(id, native.name, command[2] ?? "", files);
     return undefined;
   }
   // A skill is a message OpenCode runs with it, attached as its own input, as its own

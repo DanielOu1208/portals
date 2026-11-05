@@ -773,3 +773,27 @@ test("a command sent from the app does not wait for OpenCode's skills, and a ski
   // Listed in time, a name that is neither is still no command.
   await assert.rejects(client.call("command.dispatch", { session_id: thread, name: "nosuch" }), (error: any) => error.code === -32602);
 });
+
+test("a command named with capitals keeps its name from a skill that differs only in case, and runs by its own", async () => {
+  const thread = await createThread();
+  const [commands, skills] = [opencode.commands, opencode.skills];
+  opencode.commands = [...commands, { name: "Deploy", description: "Deploy Dana's site" }];
+  opencode.skills = [...skills, { id: "deploy-notes", name: "DEPLOY", description: "Other instructions", path: "/skills/deploy/SKILL.md" }];
+  try {
+    const catalog = await client.call("commands.catalog", { session_id: thread, profile: "opencode" });
+    assert.equal(Object.hasOwn(catalog.skills, "/deploy"), false);
+    // The app sends what is typed after the slash lower cased.
+    const dispatched = await client.call("command.dispatch", { session_id: thread, name: "deploy", arg: "now" });
+    assert.deepEqual(dispatched, { type: "send", message: "/deploy now" });
+    opencode.queueTurn(thread, "plain");
+    const start = client.frames.length;
+    await client.call("prompt.submit", { session_id: thread, text: dispatched.message, profile: "opencode" });
+    await completed(thread, start);
+    const ran = opencode.callsOf("POST", new RegExp(`^/api/session/${thread}/command$`));
+    assert.deepEqual(ran.map((call) => [call.body.name, call.body.text]), [["Deploy", "now"]]);
+    assert.equal(opencode.callsOf("POST", new RegExp(`^/api/session/${thread}/prompt$`)).length, 0);
+  } finally {
+    opencode.commands = commands;
+    opencode.skills = skills;
+  }
+});
