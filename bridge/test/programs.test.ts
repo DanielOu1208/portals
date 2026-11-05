@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { test, type TestContext } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import { bridgeFeatures } from "../src/gateway/features.ts";
@@ -836,4 +836,300 @@ test("asked directly, as a person typing /usage asks, a Hermes bot asks Hermes e
   assert.equal((await provider.usage(undefined)).limits[0].percent, 10);
   assert.equal((await provider.usage("thread")).limits[0].percent, 90);
   assert.equal(asks(), 2);
+});
+
+// MARK: The update's lock
+
+/** A stand-in Claude whose every update notes its pid and its parent's, then runs `body`: by default, waits for its own `release-<n>`. */
+function lockFixture(t: TestContext, { versionBody, body }: { versionBody?: (home: string) => string; body?: (home: string, file: string) => string } = {}) {
+  const home = scratch(t);
+  const state = join(home, "state");
+  const file = join(home, ".local/share/claude/versions/2.1.300");
+  const pidFile = join(home, "pids");
+  const parentFile = join(home, "parents");
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(`${file}.version`, "2.1.300\n");
+  const waits = `while [ ! -e "${home}/release-$count" ] && [ -d "${home}" ]; do sleep 0.03; done\nprintf '2.1.320\\n' > "${file}.version"\ntouch "${home}/first-done"`;
+  writeFileSync(file, `#!/bin/sh\nif [ "$1" = "--version" ]; then\n${versionBody?.(home) ?? ""}\ncat "${file}.version"; exit 0; fi\necho $$ >> "${pidFile}"\necho $PPID >> "${parentFile}"\ncount=$(wc -l < "${pidFile}" | tr -d ' ')\n${body ? body(home, file) : waits}\n`);
+  chmodSync(file, 0o755);
+  const lines = (path: string) => (existsSync(path) ? readFileSync(path, "utf8").split("\n").filter(Boolean).map(Number) : []);
+  const managers: AgentPrograms[] = [];
+  t.after(() => managers.forEach((manager) => manager.close()));
+  return {
+    home,
+    state,
+    file,
+    pids: () => lines(pidFile),
+    parents: () => lines(parentFile),
+    release: (count: number) => writeFileSync(join(home, `release-${count}`), ""),
+    manager(extra: Partial<ProgramsOptions> & { startMs?: number } = {}) {
+      const manager = new AgentPrograms({
+        config: { ...defaults, ...nowhere, updates: { check: false }, claude: { ...defaults.claude, path: file } } as never,
+        paths: { state, programs: join(state, "programs.json") }, providers: new Map(), home, env: { HOME: home, PATH: "/usr/bin:/bin" }, updateMs: 60_000, ...extra,
+      });
+      managers.push(manager);
+      return manager;
+    },
+  };
+}
+
+const claudeOf = async (programs: AgentPrograms) => (await programs.list()).find(({ id }) => id === "claude")!;
+
+test("a slow observer's end cannot free a successor's lock: no third updater runs beside the second", async (t) => {
+  // Its version read after the update, held open by the stand-in until it is let go.
+  const lock = lockFixture(t, { versionBody: (home) => `if [ "$SLOW_VERSION" = "1" ] && [ -e "${home}/first-done" ]; then touch "${home}/version-blocked"; while [ ! -e "${home}/version-release" ] && [ -d "${home}" ]; do sleep 0.03; done; fi` });
+  const slow = lock.manager({ env: { HOME: lock.home, PATH: "/usr/bin:/bin", SLOW_VERSION: "1" } });
+  await slow.update("claude");
+  assert.ok(await until(() => lock.pids().length === 1, 8000));
+
+  const other = lock.manager();
+  await other.list();
+  lock.release(1);
+  assert.ok(await until(() => existsSync(join(lock.home, "version-blocked")), 8000));
+  await other.settled("claude");
+
+  // A successor starts while the slow observer is still at its read of the first update's end.
+  const next = lock.manager();
+  await next.update("claude");
+  assert.ok(await until(() => lock.pids().length === 2, 8000));
+
+  writeFileSync(join(lock.home, "version-release"), "");
+  await slow.settled("claude");
+
+  const third = lock.manager();
+  assert.equal((await third.update("claude")).update?.state, "running");
+  await sleep(600);
+  assert.equal(lock.pids().length, 2, "a third updater ran beside the second");
+
+  lock.release(2);
+  await next.settled("claude");
+  assert.equal((await claudeOf(next)).update?.state, "done");
+});
+
+test("a supervisor held up before it starts cannot run or overwrite anything once it resumes", async (t) => {
+  const lock = lockFixture(t);
+  const paused = join(lock.home, "paused");
+  const preload = join(lock.home, "pause-once.mjs");
+  writeFileSync(preload, `import { existsSync, writeFileSync } from "node:fs";\nif (!existsSync(${JSON.stringify(paused)})) { writeFileSync(${JSON.stringify(paused)}, String(process.pid)); process.kill(process.pid, "SIGSTOP"); }\n`);
+  const first = lock.manager({ env: { HOME: lock.home, PATH: "/usr/bin:/bin", NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` }, startMs: 400 });
+  await first.update("claude");
+  assert.ok(await until(() => existsSync(paused), 8000));
+  const held = Number(readFileSync(paused, "utf8"));
+  t.after(() => { try { process.kill(held, "SIGKILL"); } catch { /* gone */ } });
+  await first.settled("claude");
+  assert.equal((await claudeOf(first)).update?.state, "failed");
+
+  const second = lock.manager();
+  await second.update("claude");
+  assert.ok(await until(() => lock.pids().length === 1, 8000));
+
+  process.kill(held, "SIGCONT");
+  assert.ok(await until(() => !alive(held), 8000), "the resumed supervisor went on running");
+  await sleep(300);
+  assert.equal(lock.pids().length, 1, "the resumed supervisor ran an updater beside the second");
+  assert.equal((await claudeOf(second)).update?.state, "running");
+
+  lock.release(1);
+  await second.settled("claude");
+  assert.equal((await claudeOf(second)).update?.state, "done");
+});
+
+test("a supervisor killed with its updater running: the lock stays held, the host says so, and past its time ends what it can prove is the same process", async (t) => {
+  const lock = lockFixture(t);
+  const programs = lock.manager({ updateMs: 1500 });
+  await programs.update("claude");
+  assert.ok(await until(() => lock.pids().length === 1, 8000));
+  const [updater] = lock.pids();
+  const [supervisor] = lock.parents();
+  process.kill(supervisor, "SIGKILL");
+  assert.ok(await until(() => !alive(supervisor), 8000));
+
+  // Said at the host's next look.
+  let during = await claudeOf(programs);
+  for (let tries = 0; tries < 40 && !during.update?.unattended; tries++) {
+    await sleep(50);
+    during = await claudeOf(programs);
+  }
+  assert.equal(during.update?.state, "running");
+  assert.equal(during.update?.unattended, true);
+  assert.equal((await programs.update("claude")).update?.state, "running");
+  await sleep(200);
+  assert.equal(lock.pids().length, 1, "a second updater ran beside the first");
+
+  assert.ok(await until(() => !alive(updater), 10_000), "the updater outlived its time limit");
+  await programs.settled("claude");
+  assert.equal((await claudeOf(programs)).update?.state, "failed");
+
+  // Free now, and with nothing of the first left to overlap.
+  const next = lock.manager();
+  await next.update("claude");
+  assert.ok(await until(() => lock.pids().length === 2, 8000));
+  assert.equal(alive(updater), false);
+  lock.release(2);
+  await next.settled("claude");
+});
+
+test("a killed supervisor's group that cannot be proved the same is not signalled: the lock stays until it has gone, however long past its time", async (t) => {
+  const lock = lockFixture(t, {
+    // The updater leaves something behind and ends by itself, so its own process can no longer prove whose the group is.
+    body: (home) => `(while [ ! -e "${home}/stop" ] && [ -d "${home}" ]; do sleep 0.03; done) &\necho $! > "${home}/descendant"\nwhile [ ! -e "${home}/leader-go" ] && [ -d "${home}" ]; do sleep 0.03; done\nexit 0`,
+  });
+  const programs = lock.manager({ updateMs: 300 });
+  await programs.update("claude");
+  assert.ok(await until(() => existsSync(join(lock.home, "descendant")), 8000));
+  const descendant = Number(readFileSync(join(lock.home, "descendant"), "utf8"));
+  const [supervisor] = lock.parents();
+  process.kill(supervisor, "SIGKILL");
+  assert.ok(await until(() => !alive(supervisor), 8000));
+  writeFileSync(join(lock.home, "leader-go"), "");
+  const [updater] = lock.pids();
+  assert.ok(await until(() => !alive(updater), 8000));
+
+  // Well past its time.
+  await sleep(2500);
+  assert.equal(alive(descendant), true, "a group not proved the same was signalled");
+  const during = await claudeOf(programs);
+  assert.equal(during.update?.state, "running");
+  assert.equal(during.update?.unattended, true);
+  await programs.update("claude");
+  await sleep(200);
+  assert.equal(lock.pids().length, 1);
+
+  writeFileSync(join(lock.home, "stop"), "");
+  assert.ok(await until(() => !alive(descendant), 8000));
+  await programs.settled("claude");
+  assert.equal((await claudeOf(programs)).update?.state, "failed");
+});
+
+test("nothing of an update runs until its record names it: a record that cannot be written ends it before the updater starts", async (t) => {
+  const lock = lockFixture(t);
+  const preload = join(lock.home, "cannot-publish.mjs");
+  writeFileSync(preload, `import fs from "node:fs";\nimport { syncBuiltinESMExports } from "node:module";\nfs.renameSync = () => { const error = new Error("EACCES: synthetic"); error.code = "EACCES"; throw error; };\nsyncBuiltinESMExports();\n`);
+  const failing = lock.manager({ env: { HOME: lock.home, PATH: "/usr/bin:/bin", NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` }, startMs: 3000 });
+  await failing.update("claude");
+  await failing.settled("claude");
+  await sleep(400);
+  assert.equal(lock.pids().length, 0, "the updater escaped a record that could not be written");
+  assert.equal((await claudeOf(failing)).update?.state, "failed");
+
+  // And nothing is left holding the lock.
+  const next = lock.manager();
+  await next.update("claude");
+  assert.ok(await until(() => lock.pids().length === 1, 8000));
+  lock.release(1);
+  await next.settled("claude");
+  assert.equal((await claudeOf(next)).update?.state, "done");
+});
+
+test("two hosts' asking at once runs one updater", async (t) => {
+  const lock = lockFixture(t);
+  const one = lock.manager();
+  const two = lock.manager();
+  await Promise.all([one.update("claude"), two.update("claude")]);
+  assert.ok(await until(() => lock.pids().length >= 1, 8000));
+  await sleep(600);
+  assert.equal(lock.pids().length, 1);
+  lock.release(1);
+  await Promise.all([one.settled("claude"), two.settled("claude")]);
+  assert.equal((await claudeOf(one)).update?.state, "done");
+  assert.equal((await claudeOf(two)).update?.state, "done");
+});
+
+test("a record that cannot be read holds nothing", async (t) => {
+  const lock = lockFixture(t);
+  const programs = lock.manager();
+  mkdirSync(join(lock.state, "program-updates"), { recursive: true });
+  for (const name of ["claude.json", "claude.1.json"]) writeFileSync(join(lock.state, "program-updates", name), "not json");
+  await programs.update("claude");
+  assert.ok(await until(() => lock.pids().length === 1, 8000));
+  lock.release(1);
+  await programs.settled("claude");
+  assert.equal((await claudeOf(programs)).update?.state, "done");
+});
+
+test("the last update's end is said for a day, whichever host saw it, and holds nothing", async (t) => {
+  const lock = lockFixture(t);
+  const folder = join(lock.state, "program-updates");
+  mkdirSync(folder, { recursive: true });
+  const ended = (at: number) => JSON.stringify({ id: 4, startedAt: at - 1000, deadlineAt: at + 1000, from: "2.1.200", supervisor: { pid: 999_999, start: "gone", group: 999_999 }, ended: { at, code: 3, timedOut: false } });
+  writeFileSync(join(folder, "claude.4.json"), ended(Date.now() - 60_000));
+  const recent = lock.manager();
+  await recent.list();
+  await recent.settled("claude");
+  assert.equal((await claudeOf(recent)).update?.state, "failed");
+
+  writeFileSync(join(folder, "claude.4.json"), ended(Date.now() - 25 * 60 * 60_000));
+  const old = lock.manager();
+  await old.list();
+  await old.settled("claude");
+  assert.equal((await claudeOf(old)).update, undefined);
+
+  await old.update("claude");
+  assert.ok(await until(() => lock.pids().length === 1, 8000));
+  lock.release(1);
+  await old.settled("claude");
+  assert.equal((await claudeOf(old)).update?.state, "done");
+});
+
+// MARK: Formatting cannot hide a credential
+
+test("what an updater prints is stripped of terminal formatting before it is masked, running and at its end", async (t) => {
+  const home = scratch(t);
+  const release = join(home, "release");
+  const bearer = "abcdefghijklmnopqrstuvwxyz0123456789";
+  const path = standIn(join(home, ".local/share/claude/versions/2.1.300"), "2.1.300\n", [
+    `printf '\\033[31mAuthorization\\033[0m: Bearer ${bearer}\\n'`,
+    `while [ ! -e "${release}" ] && [ -d "${home}" ]; do sleep 0.05; done`,
+    `printf 'PORTALS_PASS\\033[1mWORD\\033[0m=synthetic-password-value\\n'`,
+    `printf '\\033]8;;https://example.invalid\\007Authorization\\033]8;;\\007: Bearer ${bearer}\\n'`,
+    `printf 'Author\\010ization: Bearer ${bearer}\\n'`,
+    `exit 2`,
+  ].join("\n"));
+  const programs = new AgentPrograms({ config: { ...defaults, ...nowhere, updates: { check: false }, claude: { ...defaults.claude, path } } as never, paths: { state: join(home, "state"), programs: join(home, "state/programs.json") }, providers: new Map(), home, env: { PATH: "/usr/bin:/bin" }, updateMs: 60_000 });
+  t.after(() => programs.close());
+  await programs.update("claude");
+  assert.ok(await until(() => existsSync(join(home, "state/program-updates/claude.log")) && readFileSync(join(home, "state/program-updates/claude.log"), "utf8").includes("Bearer"), 8000));
+  const running = await claudeOf(programs);
+  assert.equal(running.update?.state, "running");
+  assert.ok(!JSON.stringify(running.update).includes(bearer), JSON.stringify(running.update));
+
+  writeFileSync(release, "");
+  await programs.settled("claude");
+  const after = await claudeOf(programs);
+  assert.equal(after.update?.state, "failed");
+  for (const secret of [bearer, "synthetic-password-value"]) assert.ok(!(after.update?.tail ?? "").includes(secret), after.update?.tail);
+  assert.match(after.update?.tail ?? "", /Authorization: Bearer/);
+});
+
+// MARK: Hermes's version, the host's own read counted
+
+test("the host's own read of Hermes's version at start counts in the hourly rule, in flight or done", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_800_000_000_000 });
+  const home = scratch(t);
+  const hermes = countingHermes(home);
+  const before = process.env.HERMES_GATEWAY_LOCK_DIR;
+  process.env.HERMES_GATEWAY_LOCK_DIR = join(home, "locks");
+  t.after(() => {
+    if (before === undefined) delete process.env.HERMES_GATEWAY_LOCK_DIR;
+    else process.env.HERMES_GATEWAY_LOCK_DIR = before;
+  });
+  const config = { ...defaults, ...nowhere, providers: { ...defaults.providers, claude: false, codex: false, cursor: false, droid: false, hermes: true }, hermes: { path: hermes.path, start: false }, updates: { check: true } } as never;
+  const providers = makeProviders(config, pathsFor(join(home, "bridge")));
+  t.after(async () => { for (const provider of new Set(providers.values())) await provider.close?.(); });
+  startProviders(providers);
+  const programs = new AgentPrograms({ config, paths: { state: join(home, "state"), programs: join(home, "state/programs.json") }, providers, home, env: { PATH: "/usr/bin:/bin" }, latest: { check: false } });
+  t.after(() => programs.close());
+
+  // Asked while the host's own is still under way.
+  const first = (await programs.list()).find(({ id }) => id === "hermes")!;
+  assert.equal(first.version, "0.22.5");
+  assert.equal(hermes.runs(), 1);
+  await programs.list();
+  assert.equal(hermes.runs(), 1);
+
+  t.mock.timers.tick(61 * 60_000);
+  await programs.list();
+  assert.equal(hermes.runs(), 2);
+  await programs.list();
+  assert.equal(hermes.runs(), 2);
 });

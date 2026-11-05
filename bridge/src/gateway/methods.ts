@@ -232,6 +232,7 @@ function programFields(program: ProgramReport): Record<string, unknown> {
             ...(update.timedOut ? { timed_out: true } : {}),
             ...(update.line ? { line: update.line } : {}),
             ...(update.tail ? { tail: update.tail } : {}),
+            ...(update.unattended ? { unattended: true } : {}),
           },
         }
       : {}),
@@ -650,7 +651,7 @@ export const methods: Record<string, MethodSpec> = {
 
   "programs.list": {
     summary:
-      "The programs of the agents on this computer (feature agent_programs): for each that is installed or has an agent here, its id, name, installed, version (null when it did not say), standing (tested, newer, untested, too old, missing), tested, minimum, how it was installed (own, npm, homebrew, app, other, null when it is not), can_update, command (what updates it, or what to run on this computer where the host cannot), latest and update_available where that can be found, agents (the agents it runs), takes_effect (when threads at work move to a new release: next_start, service_restart, gateway_restart), running_version (what a service that stays up runs, where that is not version), and update, the last update known, one under way or that ended while the host was down taken up from its record: state running, done or failed, started_at, ended_at, from, to, timed_out, line (the last thing it printed, while it runs), tail (the end of what it printed, once it has failed). A version is read at most once a minute, Hermes's at most once an hour and with updates.check false only after an update someone asked for, and the latest releases are asked for at most every eight hours and only as this is asked.",
+      "The programs of the agents on this computer (feature agent_programs): for each that is installed or has an agent here, its id, name, installed, version (null when it did not say), standing (tested, newer, untested, too old, missing), tested, minimum, how it was installed (own, npm, homebrew, app, other, null when it is not), can_update, command (what updates it, or what to run on this computer where the host cannot), latest and update_available where that can be found, agents (the agents it runs), takes_effect (when threads at work move to a new release: next_start, service_restart, gateway_restart), running_version (what a service that stays up runs, where that is not version), and update, the last update known, one under way or that ended while the host was down taken up from its record: state running, done or failed, started_at, ended_at, from, to, timed_out, line (the last thing it printed, while it runs), tail (the end of what it printed, once it has failed), unattended (running with nothing to hold it to its time, its own process having gone). A version is read at most once a minute, Hermes's at most once an hour, the host's own read at its start included, and with updates.check false only after an update someone asked for, and the latest releases are asked for at most every eight hours and only as this is asked.",
     params: { profile: "string" },
     async handle(_params, { gateway }) {
       return { programs: (await gateway.programs.list()).map(programFields) };

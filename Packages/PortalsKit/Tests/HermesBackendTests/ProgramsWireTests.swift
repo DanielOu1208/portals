@@ -40,7 +40,7 @@ import Testing
          {"id":"droid","name":"Droid","installed":false,"version":null,"standing":"missing","tested":["1.3.0"],"how":null,"can_update":false,"agents":["droid"],"takes_effect":"next_start",
           "update":{"state":"failed","started_at":1800000000000,"timed_out":true,"tail":"npm ERR! code E404"}},
          {"id":"hermes","name":"Hermes","installed":true,"version":"0.22.5","standing":"tested","tested":["0.22.5"],"how":"own","can_update":true,"command":"hermes update","agents":["atlas","juno"],"takes_effect":"gateway_restart",
-          "update":{"state":"running","started_at":1800000000000,"line":"restarting"}}
+          "update":{"state":"running","started_at":1800000000000,"line":"restarting","unattended":true}}
         ]}
         """#
         let programs = try decode(json, as: BridgeWire.ProgramsListResult.self).programs.map(\.program)
@@ -62,6 +62,8 @@ import Testing
         #expect(programs[3].takesEffect == .botsRestart)
         #expect(programs[3].state == .updating)
         #expect(programs[3].update?.line == "restarting")
+        #expect(programs[3].update?.isUnattended == true)
+        #expect(programs[0].update?.isUnattended == false)
         #expect(programs[3].agents == ["atlas", "juno"])
     }
 

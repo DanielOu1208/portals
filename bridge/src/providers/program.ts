@@ -105,6 +105,10 @@ export class VersionCheck {
   private readonly said = new Set<string | null>();
   private installed: string | null | undefined;
   private running: string | undefined;
+  /** When `--version` last said, in milliseconds since 1970; 0 before it has. */
+  installedAt = 0;
+  /** A read of `--version` under way, for whoever would otherwise start another. */
+  reading: Promise<unknown> | undefined;
 
   constructor(policy: VersionPolicy) {
     this.policy = policy;
@@ -113,6 +117,7 @@ export class VersionCheck {
   /** What `--version` gave: the release, or null when the program did not run. */
   installedIs(version: string | null): void {
     this.installed = version;
+    this.installedAt = Date.now();
     this.report(version, false);
   }
 

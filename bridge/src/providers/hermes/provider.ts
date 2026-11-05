@@ -222,7 +222,12 @@ export class HermesHost {
     if (this.started) return;
     this.started = true;
     void this.client.start();
-    if (this.options.checkVersion !== false) void hermesVersion(this.options.settings.path, this.options.env).then((version) => this.version.installedIs(version));
+    if (this.options.checkVersion !== false) {
+      this.version.reading = hermesVersion(this.options.settings.path, this.options.env).then((version) => {
+        this.version.installedIs(version);
+        this.version.reading = undefined;
+      });
+    }
     void this.refreshProfiles();
   }
 

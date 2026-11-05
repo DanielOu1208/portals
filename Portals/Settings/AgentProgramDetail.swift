@@ -136,7 +136,7 @@ struct AgentProgramDetail: View {
             if program.isUpdating {
                 HStack(spacing: Theme.grid) {
                     ProgressView().controlSize(.small)
-                    Text("Updating…")
+                    Text(program.stateWords ?? "Updating…")
                 }
                 .listRowOnMac()
                 .accessibilityIdentifier("program-updating")

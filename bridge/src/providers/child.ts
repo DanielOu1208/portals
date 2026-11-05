@@ -1,6 +1,8 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { readFileSync } from "node:fs";
 import type { Readable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
+import { counters } from "../counters.ts";
 import { wellFormedJSON } from "../json.ts";
 import { log } from "../log.ts";
 import { redacted } from "../push/notifier.ts";
@@ -215,6 +217,28 @@ export class JsonChild {
     this.options.listener.exited({ code, signal, error: failure, asked: this.asked, lastWords: this.lastWords, reason });
     this.gone.resolve();
   }
+}
+
+/** Who a process is: its number and when it started, which together are never another's, and its group. */
+export interface ProcessIdentity { pid: number; start: string; group: number }
+
+/** The process `pid` as the system says it now; null for none, a zombie, or one that cannot be read. */
+export function processOf(pid: number, timeout = 5000): ProcessIdentity | null {
+  try {
+    if (process.platform === "linux") {
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+      if (fields[0] === "Z") return null;
+      const boot = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+      return { pid, group: Number(fields[2]), start: `proc:${boot}:${fields[19]}` };
+    }
+    if (counters.on) counters.spawned("ps");
+    const output = execFileSync("/bin/ps", ["-o", "stat=,pgid=,lstart=", "-p", String(pid)], {
+      encoding: "utf8", timeout, stdio: ["ignore", "pipe", "ignore"], env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
+    });
+    const match = /^\s*(\S+)\s+(\d+)\s+(.+?)\s*$/.exec(output);
+    return match && !match[1].startsWith("Z") ? { pid, group: Number(match[2]), start: `ps-utc:${match[3]}` } : null;
+  } catch { return null; }
 }
 
 /** Whether any process of the group `pid` heads is left. */

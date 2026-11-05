@@ -252,6 +252,8 @@ import Testing
         #expect(program.stateLine == "0.166.0")
         program.update = .init(state: .running, startedAt: .now)
         #expect(program.stateLine == "0.166.0 · Updating…")
+        program.update = .init(state: .running, startedAt: .now, isUnattended: true)
+        #expect(program.stateLine == "0.166.0 · Still running on the host")
         program.update = nil
         program.isInstalled = false
         program.version = nil

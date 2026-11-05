@@ -32,7 +32,7 @@ import { ensureDirectory, readJSON, writeJSON } from "./store/jsonFile.ts";
 //   state/hermes.json   Hermes's profiles, as it last listed them
 //   state/update.json   when npm's registry was last asked for the latest portals-host, and what it said (src/updates.ts)
 //   state/programs.json when the latest releases of the agents' programs were last asked for, and what was said (src/providers/programLatest.ts)
-//   state/program-updates/ the record of each update of an agent's program under way, its lock, and what the last one printed (src/providers/programs.ts)
+//   state/program-updates/ the record of each program's latest update, which is its lock, and what it printed (src/providers/programUpdateLock.ts)
 //   hermes-serve.log    what a `hermes serve` the bridge started printed
 //   opencode-serve.log  what an `opencode serve` of the bridge's own printed
 //   counters.log        a line of counts a minute while `counters` is on (src/counters.ts); counters.log.1 is the file before it

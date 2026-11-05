@@ -43,8 +43,10 @@ public struct AgentProgram: Hashable, Sendable, Identifiable {
         public var line: String?
         /// Of a failed one, the end of what it printed.
         public var tail: String?
+        /// Running with nothing to hold it to its time, what looked after it on the host having gone.
+        public var isUnattended: Bool
 
-        public init(state: State, startedAt: Date, endedAt: Date? = nil, from: String? = nil, to: String? = nil, timedOut: Bool = false, line: String? = nil, tail: String? = nil) {
+        public init(state: State, startedAt: Date, endedAt: Date? = nil, from: String? = nil, to: String? = nil, timedOut: Bool = false, line: String? = nil, tail: String? = nil, isUnattended: Bool = false) {
             self.state = state
             self.startedAt = startedAt
             self.endedAt = endedAt
@@ -53,6 +55,7 @@ public struct AgentProgram: Hashable, Sendable, Identifiable {
             self.timedOut = timedOut
             self.line = line
             self.tail = tail
+            self.isUnattended = isUnattended
         }
     }
 
@@ -133,7 +136,7 @@ public struct AgentProgram: Hashable, Sendable, Identifiable {
     public var stateWords: String? {
         switch state {
         case .notFound: "Not found on this host"
-        case .updating: "Updating…"
+        case .updating: update?.isUnattended == true ? "Still running on the host" : "Updating…"
         case .updateFailed: "Update failed"
         case let .tooOld(needs): needs.map { "Older than Portals needs (\($0))" } ?? "Older than Portals needs"
         case let .updateAvailable(latest): "Update available: \(latest)"
