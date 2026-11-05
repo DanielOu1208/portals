@@ -101,19 +101,22 @@ export class OpenCodeApi {
     return data(await this.client.command.list({ location: { directory } })) ?? [];
   }
 
-  /** The skills OpenCode would use in a folder: its own, the user's, and a plugin's. */
-  async skills(directory: string, signal?: AbortSignal, wait = skillsDeadline): Promise<SkillInfo[]> {
+  /**
+   * The skills OpenCode would use in a folder: its own, the user's, and a plugin's. Not
+   * `complete` when OpenCode did not finish listing them in `wait`.
+   */
+  async skills(directory: string, signal?: AbortSignal, wait = skillsDeadline): Promise<{ skills: SkillInfo[]; complete: boolean }> {
     // OpenCode reads a folder's skills in the background, so the first answers after it
     // starts are empty or partial (0 → 2 → 153 over ~400 ms on 2.2.5, measured), and it
     // says nothing when it is done. So the first time a folder is asked, keep asking for
     // `skillsSettle`, then until two answers name the same skills; later, one answer will do.
     // No more than `wait` in all: then the list is the last answer, or none, and the
-    // folder is asked again next time.
+    // folder is asked again on the next request for it.
     const deadline = AbortSignal.timeout(wait);
     const options = { signal: signal ? AbortSignal.any([signal, deadline]) : deadline };
     let skills: SkillInfo[] = [];
     try {
-      if (this.skillsRead.has(directory)) return await this.skillList(directory, options);
+      if (this.skillsRead.has(directory)) return { skills: await this.skillList(directory, options), complete: true };
       const started = Date.now();
       let previous: string | undefined;
       for (;;) {
@@ -126,10 +129,10 @@ export class OpenCodeApi {
     } catch (error) {
       if (signal?.aborted || !deadline.aborted) throw error;
       log.debug("OpenCode did not list its skills in time", { directory });
-      return skills;
+      return { skills, complete: false };
     }
     this.skillsRead.add(directory);
-    return skills;
+    return { skills, complete: true };
   }
 
   private async skillList(directory: string, options: { signal: AbortSignal }): Promise<SkillInfo[]> {

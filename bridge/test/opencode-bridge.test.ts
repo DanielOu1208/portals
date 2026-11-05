@@ -745,3 +745,31 @@ test("a skill message's own turn that OpenCode fails still completes, and leaves
   await client.from(own, (frame) => isEvent(frame, "queue.changed", thread) && frame.params.payload.queued.length === 0);
   assert.deepEqual((await client.call("session.resume", { session_id: thread })).queued ?? [], []);
 });
+
+test("a command sent from the app does not wait for OpenCode's skills, and a skill waits as a message does", async () => {
+  const thread = await createThread();
+  const original = opencode.server.listeners("request")[0] as (...args: any[]) => void;
+  const held: { destroyed: boolean; end(): void }[] = [];
+  opencode.server.removeAllListeners("request");
+  opencode.server.on("request", (req, res) => {
+    if (req.method === "GET" && req.url?.startsWith("/api/skill")) held.push(res);
+    else original(req, res);
+  });
+  try {
+    let began = Date.now();
+    assert.deepEqual(await client.call("command.dispatch", { session_id: thread, name: "init", arg: "this project" }), { type: "send", message: "/init this project" });
+    assert.ok(Date.now() - began < 1000);
+    assert.equal(held.length, 0, "OpenCode's own command needs no skills");
+    // A skill OpenCode does not list in time goes as typed, after the 2 s a message waits.
+    began = Date.now();
+    assert.deepEqual(await client.call("command.dispatch", { session_id: thread, name: "graphify", arg: "the port" }), { type: "send", message: "/graphify the port" });
+    assert.ok(Date.now() - began < 3000);
+    assert.ok(held.length > 0);
+  } finally {
+    opencode.server.removeAllListeners("request");
+    opencode.server.on("request", original);
+    for (const res of held) if (!res.destroyed) res.end();
+  }
+  // Listed in time, a name that is neither is still no command.
+  await assert.rejects(client.call("command.dispatch", { session_id: thread, name: "nosuch" }), (error: any) => error.code === -32602);
+});
