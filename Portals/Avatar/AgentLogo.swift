@@ -171,9 +171,16 @@ struct AgentIcon: View {
                 .accessibilityHidden(true)
         } else {
             // An avatar's square keeps room round its body, so it is drawn larger than its room (`RowAvatar`).
-            AgentAvatarView(state: .idle, frozenAt: 1, size: size * 1.36, style: style)
+            AgentAvatarView(state: .idle, frozenAt: 1, size: size * 1.36, style: avatarStyle)
                 .frame(width: size, height: size)
         }
+    }
+
+    /// The avatar without its maker's logo badge: the row already names its program.
+    private var avatarStyle: AgentAvatarStyle {
+        var style = style
+        style.logo = nil
+        return style
     }
 }
 
