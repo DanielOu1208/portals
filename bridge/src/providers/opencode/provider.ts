@@ -194,6 +194,7 @@ export class OpenCodeProvider implements Provider {
     const folder = thread?.cwd ?? this.options.settings.folder;
     // A menu reads the skills first: just after OpenCode starts, its command list is empty
     // for a moment too (~150 ms on 2.2.5), and a folder's first skill read waits that out.
+    // When that read fails or is quick, `menuCommands` waits it out by itself.
     // Skills come from OpenCode's own list; a menu that cannot have them is still a menu.
     let skills: SkillInfo[] = [];
     if (name === undefined) {
@@ -203,7 +204,7 @@ export class OpenCodeProvider implements Provider {
         log.debug("OpenCode did not list its skills", { error: (error as Error).message });
       }
     }
-    const commands = commandCatalog(await api.commands(folder), async (argument) => {
+    const commands = commandCatalog(await (name === undefined ? api.menuCommands(folder) : api.commands(folder)), async (argument) => {
       const session = thread && this.sessions.get(thread.id);
       if (!session) throw new Error("Open this OpenCode thread before selecting its agent.");
       return session.selectAgent(argument);

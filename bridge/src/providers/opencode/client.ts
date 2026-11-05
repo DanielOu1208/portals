@@ -36,12 +36,16 @@ const maxPages = 100;
 const skillsSettle = 1000;
 /** How long a menu waits for a folder's skills at most: a freshly started OpenCode can take seconds to answer. */
 const skillsDeadline = 10_000;
+/** How long a folder's first menu asks again for OpenCode's commands while it lists none. */
+const commandsSettle = 1000;
 
 /** The calls the bridge makes, each in the shape the provider reads. */
 export class OpenCodeApi {
   private readonly client: Client;
   /** The folders whose skills OpenCode has finished reading. */
   private readonly skillsRead = new Set<string>();
+  /** The folders whose commands a menu has read. */
+  private readonly commandsRead = new Set<string>();
 
   constructor(client: Client) {
     this.client = client;
@@ -99,6 +103,22 @@ export class OpenCodeApi {
 
   async commands(directory: string): Promise<CommandInfo[]> {
     return data(await this.client.command.list({ location: { directory } })) ?? [];
+  }
+
+  /**
+   * OpenCode's commands for a menu. Just after it starts, OpenCode lists none for a moment
+   * (~150 ms on 2.2.5), so a folder's first menu asks again every 100 ms while the list is
+   * empty, for `commandsSettle` at most. Later ones, and a command sent, ask once.
+   */
+  async menuCommands(directory: string): Promise<CommandInfo[]> {
+    const started = Date.now();
+    let commands = await this.commands(directory);
+    while (!this.commandsRead.has(directory) && commands.length === 0 && Date.now() - started < commandsSettle) {
+      await sleep(100);
+      commands = await this.commands(directory);
+    }
+    this.commandsRead.add(directory);
+    return commands;
   }
 
   /**
