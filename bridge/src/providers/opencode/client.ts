@@ -111,7 +111,8 @@ export class OpenCodeApi {
     // says nothing when it is done. So the first time a folder is asked, keep asking for
     // `skillsSettle`, then until two answers name the same skills; later, one answer will do.
     // No more than `wait` in all: then the list is the last answer, or none, and the
-    // folder is asked again on the next request for it.
+    // folder is asked again on the next request for it. (The app keeps the menu it got
+    // until the host reconnects, so one read past `wait` leaves that menu without them.)
     const deadline = AbortSignal.timeout(wait);
     const options = { signal: signal ? AbortSignal.any([signal, deadline]) : deadline };
     let skills: SkillInfo[] = [];

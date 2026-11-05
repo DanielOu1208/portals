@@ -248,7 +248,7 @@ test("a skill list OpenCode does not answer holds neither the menu nor a message
   const prompt = fake.callsOf("POST", new RegExp(`/session/${id}/prompt$`))[0];
   assert.equal(prompt.body.text, "/graphify the port");
   assert.equal(prompt.body.skills, undefined);
-  assert.ok(held.length > asked, "a folder never settled is asked again, not taken as empty");
+  assert.ok(held.length > asked, "the bridge asks again for a folder never settled");
 });
 
 test("Stop ends a message still waiting for OpenCode's skills, and sends nothing", async (t) => {
