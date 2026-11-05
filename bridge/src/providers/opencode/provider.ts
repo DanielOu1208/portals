@@ -12,7 +12,7 @@ import { usageReport } from "./usage.ts";
 import { adopt, deskSessions } from "./desk.ts";
 import { OpenCodeConnection, type OpenCodeApi } from "./client.ts";
 import { majorVersion, minimumOpenCodeVersion, testedOpenCodeVersion } from "./options.ts";
-import type { Message, ModelInfo, OpenCodeEvent, SessionInfo } from "./protocol.ts";
+import type { Message, ModelInfo, OpenCodeEvent, SessionInfo, SkillInfo } from "./protocol.ts";
 import { ServerLocator, type Endpoint, type OwnedStopResult, type ServerMode } from "./server.ts";
 import { OpenCodeSession } from "./session.ts";
 import { OpenCodeStopNotes, stopNoteLimits } from "./stopNotes.ts";
@@ -192,7 +192,19 @@ export class OpenCodeProvider implements Provider {
     if (name === "mcp") return [mcp];
     const api = await this.api();
     const folder = thread?.cwd ?? this.options.settings.folder;
-    const commands = commandCatalog(await api.commands(folder), async (argument) => {
+    // A menu reads the skills first: just after OpenCode starts, its command list is empty
+    // for a moment too (~150 ms on 2.2.5), and a folder's first skill read waits that out.
+    // When that read fails or is quick, `menuCommands` waits it out by itself.
+    // Skills come from OpenCode's own list; a menu that cannot have them is still a menu.
+    let skills: SkillInfo[] = [];
+    if (name === undefined) {
+      try {
+        skills = (await api.skills(folder)).skills;
+      } catch (error) {
+        log.debug("OpenCode did not list its skills", { error: (error as Error).message });
+      }
+    }
+    const commands = commandCatalog(await (name === undefined ? api.menuCommands(folder) : api.commands(folder)), async (argument) => {
       const session = thread && this.sessions.get(thread.id);
       if (!session) throw new Error("Open this OpenCode thread before selecting its agent.");
       return session.selectAgent(argument);
@@ -215,13 +227,7 @@ export class OpenCodeProvider implements Provider {
       }
       return [{ name, description: "", usage: "", skill: true }];
     }
-    // Skills come from OpenCode's own list; a menu that cannot have them is still a menu.
-    try {
-      return [...own, ...skillCommands((await api.skills(folder)).skills, own.map((command) => command.name))];
-    } catch (error) {
-      log.debug("OpenCode did not list its skills", { error: (error as Error).message });
-      return own;
-    }
+    return [...own, ...skillCommands(skills, own.map((command) => command.name))];
   }
 
   private async mcpStatus(thread?: { cwd: string }): Promise<string> {

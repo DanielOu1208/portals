@@ -367,3 +367,46 @@ test("skills that differ only in case, none named in lower case, are offered by 
     assert.equal(fake.callsOf("POST", new RegExp(`/session/${id}/prompt$`)).at(-1)!.body.skills, undefined);
   }
 });
+
+test("the first menu after OpenCode starts has its commands, though it lists none for a moment", async (t) => {
+  const { folder, fake, provider } = await rig(t);
+  // Just started, OpenCode answers its command list empty, then whole (by 300 ms here).
+  const commands = fake.commands;
+  fake.commands = [];
+  const timer = setTimeout(() => { fake.commands = commands; }, 300);
+  t.after(() => clearTimeout(timer));
+  const offered = await provider.commands({ id: "ses_cold", cwd: folder });
+  assert.equal(offered.find((command) => command.name === "init")?.skill, false, "the command keeps its name from the skill");
+  assert.ok(offered.some((command) => command.name === "review"));
+  // Later menus read each list once, as before.
+  const reads = () => [fake.callsOf("GET", /^\/api\/command$/).length, fake.callsOf("GET", /^\/api\/skill$/).length];
+  const [commandReads, skillReads] = reads();
+  await provider.commands({ id: "ses_cold", cwd: folder });
+  assert.deepEqual(reads(), [commandReads + 1, skillReads + 1]);
+});
+
+test("the first menu after OpenCode starts has its commands when its skill list fails at once", async (t) => {
+  const { folder, fake, provider } = await rig(t);
+  const original = fake.server.listeners("request")[0] as (...args: any[]) => void;
+  fake.server.removeAllListeners("request");
+  fake.server.on("request", (req, res) => {
+    if (req.method === "GET" && req.url?.startsWith("/api/skill")) {
+      res.writeHead(503, { "content-type": "application/json" });
+      res.end(JSON.stringify({ name: "UnknownError", message: "Not ready" }));
+    } else original(req, res);
+  });
+  const commands = fake.commands;
+  fake.commands = [];
+  const timer = setTimeout(() => { fake.commands = commands; }, 300);
+  t.after(() => clearTimeout(timer));
+  const offered = await provider.commands({ id: "ses_cold", cwd: folder });
+  assert.ok(offered.some((command) => command.name === "init" && !command.skill));
+  assert.ok(offered.some((command) => command.name === "review"));
+  // A command sent from the app reads the list once, and does not wait.
+  const reads = fake.callsOf("GET", /^\/api\/command$/).length;
+  fake.commands = [];
+  const began = Date.now();
+  await provider.commands({ id: "ses_cold", cwd: folder }, "init");
+  assert.ok(Date.now() - began < 500);
+  assert.equal(fake.callsOf("GET", /^\/api\/command$/).length, reads + 1);
+});
