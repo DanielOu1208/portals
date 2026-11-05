@@ -444,7 +444,12 @@ final class HostModel: Identifiable {
                 guard let self, !isRetired else { return }
                 // Before a chat can see it: what the panel asks from here is the new connection's.
                 if case .connected = state { ThreadPanelMemory.shared.connected(to: host.id) }
+                // A host that reconnected may have been updated while it was away, with
+                // commands and skills it did not offer before. A thread asks for its own
+                // again; this is what a chat with no thread yet opens with.
+                let wasConnected = connection == .connected
                 connection = state
+                if state == .connected, !wasConnected { forgetOfferings() }
                 ReturnProbe.shared?.note("connection", "\(state)")
                 AppLog.chat.notice("Connection to \(self.host.name, privacy: .public): \(String(describing: state), privacy: .public)")
                 // Whether the host keeps looks is the next connection's to say: the bridge
@@ -1815,6 +1820,12 @@ final class HostModel: Identifiable {
         let new = AgentOfferings()
         offerings[agent] = new
         return new
+    }
+
+    /// Forgets what agents were said to offer, in place: a chat already on screen holds
+    /// its own `AgentOfferings`, and asks again through the same one.
+    private func forgetOfferings() {
+        for offered in offerings.values { offered.commands = CommandCatalog() }
     }
 
     /// Asks the host for whatever is still missing of what an agent offers. Its
