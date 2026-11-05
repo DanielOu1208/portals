@@ -39,6 +39,14 @@ export function skillIn(text: string, skills: readonly SkillInfo[]): SkillInfo |
   return (name && skills.find((skill) => skill.name === name)) || null;
 }
 
+/**
+ * A message whose first word is "/name": a command of OpenCode's, a skill, or words, as
+ * `submit` finds when it sends it.
+ */
+export function slashed(text: string): boolean {
+  return /^\/[^\s/]+(\s|$)/.test(text.trim());
+}
+
 /** Dedicated APIs run commands; ordinary slash-prefixed text remains a message. */
 export async function submit(api: OpenCodeApi, id: string, directory: string, prompt: Prompt, files: { uri: string; name: string }[], admission?: Admission): Promise<{ id: string } | undefined> {
   const command = /^\/([^\s/]+)(?:\s+([\s\S]*))?$/.exec(prompt.text.trim());

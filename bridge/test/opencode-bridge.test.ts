@@ -660,3 +660,71 @@ for (const active of [true, false]) test(`${active ? "active" : "idle"} restart 
     opencode.active.delete(thread);
   }
 });
+
+/** Whether the bridge keeps `queueID` for a turn of its own, not handed to OpenCode's inbox. */
+function keptForItsTurn(thread: string, queueID: string): boolean {
+  return client.frames.some((frame) => isEvent(frame, "queue.changed", thread)
+    && frame.params.payload.queued.some((entry: Frame) => entry.id === queueID && entry.placement === "queue"));
+}
+
+test("a skill named with a picture mid-turn is a turn of its own, and what Dana sends after it does not wait on its lookup", async () => {
+  const thread = await createThread();
+  const start = await send(thread, "Keep thinking", "interrupt", { holdBefore: "session.step.failed" });
+  await client.from(start, (frame) => isEvent(frame, "reasoning.delta", thread));
+  const calls = () => opencode.callsOf("POST", new RegExp(`^/api/session/${thread}/prompt$`));
+  await client.call("image.attach_bytes", { session_id: thread, filename: "screen.png", content_base64: png.toString("base64") });
+  const first = await client.call("prompt.submit", { session_id: thread, text: "/graphify first message" });
+  const second = await client.call("prompt.submit", { session_id: thread, text: "second message" });
+  await until(() => calls().length === 2);
+  // Only the plain one goes into OpenCode's inbox; the skill one is not looked up while busy.
+  assert.equal(calls()[1].body.text, "second message");
+  assert.equal(calls()[1].body.delivery, "steer");
+  await until(() => keptForItsTurn(thread, first.queue_id));
+  opencode.sessions.get(thread)!.inbox = [];
+  opencode.emit({ id: "evt_second_delivered", type: "session.inbox.delivered", data: { sessionID: thread, inboxID: calls()[1].body.id } });
+  await client.from(start, (frame) => isEvent(frame, "queue.changed", thread) && frame.params.payload.steered === second.queue_id);
+  opencode.queueTurn(thread, "plain");
+  const end = client.frames.length;
+  await client.call("session.interrupt", { session_id: thread });
+  // Its own turn goes through the same send as an idle one, and carries the skill and the picture.
+  await client.from(end, (frame) => isEvent(frame, "message.start", thread) && frame.params.payload.queue_id === first.queue_id);
+  await until(() => calls().length === 3);
+  const own = calls()[2].body;
+  assert.equal(own.text, "/graphify first message");
+  assert.notEqual(own.delivery, "steer");
+  assert.deepEqual(own.skills, [{ id: "graphify", name: "graphify" }]);
+  assert.equal(own.files.length, 1);
+  await client.from(end, (frame) => isEvent(frame, "message.complete", thread) && frame.params.payload.status === "complete");
+});
+
+test("a skill named with a picture mid-turn reads nothing from OpenCode first, so a stuck command list cannot hold it", async () => {
+  const thread = await createThread();
+  const start = await send(thread, "Keep thinking", "interrupt", { holdBefore: "session.step.failed" });
+  await client.from(start, (frame) => isEvent(frame, "reasoning.delta", thread));
+  const original = opencode.server.listeners("request")[0] as (...args: any[]) => void;
+  const held: { req: unknown; res: { destroyed: boolean } }[] = [];
+  opencode.server.removeAllListeners("request");
+  opencode.server.on("request", (req, res) => {
+    if (req.method === "GET" && req.url?.startsWith("/api/command")) held.push({ req, res });
+    else original(req, res);
+  });
+  try {
+    await client.call("image.attach_bytes", { session_id: thread, filename: "screen.png", content_base64: png.toString("base64") });
+    const stuck = await client.call("prompt.submit", { session_id: thread, text: "/graphify blocked by commands" });
+    await until(() => keptForItsTurn(thread, stuck.queue_id) || held.length > 0);
+    assert.equal(held.length, 0, "no command list is read for a busy message");
+    // Nothing was handed over, so Dana can take it back, and the next message goes in.
+    assert.deepEqual(await client.call("prompt.queue.remove", { session_id: thread, queue_id: stuck.queue_id }), { removed: true });
+    await client.call("prompt.submit", { session_id: thread, text: "ordinary message" });
+    const calls = () => opencode.callsOf("POST", new RegExp(`^/api/session/${thread}/prompt$`));
+    await until(() => calls().length === 2);
+    assert.equal(calls()[1].body.text, "ordinary message");
+  } finally {
+    opencode.server.removeAllListeners("request");
+    opencode.server.on("request", original);
+    for (const { req, res } of held) if (!res.destroyed) original(req, res);
+  }
+  opencode.sessions.get(thread)!.inbox = [];
+  await client.call("session.interrupt", { session_id: thread });
+  await completed(thread, start);
+});

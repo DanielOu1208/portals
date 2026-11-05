@@ -21,7 +21,7 @@ import { storedMessages } from "./history.ts";
 import { OpenCodeForms } from "./forms.ts";
 import { OpenCodeInbox } from "./inbox.ts";
 import { OpenCodeAgents, type AgentSettings } from "./agents.ts";
-import { submit } from "./commands.ts";
+import { slashed, submit } from "./commands.ts";
 import { imageFiles } from "./images.ts";
 import { OpenCodeSubagents } from "./subagents.ts";
 import { OpenCodeTurn, isTurnEvent } from "./turn.ts";
@@ -293,14 +293,16 @@ export class OpenCodeSession implements ProviderSession {
     );
   }
 
+  // A message that may name a command or a skill is a turn of its own, where `submit`
+  // finds which: steered in, it would reach OpenCode as words, before it is known.
   async steer(prompt: Prompt): Promise<boolean> {
-    if (!this.turnOpen) return false;
+    if (!this.turnOpen || slashed(prompt.text)) return false;
     await (await this.host.api()).prompt(this.id, prompt.text, imageFiles(prompt), { delivery: "steer" });
     return true;
   }
 
   async enqueue(prompt: Prompt, requestId: string): Promise<boolean> {
-    if (!this.turnOpen) return false;
+    if (!this.turnOpen || slashed(prompt.text)) return false;
     return this.queue.add(prompt, requestId, imageFiles(prompt));
   }
 

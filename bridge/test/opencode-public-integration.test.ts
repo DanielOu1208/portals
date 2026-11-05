@@ -269,3 +269,27 @@ test("Stop ends a message still waiting for OpenCode's skills, and sends nothing
   await until(() => held[0].destroyed);
   assert.equal(fake.callsOf("POST", new RegExp(`/session/${id}/prompt$`)).length, 0);
 });
+
+test("a message naming a skill waits for a turn of its own when OpenCode is busy, as one naming a command does", async (t) => {
+  const { folder, fake, provider } = await rig(t);
+  const id = await provider.newThread({ cwd: folder, settings });
+  const events: ProviderEvent[] = [];
+  const session = await provider.startSession({ id, cwd: folder, settings }, { emit: (event) => events.push(event), ask: async () => ({ kind: "withdrawn", reason: "unused" }) });
+  t.after(() => session.close());
+  session.attached?.();
+  fake.queueTurn(id, "interrupt", { holdBefore: "session.step.failed" });
+  session.startTurn({ text: "Keep thinking", images: [] });
+  const prompts = () => fake.callsOf("POST", new RegExp(`/session/${id}/prompt$`));
+  await until(() => prompts().length === 1);
+  // With a picture, Dana's /graphify is a message; steered in, it would go without its skill.
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==", "base64");
+  const prompt = { text: "/graphify this screen", images: [{ filename: "screen.png", data: png }] };
+  const reads = fake.calls.length;
+  assert.equal(await session.enqueue!(prompt, "portals-dana"), false);
+  assert.equal(await session.steer!(prompt), false);
+  assert.equal(fake.calls.length, reads, "nothing is read or sent for it while busy");
+  assert.equal(await session.enqueue!({ ...prompt, text: "this screen" }, "portals-dana-plain"), true);
+  assert.equal(prompts().at(-1)!.body.id, "msg_portals-dana-plain");
+  await session.interrupt();
+  await until(() => events.some((event) => event.type === "turn.end"));
+});
