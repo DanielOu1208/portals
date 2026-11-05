@@ -134,6 +134,41 @@ final class PanelUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["Credits left: 100."].exists)
     }
 
+    func testCachedBlockingUsageNoteKeepsItsContext() throws {
+        continueAfterFailure = true
+        defer { try? setStatesMode("ok") }
+        let id = UUID().uuidString
+        let notice = "The workspace's credits are used up."
+        let app = try usageApp("usage-blocked", id: id)
+        XCTAssertTrue(app.staticTexts[notice].waitForExistence(timeout: 10))
+        sleep(2)
+
+        let cached = try usageApp("usage-wait", id: id)
+        let asOf = cached.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'As of '")).firstMatch
+        XCTAssertTrue(cached.staticTexts[notice].exists)
+        XCTAssertTrue(asOf.waitForExistence(timeout: 5), "a restored notice says when it was heard")
+        try setStatesMode("usage-fail")
+        XCTAssertTrue(cached.staticTexts["Its sign-in has expired."].waitForExistence(timeout: 10), "the retained notice keeps the refresh error")
+        XCTAssertTrue(asOf.exists, "a failed refresh keeps the old timestamp")
+        XCTAssertTrue(cached.staticTexts[notice].exists)
+        XCTAssertFalse(cached.descendants(matching: .any)["thread-panel-usage"].exists)
+        shot("blocking-notice-failed")
+
+        let answered = asks("usage.answered")
+        try setStatesMode("usage-blocked")
+        cached.buttons["thread-panel-close"].tap()
+        let reopen = cached.buttons["thread-panel-button"]
+        XCTAssertTrue(reopen.waitForExistence(timeout: 10))
+        reopen.tap()
+        expectation(for: NSPredicate { _, _ in self.asks("usage.answered") > answered }, evaluatedWith: cached)
+        waitForExpectations(timeout: 10)
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: asOf)
+        waitForExpectations(timeout: 10)
+        XCTAssertTrue(cached.staticTexts[notice].exists)
+        XCTAssertFalse(cached.staticTexts["Its sign-in has expired."].exists)
+        XCTAssertFalse(cached.staticTexts["Test plan"].exists)
+    }
+
     func testPanel() throws {
         let planPath = "\(folder)/plan.txt"
         try XCTSkipUnless(FileManager.default.fileExists(atPath: planPath), "no plan for the panel")

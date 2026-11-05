@@ -404,11 +404,18 @@ struct ThreadPanelContent: View {
                 )
                 .transition(.opacity)
             } else if let note = usage?.blockingNote {
-                Text(note)
-                    .font(.app.caption)
-                    .foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, Theme.grid)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(note).foregroundStyle(.orange)
+                    if let asOf = ThreadPanelMemory.shared.usageAsOf(of: chat.agent.id, isConnected: host.isConnected) {
+                        Text(UsagePart.asOf(asOf)).foregroundStyle(.secondary)
+                    }
+                    if let failure = ThreadPanelMemory.shared.usageFailures[chat.agent.id] {
+                        Text(failure).foregroundStyle(.orange)
+                    }
+                }
+                .font(.app.caption)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, Theme.grid)
             }
             PartRule()
             DeviceRow(host: host)
