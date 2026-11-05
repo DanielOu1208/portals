@@ -31,7 +31,7 @@ async function main(): Promise<void> {
         port: Number(port),
         auth: { username, passwordHash: await hashPassword(password) },
         generalFolder: general,
-        providers: { claude: false, codex: false, pi: false, cursor: false, droid: false, hermes: false, fake: true },
+        providers: { claude: false, codex: false, pi: false, cursor: false, droid: false, hermes: false, opencode: false, fake: true },
         push: { relay: null, dryRun: join(home, "notifications.jsonl") },
         relay: { enabled: false },
         updates: { check: false },

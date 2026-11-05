@@ -13,6 +13,8 @@ public enum CodingAgentLogo: String, Codable, Hashable, Sendable, CaseIterable {
     case cursor
     /// Droid: Factory's mark.
     case droid
+    /// OpenCode: the OpenCode mark, its square "O".
+    case opencode
 
     /// The logo of `agent` on a host of `hostKind`; nil for every other agent. `kind` is
     /// what the bridge says the agent is (`Agent.kind`), and decides: a Hermes profile
@@ -32,6 +34,7 @@ public enum CodingAgentLogo: String, Codable, Hashable, Sendable, CaseIterable {
         case .pi: "Pi"
         case .cursor: "Cursor"
         case .droid: "Factory"
+        case .opencode: "OpenCode"
         }
     }
 }

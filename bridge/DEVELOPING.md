@@ -12,8 +12,9 @@ counters, the known limits). Not part of the npm package.
 
 - Node 22.18 or later. In the repository Node runs the `.ts` files directly; `tsc` only
   type-checks. The npm package ships compiled JavaScript instead (below).
-- Claude Code and Codex installed, as in `README.md`; `pi` to run Pi threads, and
-  Cursor's `cursor-agent` to run Cursor threads.
+- Claude Code and Codex installed, as in `README.md`; `pi` to run Pi threads,
+  Cursor's `cursor-agent` to run Cursor threads, and OpenCode 2's `opencode` to run
+  OpenCode threads.
 
 ```sh
 cd bridge
@@ -285,6 +286,32 @@ release recorded. Before committing a recording, search it for your home path, y
 and host names, email addresses and tokens: the recorder replaces them, and this checks
 that it did.
 
+OpenCode is tested against a stand-in for its server (`test/opencode-serve.ts`) that
+answers the HTTP calls OpenCode's own client makes and plays, on its event stream, turns
+recorded from OpenCode 2.2.5 (`test/fixtures/opencode/`: each event of a turn, a line
+each, and one session's stored messages): a reply, a command allowed once, always and
+denied, a file written, a stop, a failed provider, a dropped stream. A recording waits at
+a permission request for the bridge's answer and, when a test says, at a stop for the
+bridge's interrupt. Whole threads run through the bridge against it
+(`test/opencode-bridge.test.ts`); the mapping of tools, cards and stored conversations
+has tests of its own (`test/opencode-mapping.test.ts`), and finding the server, the
+background service or an `opencode serve` of the bridge's own (a stand-in program,
+`test/opencode-standin.ts`), too (`test/opencode-server.test.ts`). No test starts
+`opencode`. The recordings were made with an `@opencode/cli` installed in a scratch
+folder, with `HOME` and the XDG folders pointed inside it and its updates off, so the
+user's own OpenCode, settings and sessions were never touched; record again that way, on
+a free model, after a release, then set `testedOpenCodeVersion` and the pinned
+`@opencode/client` to it.
+
+The same native client drives the inbox, forms, agents, commands, compaction, Console
+usage, subagents and desk-adoption tests. Mapping tests cover typed form values,
+historical and nested child rows, stopped versus failed children and Console budgets;
+integration tests cover native bodies, reconnect receipts, external answers, background
+cards, read-only adoption and unsupported images rejected before any prompt. Setup tests
+cover selective client installation, including installed-copy updates and rollback.
+Run `node --import ./test/environment.ts --test test/opencode-*.test.ts` for the provider
+checks, then `npm run typecheck` and `npm test` for the bridge.
+
 Against a running bridge, the app's own client checks it end to end (from
 `Packages/PortalsKit`, password in `$PORTALS_PASSWORD`). Live checks run in a
 scratch folder: start the bridge with its own `PORTALS_BRIDGE_HOME` whose
@@ -337,7 +364,8 @@ its files call it.
 - [Agents working with each other](#agents-working-with-each-other)
 - [Visuals in replies](#visuals-in-replies)
 - [How each agent is run](#how-each-agent-is-run): [Claude Code](#claude-code),
-  [Codex](#codex), [Pi](#pi), [Cursor](#cursor), [Droid](#droid), [Hermes](#hermes)
+  [Codex](#codex), [Pi](#pi), [Cursor](#cursor), [Droid](#droid), [Hermes](#hermes),
+  [OpenCode](#opencode)
 - [Counters](#counters)
 - [Experimental client feature](#experimental-client-feature): lean deltas
 - [Known limits](#known-limits)
@@ -367,6 +395,7 @@ Everything is in `~/Library/Application Support/portals-bridge/`, on Linux in
 | `state/cursor/` | Cursor's models and commands as it last listed them (`agent.json`), each Cursor thread's conversation as the app shows it (`threads/`), and the Cursor processes that run now (`processes.json`). What Cursor itself keeps is under `~/.cursor`: see [Cursor](#cursor) |
 | `state/droid/` | Droid session identities and the display conversations for Portals threads. Droid keeps its own execution context separately; see [Droid](#droid) |
 | `state/update.json` | When npm's registry was last asked for the newest `portals-host`, and what it said (`src/updates.ts`); `npx portals-host status` reads it to say a newer version is out |
+| `opencode-serve.log` | What an `opencode serve` of the bridge's own printed ([OpenCode](#opencode)) |
 | `counters.log` | A line of counts a minute, while the [counters](#counters) are on; `counters.log.1` is the file before it. Mode 0600 |
 
 When no usable backup exists, quarantine reserves an unused archive name and moves
@@ -397,13 +426,14 @@ and by the bridge as the app shows it (`state/cursor/`, above).
   "allowedHosts": ["127.0.0.1", "localhost", "::1", "your-mac.your-tailnet.ts.net"],
   "generalFolder": "~/Portals",
   "folders": { "hide": [] },
-  "providers": { "claude": true, "codex": true, "pi": true, "cursor": true, "droid": true, "hermes": true, "fake": false },
+  "providers": { "claude": true, "codex": true, "pi": true, "cursor": true, "droid": true, "hermes": true, "opencode": true, "fake": false },
   "claude": { "path": "/Users/you/.local/bin/claude", "idleMinutes": 15, "maxWarm": 6, "apiKey": "sk-ant-…" },
   "codex": { "mode": "shared", "path": "/usr/local/bin/codex", "socket": null, "titleModel": "gpt-5.6-luna" },
   "pi": { "path": "/usr/local/bin/pi", "idleMinutes": 15, "maxWarm": 6, "model": null },
   "cursor": { "path": "/Users/you/.local/bin/cursor-agent", "idleMinutes": 15 },
   "droid": { "path": "~/.local/bin/droid", "idleMinutes": 15, "maxWarm": 6 },
   "hermes": { "path": "~/.local/bin/hermes", "start": true },
+  "opencode": { "path": "/Users/you/.opencode/bin/opencode", "mode": "shared", "start": true },
   "fake": { "delayMs": 40 },
   "apns": null,
   "push": { "dryRun": null, "relay": "https://portals-relay.danielou1208.workers.dev" },
@@ -433,6 +463,7 @@ be changed while it runs, on a bridge that was started with them on ([Counters](
 | `providers.cursor` | Offer Cursor (`cursor` in the sidebar), when `cursor-agent` is installed. On unless set to `false`, also for a bridge set up before it could run Cursor; setup writes `false` on a new install that finds none. See [Cursor](#cursor). |
 | `providers.droid` | Automatically offer the installed Droid (`droid` in the sidebar). On unless explicitly `false`; no separate installation or login. Setup records the executable it finds. See [Droid](#droid). |
 | `providers.hermes` | Offer Hermes, one agent per Hermes profile (`hermes` for its default profile), when Hermes is installed; see [Hermes](#hermes). |
+| `providers.opencode` | Offer OpenCode 2 (`opencode` in the sidebar), when `opencode` is installed. Off unless set: setup turns it on where it finds OpenCode 2, and only says an OpenCode 1 is there, with how to upgrade. See [OpenCode](#opencode). |
 | `providers.fake` | Offer the scripted test agent (`fake`). Tests and development only. |
 | `claude.path` | The installed `claude`. |
 | `claude.idleMinutes` | A thread's Claude process stops after this long with no turn running, no question open and no background work running. The next message resumes it. |
@@ -457,6 +488,9 @@ be changed while it runs, on a bridge that was started with them on ([Counters](
 | `droid.titleModel` | The model a new Droid thread is named with after its first message, as Codex threads are named: one short read-only `droid exec` at the model's lowest effort, with Codex's title prompt and no tools that reach anything, in an empty folder of the bridge's (its session files are removed after). Unset: the thread's own model. `null`: the bridge makes no names, and a thread takes Droid's own. Droid's own name stands in when none comes; a thread you renamed keeps your name. |
 | `hermes.path` | The installed `hermes`. A bare name is looked up on the PATH; without one, `~/.local/bin/hermes`, where Hermes's installer puts it. |
 | `hermes.start` | Start `hermes serve` when none runs (the default). With `false` the bridge only joins one that runs, and Hermes threads wait for it. |
+| `opencode.path` | The installed `opencode`. A bare name is looked up on the PATH, then in `~/.opencode/bin`, `/opt/homebrew/bin` and `/usr/local/bin`. Setup writes the one it found. |
+| `opencode.mode` | `shared` (the default): join OpenCode's background service, the one its own apps use. `own`: run an `opencode serve` of the bridge's own. See [OpenCode](#opencode). |
+| `opencode.start` | In `shared` mode, start OpenCode's background service when none runs (the default). With `false` the bridge runs a server of its own instead. |
 | `apns` | The APNs key notifications are sent with, `{"keyPath", "keyId", "teamId"}`; `null` (the default) sends them through the relay. See [Notifications](#notifications). |
 | `push.dryRun` | A file to write notifications to instead of sending them; `null` sends them. |
 | `push.relay` | The Portals relay, used when `apns` is `null`; `null` sends none that way. |
@@ -1394,6 +1428,142 @@ needs an AI provider and model: `hermes setup model` sets them). When Hermes is 
 setup offers its installer (`curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash`),
 which ends with Hermes's own setup. Run setup again after installing Hermes later; the
 bridge also offers it on its next start once it is installed.
+
+### OpenCode
+
+OpenCode 2 is one agent, `opencode`, run through OpenCode's own HTTP API with its client
+(`@opencode/client`, pinned to the version tested, an optional peer dependency the bridge
+loads only when OpenCode is used: it brings Effect, about 66 MB). Each thread is one
+OpenCode session, and the thread id is OpenCode's session id. A turn is OpenCode's
+execution: it begins with `session.execution.started` and ends with exactly one of
+`succeeded`, `failed` or `interrupted`, whoever sent the message, so a turn sent from
+OpenCode's terminal on the same server shows on the phone too
+(`src/providers/opencode/`).
+
+**One server.** OpenCode 2 runs one background service per user, which its terminal,
+desktop and web apps share, and says where in `$XDG_STATE_HOME/opencode/service.json`
+(`~/.local/state/opencode/service.json`), with a password. In `shared` mode (the default)
+the bridge joins it, and starts it (`opencode serve --service`) when none runs and
+`opencode.start` is not `false`, leaving it running. It reads registration and probes
+the native client directly, never calls the destructive `Service.ensure`, and joins
+healthy 2.x services across patch versions. An unhealthy or occupied shared service is
+never replaced or stopped; the bridge falls back to own. OpenCode 1 is refused before
+launch or join (`opencode upgrade --major`). The bridge logs the version it reached,
+with a minimum of 2.2.0 and a warning for one it was not tested with (`testedOpenCodeVersion`,
+`src/providers/opencode/options.ts`). In `own` mode, or
+when the service cannot be had, the bridge runs `opencode serve --hostname 127.0.0.1
+--port 0` with a password it makes (`OPENCODE_PASSWORD`), its output in
+`opencode-serve.log` in the bridge's folder. A private `<logPath>.server.json`
+(mode 0600) lets a restarted bridge reclaim its verified orphan, including the stable
+native server identity. Normal close first interrupts every active native root and
+child, with one four-second settlement deadline, then awaits bounded TERM and KILL of
+the whole owned process group. The optional provider stop deadline gives only a live
+owned process sixteen seconds of signal grace, otherwise the usual eight seconds.
+Uncertain ownership fails visibly and names the record and `.lock`
+files: stop the bridge, check the recorded process, then remove only stale files,
+never live ownership records. Both share
+OpenCode's one store of sessions, so a thread is the same session either way.
+
+**Shutdown notes stay in the bridge.** `stopNotes.ts` keeps an atomic mode-0600
+`<logPath>.stops.json` ledger of IDs, flags and timestamps. It holds at most four
+records and 256 KiB; each record has up to 256 settled IDs, 256 unsettled IDs and
+512 shown thread IDs, with 160-byte IDs and a 24-hour expiry. Overflow makes native
+inventory explicitly unknown, never implicitly settled. Closed views retain at most
+256 owned routing targets until provider close, so settlement can end their generic
+turn records after `SessionManager` closes them. On the next resume, fresh native
+activity/history and a bounded nested-child inventory decide whether to show an
+interrupted note, an actual resumed-after-stop notice, or the may-resume warning.
+Each stop retains at most 256 native execution references: session, opener,
+assistant and terminal message IDs, not message content. The opener/assistant
+snapshot precedes interruption, with a best-effort 150 ms budget inside the
+four-second deadline. Settled annotations are anchored to that exact terminal ID,
+even if later turns exist. A resumed claim requires the recorded aborted
+assistant's immediately adjacent native `synthetic` message with
+`metadata.notice === "restart"`, with no intervening user/manual opener or idle.
+Old provenance-free records can only warn, and a later unrelated opener retires
+the stale warning. Child execution histories are read only for bounded retained
+provenance, not for every descendant.
+Root and descendant outcomes are classified independently. The overlay keeps the
+root on its own line and summarizes descendants by count, for example
+`2 subagents stopped; 1 was resumed by OpenCode`. A root terminal never hides a
+verified descendant restart, and a descendant's exact terminal is not downgraded
+to an unconfirmed warning.
+Each is a clearly Portals-labelled gateway history overlay, consumed once per thread;
+it never modifies OpenCode history, messages or model context. A broken nested lookup
+keeps the root readable and marks the note's inventory uncertain.
+
+**One event stream** (`GET /api/event`) for every thread. It keeps nothing for a client
+that was away, so when it comes back each open thread catches up from what OpenCode
+keeps: native user/assistant/idle message groups, activity, inbox receipts and requests.
+One generation-owned turn serializes admission, Stop and snapshots. A reconnect buffers
+frames until authoritative history is applied; delayed deltas for snapshot-covered
+`(assistantMessageID, kind, ordinal)` pieces refresh only those pieces. New pieces,
+steps and tools still stream live. Terminal frames force a history barrier so they
+cannot end a turn before its missing text or reopen one already ended by the snapshot.
+Completed desk turns missed entirely offline are replayed once. No outcome after a
+server crash is an explicit interrupted/error result, never empty success. Idle
+attachments also restore permissions and forms; cards answered elsewhere close.
+Recovery runs on every writable attachment and reconnect, regardless of server identity
+or orphan-reclaim metadata. Held frames are bounded by 1,024 entries and 1 MiB of
+UTF-8 JSON; overflow requires a newer full snapshot, not lossy replay. Failed reads
+keep recovery pending and retry with capped backoff, warning after three failures.
+Confirmed native session deletion ends the turn with a non-retryable message.
+
+**Permissions are the user's.** OpenCode's own config decides what runs without asking;
+the app's modes set nothing. A `permission.asked` becomes an approval card with
+OpenCode's three answers: `once`, `always`, which saves a rule for the project (the
+request's `save` patterns) that holds in every session there until it is removed in
+OpenCode, and `reject`, which also turns down the session's other waiting requests and
+tells the model the note, if any. A request answered in OpenCode's terminal
+(`permission.replied`) closes the card.
+
+Tools map to the gateway's names (`shell` → `terminal`, `write` → `write_file`, `edit` →
+`patch`, `read`, `grep`/`glob`, `webfetch`, `websearch`, `subagent` → `delegate_task`);
+an edit's diff is OpenCode's own (`files[].patch`, its `Index:` headers made into a
+unified diff), else one made from the tool's input. Images go inline as `data:` URIs.
+Models are OpenCode's enabled ones, grouped by native provider. Gateway model IDs are
+provider-qualified opaque strings, with native names and provider-specific levels;
+raw IDs are restored before native API calls. Typed raw names require an explicit or
+current provider when ambiguous. The thinking level is the model's variant (`default`
+is none of its own). The context ring totals input, output, reasoning and cache tokens.
+
+Native inbox steering uses stable IDs and delivery receipts, including late receipts
+after successful no-op cancellation. Explicit Queue placement stays bridge-local until
+the turn ends. Unresolved steering payloads are bounded by 128 receipts and 32 MiB,
+including image bytes. At capacity, a known-unsent prompt stays in the normal bridge
+queue until the turn ends; settled receipts free capacity for later steering.
+Native forms become typed question cards; unsupported conditional,
+hidden or external fields require OpenCode's UI. Native primary agents implement
+`/mode` and `/agent`; slash commands and `/compact` use their own APIs. Usage shows
+only native Console windows/budgets. Child sessions supply subagent rows and their own
+questions; desk sessions support read/continue/fork, with no read-only mutations.
+
+OpenCode 2.2.5's `session.environment` replaces the entire shell environment, not just
+the supplied keys; there is no native environment getter to merge with a shared
+service's environment. The bridge therefore supplies its complete environment in
+both server modes, retaining HOME, USER, SHELL, XDG settings, custom variables, provider
+credentials and `PORTALS_BRIDGE_HOME`/`PORTALS_BRIDGE_LOG`. It removes exactly
+`OPENCODE_PASSWORD`, `PORTALS_PASSWORD` and `AERIPORTAL_PASSWORD` (transport/setup
+passwords), prepends the command's PATH and sets `PORTALS_THREAD`, clearing competing
+thread identities. Writable creation and resume await this preparation before
+returning. Each new connection prepares loaded writable roots again before recovery or another admission;
+per-connection promises share the work and failed preparation is retryable. Previously
+discovered children are restored best effort, without preparing read-only adoptions.
+Child commands address their bridge-owned root. Child preparation is asynchronous
+and best-effort after discovery: the native client offers no pre-first-shell hook,
+so a child's first shell may run before its environment and instructions are installed.
+`experimental.session.instructions.entry` stores the same `commandAccess` text in one
+idempotent `portals` entry, without replacing user entries. Failure warns once and
+leaves the command environment usable. A missing client is repaired with
+`npx portals-host@latest update` or `setup`.
+
+OpenCode parity uses `todowrite` for to-do cards, per-assistant step identities for
+turn token totals and context updates, and `metadata.shellID` for cursor-based shell
+output polling through `LiveOutput`. Only an active tool's explicitly named shell is
+polled. No location-wide shell is inferred to belong to a thread, so background shell
+rows are omitted. Stored user images use the existing attachment-marker convention.
+MCP status is read for the thread's folder; recent project folders refresh in the
+background. These use existing protocol events and need no new app capability.
 
 ## Counters
 

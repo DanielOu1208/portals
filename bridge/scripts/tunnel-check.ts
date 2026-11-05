@@ -36,7 +36,7 @@ writeFileSync(
     port: 0,
     auth: { username, passwordHash: await hashPassword(password) },
     generalFolder: realpathSync(join(home, "general")),
-    providers: { claude: false, codex: false, pi: false, cursor: false, droid: false, hermes: false, fake: true },
+    providers: { claude: false, codex: false, pi: false, cursor: false, droid: false, hermes: false, opencode: false, fake: true },
     codex: { mode: "own" },
     fake: { delayMs: 5 },
     push: { relay: null },

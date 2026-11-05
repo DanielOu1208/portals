@@ -8,13 +8,22 @@ import type { Provider } from "../src/providers/types.ts";
 //   exception   on SIGUSR2, an exception nothing catches
 //   hang        a session of the scripted agent never closes
 //   hang-agent  the scripted agent itself never closes
+//   slow-owned-agent  an owned-process budget survives clearing ownership during close
 //
 // Otherwise each session of the scripted agent says on standard output when it has
 // closed, `closed <thread>`, and the agent when it closes, `agent closed`.
 
 const trouble = process.env.PORTALS_TEST_TROUBLE;
 
-(FakeProvider.prototype as Provider).close = trouble === "hang-agent" ? () => new Promise<void>(() => undefined) : async () => void process.stdout.write("agent closed\n");
+let owned = trouble === "slow-owned-agent";
+if (owned) Object.defineProperty(FakeProvider.prototype, "stopDeadlineMs", { get: () => owned ? 16_000 : undefined });
+(FakeProvider.prototype as Provider).close = trouble === "hang-agent" ? () => new Promise<void>(() => undefined) : async () => {
+  if (trouble === "slow-owned-agent") {
+    owned = false;
+    await new Promise((resolve) => setTimeout(resolve, 9000));
+  }
+  process.stdout.write("agent closed\n");
+};
 
 const start = FakeProvider.prototype.startSession;
 FakeProvider.prototype.startSession = async function (options, sink) {

@@ -30,7 +30,7 @@ nonisolated enum AgentLogoArt {
     static let dotShare = 0.11
 
     /// What the badge's logo sits on: white in light mode, a dark grey in dark, where
-    /// the Blossom, Cursor's cube and Factory's mark turn light.
+    /// the Blossom, Cursor's cube, Factory's mark and OpenCode's turn light.
     static let background = Theme.raisedBackground
     /// A hairline round the badge, for a white one on a white page.
     static let edge = Color.primary.opacity(0.12)
@@ -45,6 +45,7 @@ extension CodingAgentLogo {
         case .pi: Image(.piLogo)
         case .cursor: Image(.cursorLogo)
         case .droid: Image(.factoryLogo)
+        case .opencode: Image(.openCodeLogo)
         }
     }
 }

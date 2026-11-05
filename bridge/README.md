@@ -1,6 +1,6 @@
 # portals-host
 
-Portals host runs Claude Code, Codex, Pi, Cursor, Droid and Hermes on your computer, a
+Portals host runs Claude Code, Codex, Pi, Cursor, Droid, Hermes and OpenCode on your computer, a
 Mac or a Linux computer, for **Portals**, the app on iPhone, iPad and Mac for talking to
 your agents. You start threads, answer their questions and approve what they want to do
 from the app, while the agents work on your computer with your files, your settings and
@@ -23,7 +23,7 @@ name.
 - **Node 22.18 or later** on that computer, from [nodejs.org](https://nodejs.org). On
   Linux, take it from [nodejs.org/en/download](https://nodejs.org/en/download)
   (NodeSource, nvm or the binaries): the Node that Ubuntu and Debian ship is older.
-- **Claude Code, Codex, Pi, Cursor, Droid, Hermes, or any of them** installed on that
+- **Claude Code, Codex, Pi, Cursor, Droid, Hermes, OpenCode, or any of them** installed on that
   computer:
   - Claude Code: `curl -fsSL https://claude.ai/install.sh | bash`
   - Codex: `npm install -g @openai/codex`, then `codex login`
@@ -33,6 +33,9 @@ name.
   - Droid: follow the [Factory quickstart](https://docs.factory.ai/cli/getting-started/quickstart),
     then run `droid` in a terminal and use `/login`
   - Hermes: setup offers to install it, or `curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash`
+  - OpenCode 2: `npm install -g @opencode/cli`, then `opencode auth login` and choose a
+    model provider. Keeping OpenCode 1? Use a separate v2 installation and isolated
+    configuration, as described under [OpenCode](#opencode).
 - **Tailscale on that computer and on your iPhone** (and on any iPad or other Mac you use
   Portals on), signed in to the same account. You don't need it to use Portals only on the
   Mac the host runs on: see [Just this Mac](#just-this-mac). On Linux, get it from
@@ -54,7 +57,7 @@ npx portals-host setup
 
 Setup checks each thing it needs and says what to do about anything missing. It:
 
-1. finds Claude Code, Codex, Pi, Cursor, Droid and Hermes (and offers to install Hermes), and
+1. finds Claude Code, Codex, Pi, Cursor, Droid, Hermes and OpenCode (and offers to install Hermes), and
    asks how Claude Code should sign in;
 2. makes `~/Portals`, the folder new threads start in when you don't pick one;
 3. makes a password for the app to sign in with (you never type it);
@@ -197,6 +200,8 @@ systemctl --user restart portals-host                             # on Linux
 ```
 
 A restart stops Claude Code, Pi, Cursor and Droid turns in progress; Codex's keep going.
+OpenCode keeps running in shared mode. In owned mode, the host asks active sessions to
+stop before shutting down its server; unconfirmed work may resume natively later.
 
 ### Updating
 
@@ -256,8 +261,8 @@ list. Images still go to the agent as pictures, for the models that see them.
 ### Visuals in replies
 
 An agent can put a visual in a reply: a chart, a diagram, a comparison, something to
-play with. The app draws it live, as it is written. Claude Code, Codex, Pi, Cursor and
-Droid threads are told the app does this (`visuals.tellAgents`). A visual is a visual aid
+play with. The app draws it live, as it is written. Claude Code, Codex, Pi, Cursor,
+Droid and OpenCode threads are told the app does this (`visuals.tellAgents`). A visual is a visual aid
 only: nothing in it reaches the agent or the host. It runs locked down in the app: it can
 load scripts, style sheets and fonts from jsDelivr, unpkg and cdnjs, and nothing else from
 the network, and a link you tap opens in your browser.
@@ -267,7 +272,7 @@ the network, and a link you tap opens in your browser.
 One setting in the app (the gear, under Messages) says what it does:
 
 - **Steer** (as it comes): the agent reads the message during the turn it is on. Claude
-  Code, Codex and Pi can; Droid takes it at the next model step, and Hermes with its next
+  Code, Codex, Pi and OpenCode can; Droid takes it at the next model step, and Hermes with its next
   tool result (one that comes after its last is a turn of its own). Cursor cannot add a
   message to what it is doing: it stops, and runs the message instead.
 - **Queue**: the message waits and starts a turn of its own when the agent is done.
@@ -285,10 +290,10 @@ app gave the host: Apple and the Portals relay see only "Portals: New activity".
 ### Sessions from your terminal
 
 Under From this Mac in each coding agent's menu, the app lists the sessions you started
-in a terminal on that computer (Claude Code's, Codex's and Pi's), to **continue**, to
+in a terminal on that computer (Claude Code's, Codex's, Pi's and OpenCode's), to **continue**, to
 **fork** (a new thread with its history so far) or to **view only**. A Claude Code session
 a terminal has open is not continued, nor a Pi session while a Pi runs in a terminal in
-its folder: quit it there first, or fork. A Codex thread can be worked on from both.
+its folder: quit it there first, or fork. Codex and OpenCode threads can be worked on from both.
 Cursor's terminal chats are listed too, to fork only.
 
 ### Claude Code
@@ -428,13 +433,111 @@ leave the agent off there.
   as Hermes last found them.
 - Hermes's notices (credits, low disk) are shown in the thread.
 
+### OpenCode
+
+OpenCode runs OpenCode 2 (`opencode`) with your own OpenCode settings, models and
+providers. Portals needs 2.2.0 or newer and was tested with 2.2.5. Setup finds it and
+turns it on. OpenCode 1 is refused, and is never upgraded. Use a separate v2 installation
+with its own HOME and XDG folders when keeping v1 plugins and data; set `opencode.path`
+to that executable. Moving an existing setup to v2 is your choice. The host joins OpenCode's background service, the one its
+terminal, desktop and web apps use, so a thread is the same session there and a turn sent
+from the terminal shows on the phone. It starts that service when none runs, and leaves it
+running. It joins healthy 2.x services across patch versions. An unhealthy or occupied
+shared service is never stopped or replaced. With `opencode.mode` set to `"own"`, or
+when the service cannot be had, it runs an `opencode serve` of its own on 127.0.0.1,
+with a password only it knows, and stops it
+when it stops. Before signalling its process group, it gives OpenCode up to four seconds
+to interrupt every active session (children included) and confirm fresh durable idle
+records. A native terminal completion racing with the interrupt also counts as settled.
+It then sends TERM, followed by KILL after two seconds if needed. If the native endpoint
+cannot be verified or settlement times out, it warns and stops its owned process anyway;
+native recovery may continue an unconfirmed turn after a later server startup.
+It never updates or replaces your OpenCode. OpenCode 1 is refused before launch or join.
+
+A stopped turn gets a Portals shutdown note. If stopping could not be confirmed,
+the thread warns that OpenCode may resume it next time. These are bridge-only notes:
+the private `opencode-serve.log.stops.json` ledger keeps only bounded IDs, flags and
+timestamps (mode 0600), not prompts or credentials. Notes identify the specific
+native turn and its terminal record, not a later task in the same session.
+Reopening reports resumption only with OpenCode's matching restart notice,
+and shows each note once per thread.
+Shutdown notes expire after 24 hours. No note is written into OpenCode's
+session history or sent to its model.
+
+Its private `opencode-serve.log.server.json` ownership record (mode 0600) lets it reuse
+a verified owned server after a bridge crash. If ownership is uncertain, it fails
+visibly and names that record and its `.lock` file. Stop the bridge and check the
+recorded process before removing stale files. Never remove a live ownership record.
+
+SIGTERM and SIGINT let the host close normally. It keeps its usual eight-second deadline
+unless a live owned OpenCode server needs this cleanup, when it allows sixteen seconds.
+New service definitions allow twenty seconds (`ExitTimeOut` on macOS, `TimeoutStopSec`
+on Linux); existing Mac installs need `npx portals-host@latest setup` to install that
+explicit allowance. A plain `update` does not reload the plist, and an older plist uses
+launchd's system-defined timeout.
+
+On macOS, `update` still uses `launchctl kickstart -k`. Its manual promises kill/restart,
+not a graceful SIGTERM interval. If it, a shorter launchd timeout, or a direct SIGKILL
+ends the host before cleanup, the detached owned server can survive and the next host
+reclaims that same process. Its running turn then continues under the host; that is not
+the separate native recovery case of restarting a stopped server on its old store.
+On Linux, `systemctl restart` sends SIGTERM and allows the configured twenty seconds
+before SIGKILL (`KillMode=process` targets the host). A host killed before it starts
+owned-server cleanup can leave that same reclaimable native process there, too.
+
+- **Permissions are OpenCode's.** What your OpenCode config allows runs; what it asks comes
+  to the app as a card: Allow once, Always allow in this project, or Deny (with a note the
+  model is told). **Always** saves an OpenCode rule for the project, in OpenCode, for every
+  session there, until you remove it in OpenCode; it is not a grant for this thread only.
+  A Deny also turns down OpenCode's other waiting requests in that thread.
+- `/mode plan` selects OpenCode's Plan agent; `/mode default` restores the default primary
+  agent in your OpenCode settings. `/agent` lists or selects its other primary agents.
+  These select agents, never replace your permission rules.
+- Models are the ones OpenCode has turned on, by provider; the thinking level is the
+  model's variant. Their IDs include the native provider, so duplicate model names
+  retain separate thinking levels. The context ring fills from OpenCode's token counts,
+  including reasoning, during each turn. Each turn also shows its total token count.
+- `todowrite` updates the to-do card. Running shell tools show a bounded live output
+  tail, and user images retain attachment markers in stored history.
+- `/status` names the running OpenCode version. `/mcp` shows the current folder's MCP
+  servers, and folders used in OpenCode outside Portals appear in the folder picker.
+- Messages sent while a turn runs can steer it through OpenCode's native inbox. They
+  stay pending until OpenCode confirms delivery, and can be taken back before then.
+  Messages explicitly placed in Queue wait durably in the host until the turn ends.
+- Ordinary forms become question cards, including choices, multiple selections, booleans
+  and numbers. Hidden, conditional or external fields need OpenCode's own UI; the host
+  tells you instead of silently changing the form.
+- OpenCode's slash commands use its command API; `/compact` uses its dedicated compaction
+  API (send it without extra instructions). `/usage` shows the Console workspace's Go
+  windows and budgets, when reported, not invented limits for external model providers.
+- Subagent rows follow native child sessions, including background work, completion,
+  failure and stopping one child without stopping its parent. Their question cards stay
+  associated with the child. Sessions started at the desk can be read, continued or forked;
+  reading one does not change its settings or send messages.
+- JPEG, PNG, GIF and WebP images go inline with their type checked from the bytes.
+  Convert HEIC or other unsupported formats before attaching them.
+- Writable threads get the `portals` command and the same app instructions as other
+  agents, without replacing your OpenCode instructions. Child sessions act on their
+  bridge-owned parent thread. Read-only adoption changes neither environment nor
+  instructions. Shell setup is restored after a server reconnect before a new prompt
+  proceeds. A child's first shell can still precede its best-effort setup.
+
+Background shell rows are not shown: the 2.2.5 API does not reliably associate every
+shell with a thread. Native subagent rows remain available. Images returned by tools
+are named as text; automatic image conversion, skills and message search are not
+provided for OpenCode. Hidden, conditional and external forms need OpenCode's own UI.
+
+Setup and update install the pinned OpenCode client only when OpenCode 2 is found or
+`providers.opencode` is explicitly enabled. After adding or removing OpenCode, repeat
+`npx portals-host@latest update` to reconcile it. OpenCode 1 alone does not add the client.
+
 ## Agents working with each other
 
 An agent can see and drive the other threads on your computer with the `portals` command,
 the way you do from the app: list them, read one, send it a message, wait for it, start a
 new one or stop one. Ask for it in words: "start a Codex thread to review this and tell
-me what it says". Claude Code, Codex, Pi, Cursor and Droid threads are told the command
-exists, and to use it only when you ask (`fleet.tellAgents`). A message sent this way says
+me what it says". Claude Code, Codex, Pi, Cursor, Droid and OpenCode threads are told the
+command exists, and to use it only when you ask (`fleet.tellAgents`). A message sent this way says
 it came through Portals, and the app shows who sent it. The command cannot answer another
 thread's approvals or questions: a blocked thread waits for you in the app. A thread an
 agent started tells that agent when it finishes, fails or waits for an answer
@@ -503,7 +606,7 @@ keeps the last verified list.
   `sudo loginctl enable-linger $USER`.
 - **Sign-in fails.** Pair again with the code from `npx portals-host pair`.
 - **An agent is missing from the app.** Run setup again: it says what it finds, and
-  offers to turn on an agent installed since, Pi, Cursor or Droid among them (or set its
+  offers to turn on an agent installed since, Pi, Cursor, Droid or OpenCode among them (or set its
   `providers` key to `true`). An update alone does not. Claude Code with your own login
   must be signed in (`claude`, then `/login`); Codex too (`codex login`).
 - **A Pi thread runs on a model you did not pick, or a model you use at the desk is not
@@ -528,8 +631,9 @@ it, and keeps what you change when it runs again. Restart the host after editing
 
 | Key | What it does |
 |---|---|
-| `providers.claude`, `providers.codex`, `providers.pi`, `providers.cursor`, `providers.droid`, `providers.hermes` | Offers that agent in the app (`true`) or not (`false`). Setup turns on what it finds |
-| `claude.path`, `codex.path`, `pi.path`, `cursor.path`, `droid.path`, `hermes.path` | Where each agent's program is. Setup writes the one it found; a bare name is looked up on the PATH the host runs with |
+| `providers.claude`, `providers.codex`, `providers.pi`, `providers.cursor`, `providers.droid`, `providers.hermes`, `providers.opencode` | Offers that agent in the app (`true`) or not (`false`). Setup turns on what it finds |
+| `claude.path`, `codex.path`, `pi.path`, `cursor.path`, `droid.path`, `hermes.path`, `opencode.path` | Where each agent's program is. Setup writes the one it found; a bare name is looked up on the PATH the host runs with |
+| `opencode.mode` | `"shared"`: join OpenCode's background service (the default). `"own"`: run an `opencode serve` of the host's own ([OpenCode](#opencode)) |
 | `claude.apiKey` | The Anthropic API key Claude Code runs with, or `null` for your own Claude login ([Claude Code's sign-in](#claude-codes-sign-in)) |
 | `claude.oauthToken` | A long-lived token from `claude setup-token` that Claude Code signs in with, or `null` for your own Claude login. Not used when `claude.apiKey` is set ([Claude Code's sign-in](#claude-codes-sign-in)) |
 | `generalFolder` | General: where a new thread runs when you pick no folder. `~/Portals` unless set |
@@ -560,3 +664,34 @@ own sessions are not touched.
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+### OpenCode 2 client packages
+
+The optional `@opencode/client@2.2.5` and its `@opencode/protocol` and
+`@opencode/schema` dependencies are from OpenCode and are distributed under the MIT
+License. The notice from the [pinned v2.2.5 release](https://github.com/anomalyco/opencode/blob/v2.2.5/LICENSE)
+is reproduced below.
+
+```
+MIT License
+
+Copyright (c) 2025 opencode
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```

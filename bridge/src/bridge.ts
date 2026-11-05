@@ -16,6 +16,7 @@ import { Auth } from "./http/auth.ts";
 import { createLocalServer, listenLocal, writeLauncher } from "./http/local.ts";
 import { createHttpServer } from "./http/server.ts";
 import { log } from "./log.ts";
+import { stopDeadlineMs } from "./lifetime.ts";
 import { Looks } from "./looks.ts";
 import { isLoopbackAddress } from "./net/members.ts";
 import { Net } from "./net/net.ts";
@@ -85,6 +86,8 @@ export interface RunningBridge {
   updates: UpdateCheck | undefined;
   /** The free space on the bridge's disk: for tests, which wait for its reading. */
   disk: DiskSpace;
+  /** Signal shutdown budget; normally eight seconds, at most sixteen. */
+  readonly stopDeadlineMs?: number;
   /** Stops everything; once, however often it is called. */
   close(): Promise<void>;
 }
@@ -348,6 +351,9 @@ export async function startBridge(options: BridgeOptions = {}): Promise<RunningB
     fleet,
     updates,
     disk,
+    get stopDeadlineMs() {
+      return Math.min(16_000, Math.max(stopDeadlineMs, ...[...providers.values()].map((provider) => provider.stopDeadlineMs ?? 0)));
+    },
     close() {
       closing ??= (async () => {
         // With a last line; only the bridge that started them stops them.

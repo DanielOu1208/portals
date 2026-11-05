@@ -11,6 +11,8 @@ import { DroidProvider } from "./droid/provider.ts";
 import { FakeProvider } from "./fake.ts";
 import { HermesHost } from "./hermes/provider.ts";
 import { findHermes } from "./hermes/setup.ts";
+import { opencodeProgram } from "./opencode/options.ts";
+import { OpenCodeProvider } from "./opencode/provider.ts";
 import { PiProvider } from "./pi/provider.ts";
 import type { Provider } from "./types.ts";
 
@@ -70,6 +72,18 @@ export function makeProviders(config: Config, paths: Paths): Map<string, Provide
       providers.set(droid.profile.name, droid);
     } else {
       log.info(`Droid is not installed (no ${config.droid.path}), so it is not offered`);
+    }
+  }
+  if (config.providers.opencode) {
+    // Off unless config.json turns it on, which setup does where it finds OpenCode 2.
+    const path = opencodeProgram(config.opencode.path);
+    if (path) {
+      const opencode = new OpenCodeProvider({
+        settings: { path, mode: config.opencode.mode, start: config.opencode.start, folder: expandHome(config.generalFolder), logPath: paths.opencodeLog, portals },
+      });
+      providers.set(opencode.profile.name, opencode);
+    } else {
+      log.info(`OpenCode is not installed (no ${config.opencode.path}), so it is not offered`);
     }
   }
   if (config.providers.fake) {

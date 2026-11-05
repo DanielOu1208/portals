@@ -32,6 +32,7 @@ import { ensureDirectory, readJSON, writeJSON } from "./store/jsonFile.ts";
 //   state/hermes.json   Hermes's profiles, as it last listed them
 //   state/update.json   when npm's registry was last asked for the latest portals-host, and what it said (src/updates.ts)
 //   hermes-serve.log    what a `hermes serve` the bridge started printed
+//   opencode-serve.log  what an `opencode serve` of the bridge's own printed
 //   counters.log        a line of counts a minute while `counters` is on (src/counters.ts); counters.log.1 is the file before it
 //
 // Keys this version does not know are left alone.
@@ -56,16 +57,18 @@ export interface Config {
   folders: FoldersConfig;
   /**
    * The agents offered. Pi only when config.json turns it on, which setup does where
-   * it finds Pi. Cursor, Droid and Hermes only when installed. The scripted one is
+   * it finds Pi, and OpenCode, which setup turns on where it finds OpenCode 2. Cursor,
+   * Droid and Hermes only when installed. The scripted one is
    * for tests and development only.
    */
-  providers: { claude: boolean; codex: boolean; pi: boolean; cursor: boolean; droid: boolean; hermes: boolean; fake: boolean };
+  providers: { claude: boolean; codex: boolean; pi: boolean; cursor: boolean; droid: boolean; hermes: boolean; opencode: boolean; fake: boolean };
   claude: ClaudeConfig;
   codex: CodexConfig;
   pi: PiConfig;
   cursor: CursorConfig;
   droid: DroidConfig;
   hermes: HermesConfig;
+  opencode: OpenCodeConfig;
   /** The scripted agent used for testing; `agents` lists it under that many names (fake, fake-2, …), for benches that need several agents. */
   fake: { delayMs: number; agents: number };
   /** The APNs key notifications are sent with; null sends none (registrations are still kept). */
@@ -258,6 +261,22 @@ export interface HermesConfig {
   start: boolean;
 }
 
+export interface OpenCodeConfig {
+  /**
+   * The installed `opencode` (OpenCode 2); `~` is the home folder. A bare name is looked
+   * up on PATH, then where OpenCode's installers put it.
+   */
+  path: string;
+  /**
+   * `shared`: join OpenCode's background service, which its terminal, desktop and web
+   * apps use too, so a thread is the same session there. `own`: an `opencode serve` of
+   * the bridge's own, stopped with the bridge (the fallback when the service cannot be had).
+   */
+  mode: "shared" | "own";
+  /** Start OpenCode's background service when none runs (`shared`). */
+  start: boolean;
+}
+
 export interface DroidConfig {
   /** The installed `droid`; `~` is the home folder. A bare name is looked up on PATH. */
   path: string;
@@ -325,6 +344,8 @@ export interface Paths {
   hermesProfiles: string;
   /** What a `hermes serve` the bridge started printed. */
   hermesLog: string;
+  /** What an `opencode serve` of the bridge's own printed. */
+  opencodeLog: string;
   /** The counters' lines, when they are on (src/counters.ts). */
   counters: string;
   /** When npm's registry was last asked for the latest version, and what it said (src/updates.ts). */
@@ -341,7 +362,7 @@ export const defaults: Config = {
   allowedHosts: ["127.0.0.1", "localhost", "::1"],
   generalFolder: "~/Portals",
   folders: { hide: [] },
-  providers: { claude: true, codex: true, pi: false, cursor: true, droid: true, hermes: true, fake: false },
+  providers: { claude: true, codex: true, pi: false, cursor: true, droid: true, hermes: true, opencode: false, fake: false },
   claude: { path: "~/.local/bin/claude", idleMinutes: 15, maxWarm: 6, apiKey: null, oauthToken: null, toolSummaries: true },
   // Codex's own model for titles (codex-cli 0.162.1).
   codex: { mode: "shared", path: "codex", socket: null, titleModel: "gpt-5.6-luna" },
@@ -349,6 +370,7 @@ export const defaults: Config = {
   cursor: { path: "~/.local/bin/cursor-agent", idleMinutes: 15 },
   droid: { path: "~/.local/bin/droid", idleMinutes: 15, maxWarm: 6 },
   hermes: { path: "~/.local/bin/hermes", start: true },
+  opencode: { path: "opencode", mode: "shared", start: true },
   fake: { delayMs: 40, agents: 1 },
   apns: null,
   push: { dryRun: null, relay: deployedRelay },
@@ -405,6 +427,7 @@ export function pathsFor(home: string): Paths {
     droid: join(state, "droid"),
     hermesProfiles: join(state, "hermes.json"),
     hermesLog: join(home, "hermes-serve.log"),
+    opencodeLog: join(home, "opencode-serve.log"),
     counters: join(home, "counters.log"),
     update: join(state, "update.json"),
   };
@@ -491,6 +514,7 @@ export function parseConfig(raw: Record<string, unknown>): Config {
     cursor: parseCursor(raw.cursor),
     droid: parseDroid(raw.droid),
     hermes: parseHermes(raw.hermes),
+    opencode: parseOpenCode(raw.opencode),
     fake: { delayMs: defaults.fake.delayMs, agents: defaults.fake.agents },
     apns: parseApns(raw.apns),
     push: parsePush(raw.push),
@@ -541,7 +565,7 @@ function parseFolders(value: unknown): FoldersConfig {
 function parseProviders(value: unknown): Config["providers"] {
   const raw = section(value, "providers");
   const providers = { ...defaults.providers };
-  for (const name of ["claude", "codex", "pi", "cursor", "droid", "hermes", "fake"] as const) {
+  for (const name of ["claude", "codex", "pi", "cursor", "droid", "hermes", "opencode", "fake"] as const) {
     if (raw[name] === undefined) continue;
     if (typeof raw[name] !== "boolean") throw new ConfigError(`providers.${name} must be true or false.`);
     providers[name] = raw[name];
@@ -684,6 +708,24 @@ function parseHermes(value: unknown): HermesConfig {
     hermes.start = raw.start;
   }
   return hermes;
+}
+
+function parseOpenCode(value: unknown): OpenCodeConfig {
+  const raw = section(value, "opencode");
+  const opencode = { ...defaults.opencode };
+  if (raw.path !== undefined) {
+    if (typeof raw.path !== "string" || raw.path === "") throw new ConfigError("opencode.path must be the path of the installed opencode.");
+    opencode.path = raw.path;
+  }
+  if (raw.mode !== undefined) {
+    if (raw.mode !== "shared" && raw.mode !== "own") throw new ConfigError('opencode.mode must be "shared" (OpenCode\'s background service) or "own" (an opencode serve of the bridge\'s own).');
+    opencode.mode = raw.mode;
+  }
+  if (raw.start !== undefined) {
+    if (typeof raw.start !== "boolean") throw new ConfigError("opencode.start must be true or false.");
+    opencode.start = raw.start;
+  }
+  return opencode;
 }
 
 function parseApns(value: unknown): ApnsConfig | null {

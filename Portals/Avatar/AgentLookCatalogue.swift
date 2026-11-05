@@ -43,7 +43,7 @@ nonisolated enum AgentLookCatalogue {
     static func defaultTint(for logo: CodingAgentLogo) -> Int {
         switch logo {
         case .claude: 6
-        case .codex, .pi, .cursor, .droid: 1
+        case .codex, .pi, .cursor, .droid, .opencode: 1
         }
     }
 

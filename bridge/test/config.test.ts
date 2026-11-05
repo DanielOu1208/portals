@@ -9,6 +9,8 @@ import { hostOS } from "../src/platform.ts";
 import { agentInstructions, mathInstructions, visualInstructions } from "../src/portals/guide.ts";
 import { cursorProgram } from "../src/providers/cursor/options.ts";
 import { CursorProvider } from "../src/providers/cursor/provider.ts";
+import { opencodeProgram } from "../src/providers/opencode/options.ts";
+import { OpenCodeProvider } from "../src/providers/opencode/provider.ts";
 import { droidProgram } from "../src/setup/agents.ts";
 import { makeProviders } from "../src/providers/index.ts";
 import { Registry } from "../src/sessions/registry.ts";
@@ -76,6 +78,10 @@ test("settings that cannot be used are refused with a sentence", (t) => {
     { providers: { hermes: "auto" } },
     { hermes: { path: "" } },
     { hermes: { start: "yes" } },
+    { providers: { opencode: "yes" } },
+    { opencode: { path: "" } },
+    { opencode: { mode: "service" } },
+    { opencode: { start: 1 } },
     { folders: [] },
     { folders: { hide: "~/private" } },
     { folders: { hide: [3] } },
@@ -101,7 +107,7 @@ test("settings that cannot be used are refused with a sentence", (t) => {
 test("Claude Code, Codex, Cursor, Droid and Hermes are on by default, the scripted agent only when asked for, and their settings take defaults", (t) => {
   const home = temporaryHome();
   t.after(() => rmSync(home, { recursive: true, force: true }));
-  assert.deepEqual(defaults.providers, { claude: true, codex: true, pi: false, cursor: true, droid: true, hermes: true, fake: false });
+  assert.deepEqual(defaults.providers, { claude: true, codex: true, pi: false, cursor: true, droid: true, hermes: true, opencode: false, fake: false });
   assert.deepEqual(defaults.claude, { path: "~/.local/bin/claude", idleMinutes: 15, maxWarm: 6, apiKey: null, oauthToken: null, toolSummaries: true });
   assert.deepEqual(defaults.codex, { mode: "shared", path: "codex", socket: null, titleModel: "gpt-5.6-luna" });
   assert.deepEqual(defaults.cursor, { path: "~/.local/bin/cursor-agent", idleMinutes: 15 });
@@ -111,7 +117,7 @@ test("Claude Code, Codex, Cursor, Droid and Hermes are on by default, the script
     JSON.stringify({ providers: { fake: true }, claude: { maxWarm: 2, apiKey: " sk-test " }, codex: { mode: "own", socket: "~/x.sock" }, cursor: { idleMinutes: 0.5 }, hermes: { start: false } }),
   );
   const config = loadConfig(home);
-  assert.deepEqual(config.providers, { claude: true, codex: true, pi: false, cursor: true, droid: true, hermes: true, fake: true });
+  assert.deepEqual(config.providers, { claude: true, codex: true, pi: false, cursor: true, droid: true, hermes: true, opencode: false, fake: true });
   assert.deepEqual(config.claude, { path: "~/.local/bin/claude", idleMinutes: 15, maxWarm: 2, apiKey: "sk-test", oauthToken: null, toolSummaries: true });
   // A long-lived token from `claude setup-token`, in place of the login.
   assert.equal(parseConfig({ claude: { oauthToken: " sk-ant-oat01-test " } }).claude.oauthToken, "sk-ant-oat01-test");
@@ -130,6 +136,27 @@ test("Claude Code, Codex, Cursor, Droid and Hermes are on by default, the script
   assert.equal(pathsFor(home).cursor, join(home, "state", "cursor"));
 });
 
+test("OpenCode is off until config.json turns it on, its settings take defaults, and it is offered only where its program is", (t) => {
+  const home = temporaryHome();
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const paths = pathsFor(home);
+  assert.equal(defaults.providers.opencode, false);
+  assert.deepEqual(defaults.opencode, { path: "opencode", mode: "shared", start: true });
+  assert.deepEqual(parseConfig({ opencode: { mode: "own", start: false, path: "~/bin/opencode" } }).opencode, { path: "~/bin/opencode", mode: "own", start: false });
+  assert.equal(paths.opencodeLog, join(home, "opencode-serve.log"));
+  const program = join(home, "opencode");
+  writeFileSync(program, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  const names = (opencode: Record<string, unknown>, on = true) =>
+    [...makeProviders(parseConfig({ codex: { socket: join(home, "codex.sock") }, opencode, providers: { claude: false, codex: false, cursor: false, hermes: false, droid: false, opencode: on, fake: true } }), paths).keys()];
+  assert.deepEqual(names({ path: program }), ["opencode", "fake"]);
+  assert.ok(makeProviders(parseConfig({ opencode: { path: program }, providers: { claude: false, codex: false, cursor: false, hermes: false, droid: false, opencode: true } }), paths).get("opencode") instanceof OpenCodeProvider);
+  assert.deepEqual(names({ path: join(home, "missing") }), ["fake"]);
+  assert.deepEqual(names({ path: program }, false), ["fake"]);
+  // A bare name is looked for on the PATH, then where OpenCode's installers put it.
+  assert.equal(opencodeProgram("opencode", { PATH: join(home, "nowhere") }, [home]), program);
+  assert.equal(opencodeProgram("opencode", { PATH: home }, []), program);
+  assert.equal(opencodeProgram("opencode", {}, []), null);
+});
 test("Cursor is offered when its program is there and not otherwise, after Codex and Pi, with the portals command", (t) => {
   const home = temporaryHome();
   t.after(() => rmSync(home, { recursive: true, force: true }));
@@ -188,7 +215,7 @@ test("Pi is off until config.json turns it on, its settings take defaults, and o
   assert.deepEqual(loadConfig(home).pi, defaults.pi);
   writeFileSync(pathsFor(home).config, JSON.stringify({ providers: { pi: true }, pi: { path: "~/bin/pi", maxWarm: 2 } }));
   const config = loadConfig(home);
-  assert.deepEqual(config.providers, { claude: true, codex: true, pi: true, cursor: true, droid: true, hermes: true, fake: false });
+  assert.deepEqual(config.providers, { claude: true, codex: true, pi: true, cursor: true, droid: true, hermes: true, opencode: false, fake: false });
   assert.deepEqual(config.pi, { path: "~/bin/pi", idleMinutes: 15, maxWarm: 2, model: null });
   assert.deepEqual(parseConfig({ pi: { idleMinutes: 0.5, maxWarm: 1 } }).pi, { path: "pi", idleMinutes: 0.5, maxWarm: 1, model: null });
   // The model new threads start on: Pi's own names, the provider first. An id may have slashes of its own.

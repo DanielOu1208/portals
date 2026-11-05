@@ -121,7 +121,7 @@ test("a harness bridge runs on a port of the system's choice with the scripted a
   const config = JSON.parse(readFileSync(join(home, "config.json"), "utf8"));
   assert.equal(config.port, 0);
   assert.notEqual(new URL(bridge.url).port, "9120");
-  assert.deepEqual(config.providers, { claude: false, codex: false, pi: false, cursor: false, droid: false, hermes: false, fake: true });
+  assert.deepEqual(config.providers, { claude: false, codex: false, pi: false, cursor: false, droid: false, hermes: false, opencode: false, fake: true });
   assert.equal(config.push.relay, null);
   assert.equal(config.relay.enabled, false);
   assert.equal(config.updates.check, false);

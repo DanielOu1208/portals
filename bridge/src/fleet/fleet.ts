@@ -3,6 +3,7 @@ import { counters } from "../counters.ts";
 import { FolderRefused, type Folders } from "../folders.ts";
 import { cutWhole } from "../json.ts";
 import { log } from "../log.ts";
+import { modelChoice } from "../providers/opencode/models.ts";
 import { ErrorCode, invalidParams, RpcError } from "../gateway/errors.ts";
 import { machineWord } from "../platform.ts";
 import { isThreadMode, thinkingLevels, type ModeState, type ModelCatalog, type Provider, type SessionSettings, type StoredMessage, type ThreadMode } from "../providers/types.ts";
@@ -1237,7 +1238,11 @@ export function checkLevel(level: string): void {
 }
 
 /** The model and provider to use, checked against what the agent offers. */
-export function chooseModel(agent: Provider, catalog: ModelCatalog, model: string, providerSlug: string | undefined): { model: string; provider: string } {
+export function chooseModel(agent: Provider, catalog: ModelCatalog, model: string, providerSlug: string | undefined, currentProvider?: string): { model: string; provider: string } {
+  if (agent.profile.kind === "opencode") {
+    try { ({ model, providerSlug } = modelChoice(catalog, model, providerSlug, currentProvider)); }
+    catch (error) { throw invalidParams((error as Error).message); }
+  }
   const offering = providerSlug
     ? catalog.providers.find((entry) => entry.slug === providerSlug)
     : (catalog.providers.find((entry) => entry.models.includes(model)) ?? catalog.providers.find((entry) => entry.slug === catalog.provider));

@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { expandHome } from "../config.ts";
 import { childEnvironment } from "../providers/claude/options.ts";
+import { opencodeFolders } from "../providers/opencode/options.ts";
 import { factoryAppDroids, isExecutable, standaloneDroids, type System } from "./system.ts";
 
 // Finding the coding agents the bridge runs. Each is optional: the bridge offers the
@@ -22,6 +23,7 @@ export const installHints = {
   pi: "Install it with: npm install -g @earendil-works/pi-coding-agent",
   cursor: "Install it with: curl https://cursor.com/install -fsS | bash",
   droid: "Install Droid from https://docs.factory.ai/cli/getting-started/quickstart, then run droid and /login in a terminal.",
+  opencode: "Install OpenCode 2 with: npm install -g @opencode/cli",
 };
 
 const notFound: FoundAgent = { path: null, version: null, signedIn: null };
@@ -126,6 +128,27 @@ export async function findDroid(system: System, configured?: string): Promise<Fo
     timeoutMs: 20_000,
     env: { ...process.env, FACTORY_DROID_AUTO_UPDATE_ENABLED: "false" },
   });
+  const version = versionRun.code === 0 ? (/\d+\.\d+\.\d+/.exec(versionRun.stdout)?.[0] ?? null) : null;
+  return { path, version, signedIn: null };
+}
+
+/**
+ * OpenCode: on PATH, else where its installers put it. Portals runs OpenCode 2 only;
+ * `version` says which one was found, so setup can tell someone on OpenCode 1 to
+ * upgrade. OpenCode keeps a sign-in for each model provider and says none, so
+ * `signedIn` is null.
+ */
+export async function findOpenCode(system: System, folders: string[] = opencodeFolders(), configured?: string): Promise<FoundAgent> {
+  let preferred = configured ? expandHome(configured) : null;
+  if (preferred && !isAbsolute(preferred)) preferred = system.which(preferred);
+  const path = firstExecutable([
+    preferred,
+    system.which("opencode"),
+    ...folders.map((folder) => join(folder, "opencode")),
+  ]);
+  if (!path) return notFound;
+  const versionRun = await system.run(path, ["--version"], { timeoutMs: 20_000, env: { ...process.env, OPENCODE_DISABLE_AUTOUPDATE: "1" } });
+  // "opencode v2.2.5", or "1.18.35"
   const version = versionRun.code === 0 ? (/\d+\.\d+\.\d+/.exec(versionRun.stdout)?.[0] ?? null) : null;
   return { path, version, signedIn: null };
 }

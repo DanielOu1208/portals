@@ -1,0 +1,125 @@
+{
+ "data": [
+  {
+   "id": "msg_1a384a184001whSQxjBFldylCw",
+   "time": {
+    "created": 1793744740743
+   },
+   "text": "Use your shell tool to run exactly `echo spike-ok` and then tell me what it printed.",
+   "type": "user"
+  },
+  {
+   "id": "msg_1a384a189001Xk6Hey0DDN53wU",
+   "time": {
+    "created": 1793744740748,
+    "streamed": 1793744741885,
+    "completed": 1793744741902
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "deepseek-v4.1-flash-free",
+    "providerID": "opencode",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "reasoning",
+     "text": "The user wants me to run exactly `echo spike-ok` with the shell tool and report output. Simple.",
+     "native": {
+      "reasoningField": "reasoning_content"
+     },
+     "time": {
+      "created": 1793744741326,
+      "completed": 1793744741880
+     }
+    },
+    {
+     "type": "tool",
+     "id": "chatcmpl-tool-9e59867b7550f326",
+     "name": "shell",
+     "executed": false,
+     "state": {
+      "status": "completed",
+      "input": {
+       "command": "echo spike-ok"
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": "spike-ok\n"
+       }
+      ],
+      "metadata": {
+       "status": "completed",
+       "truncated": false,
+       "exit": 0
+      }
+     },
+     "time": {
+      "created": 1793744741626,
+      "ran": 1793744741883,
+      "completed": 1793744741900
+     }
+    }
+   ],
+   "finish": "tool-calls",
+   "rawFinish": "tool_calls",
+   "cost": 0,
+   "tokens": {
+    "input": 35,
+    "output": 41,
+    "reasoning": 23,
+    "cache": {
+     "read": 5376,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_1a384a6120010Nd7zV2AUsdlBV",
+   "time": {
+    "created": 1793744741908,
+    "streamed": 1793744743394,
+    "completed": 1793744743395
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "deepseek-v4.1-flash-free",
+    "providerID": "opencode",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "It printed:\n\n```\nspike-ok\n```"
+    }
+   ],
+   "finish": "stop",
+   "rawFinish": "stop",
+   "cost": 0,
+   "tokens": {
+    "input": 115,
+    "output": 12,
+    "reasoning": 0,
+    "cache": {
+     "read": 5376,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_1a384abe4001yoipYqTKxcORp6",
+   "time": {
+    "created": 1793744743396
+   },
+   "type": "idle",
+   "outcome": "succeeded"
+  }
+ ],
+ "cursor": {
+  "previous": "eyJpZCI6Im1zZ18xYTM4NGExODQwMDF3aFNReGpCRmxkeWxDdyIsIm9yZGVyIjoiYXNjIiwiZGlyZWN0aW9uIjoicHJldmlvdXMifQ",
+  "next": "eyJpZCI6Im1zZ18xYTM4NGFiZTQwMDF5b2lwWXFUS3hjT1JwNiIsIm9yZGVyIjoiYXNjIiwiZGlyZWN0aW9uIjoibmV4dCJ9"
+ }
+}

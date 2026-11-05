@@ -44,6 +44,7 @@ ${Object.entries(environment)
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
+  <key>ExitTimeOut</key><integer>20</integer>
   <key>StandardOutPath</key>${string(spec.log)}
   <key>StandardErrorPath</key>${string(spec.log)}
 </dict>

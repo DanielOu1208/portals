@@ -967,7 +967,7 @@ export const methods: Record<string, MethodSpec> = {
           const result = await session.setting(async () => {
             const agent = provider(context.gateway, session.record.agent);
             const wanted = parseModelValue(value);
-            const chosen = chooseModel(agent, await agent.models(), wanted.model, wanted.provider);
+            const chosen = chooseModel(agent, await agent.models(), wanted.model, wanted.provider, session.record.provider);
             return session.setModel(chosen.model, chosen.provider);
           });
           return result.deferred ? { deferred: true } : {};

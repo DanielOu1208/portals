@@ -14,7 +14,7 @@ import { computerName } from "../src/platform.ts";
 import { verifyPassword } from "../src/http/auth.ts";
 import { droidProgram, findClaude, findCursor, findDroid, findPi, piFolders } from "../src/setup/agents.ts";
 import { pair, relayReset, setup, status, uninstall, update, type Context, type SetupOptions } from "../src/setup/commands.ts";
-import { appManifest } from "../src/setup/install.ts";
+import { appManifest, installApp } from "../src/setup/install.ts";
 import { oldLabel, plist } from "../src/setup/launchAgent.ts";
 import { moveOldInstall } from "../src/setup/migrate.ts";
 import { pairingLink, qrCode } from "../src/setup/pairing.ts";
@@ -94,6 +94,10 @@ class FakeSystem implements System {
   cursor: string | null = null;
   droid: string | null = null;
   droidVersionCode = 0;
+  /** Where `opencode` is on the PATH, and the version it says; most Macs have none. */
+  opencode: string | null = null;
+  opencodeVersion = "2.2.5";
+  npmCode = 0;
   appDroids?: () => string[];
   standaloneDroids?: () => string[];
   /** What `cursor-agent status` prints. */
@@ -119,6 +123,7 @@ class FakeSystem implements System {
     if (name === "pi") return this.pi;
     if (name === "cursor-agent") return this.cursor;
     if (name === "droid") return this.droid;
+    if (name === "opencode") return this.opencode;
     return name === "codex" ? join(home, "bin", "codex") : null;
   }
 
@@ -239,6 +244,7 @@ class FakeSystem implements System {
       return ok();
     }
     if (name === "npm") {
+      if (this.npmCode !== 0) return { code: this.npmCode, stdout: "", stderr: "npm unavailable" };
       mkdirSync(join(options.cwd!, "node_modules"), { recursive: true });
       return ok();
     }
@@ -250,6 +256,7 @@ class FakeSystem implements System {
     if (name === "pi" && args[0] === "--version") return ok("1.1.0\n");
     if (name === "cursor-agent" && args[0] === "--version") return ok("2026.10.01-e373342\n");
     if (name === "cursor-agent" && args[0] === "status") return ok(this.cursorStatus);
+    if (name === "opencode" && args[0] === "--version") return ok(`${this.opencodeVersion}\n`);
     if (name === "droid" && args[0] === "--version") return { code: this.droidVersionCode, stdout: "Droid 0.236.0\n", stderr: "" };
     if (program === "/usr/bin/osascript" && args.join(" ").includes("portals://")) return ok(this.portalsApp ? `${this.portalsApp}\n` : "\n");
     if (program === "/usr/bin/open" && args[0]?.startsWith("portals://pair?")) return ok();
@@ -340,7 +347,7 @@ function fakePackage(): string {
   writeFileSync(join(path, "README.md"), "# portals-bridge\n");
   writeFileSync(
     join(path, "package.json"),
-    JSON.stringify({ name: "portals-bridge", version: "9.9.9", dependencies: { ws: "8.22.0" }, peerDependencies: { "@anthropic-ai/claude-agent-sdk": "0.3.292" }, devDependencies: { typescript: "7.0.2" } }),
+    JSON.stringify({ name: "portals-bridge", version: "9.9.9", dependencies: { ws: "8.22.0" }, peerDependencies: { "@anthropic-ai/claude-agent-sdk": "0.3.292", "@opencode/client": "2.2.5" }, devDependencies: { typescript: "7.0.2" } }),
   );
   return path;
 }
@@ -355,7 +362,7 @@ async function healthCheck(): Promise<Server & { port: number }> {
 function context(system: FakeSystem, ui: ScriptedUi, env: NodeJS.ProcessEnv = {}): Context {
   // No folder besides PATH is searched for Pi: the Mac the tests run on may have one beside its node.
   // A Mac's setup, on Linux too; a Linux computer's has its own tests (`linuxContext`).
-  return { ui, system, env, interactive: false, plistFolder: join(home, "Library", "LaunchAgents"), packageRoot: fakePackage(), piFolders: [], os: "macos" };
+  return { ui, system, env, interactive: false, plistFolder: join(home, "Library", "LaunchAgents"), packageRoot: fakePackage(), piFolders: [], opencodeFolders: [], os: "macos" };
 }
 
 /** A dummy `pi` where npm puts it under nvm, beside a node of its own. */
@@ -416,6 +423,7 @@ test("the LaunchAgent's plist runs the installed bridge with its PATH and log, e
   assert.match(text, /<string>\/n\/node<\/string>\s*<string>\/a &amp; b\/dist\/main.js<\/string>/);
   assert.match(text, /<key>PATH<\/key><string>\/x:\/y<\/string>/);
   assert.match(text, /<key>PORTALS_BRIDGE_HOME<\/key><string>\/h<\/string>/);
+  assert.match(text, /<key>ExitTimeOut<\/key><integer>20<\/integer>/);
   assert.match(text, /<key>KeepAlive<\/key><true\/>/);
   assert.equal(text.match(/<string>\/l.log<\/string>/g)?.length, 2);
 });
@@ -444,6 +452,69 @@ test("the installed bridge's package.json has the SDK as a dependency and nothin
   );
 });
 
+test("the OpenCode client is installed only when selected, retaining its optional version for installed-copy setup", () => {
+  const manifest = { name: "portals-bridge", version: "1.0.0", dependencies: { ws: "8.22.0" }, peerDependencies: { "@anthropic-ai/claude-agent-sdk": "0.3.292", "@opencode/client": "2.2.5" } };
+  const without = appManifest(manifest);
+  assert.deepEqual(without.dependencies, { ws: "8.22.0", "@anthropic-ai/claude-agent-sdk": "0.3.292" });
+  assert.deepEqual(without.peerDependencies, { "@opencode/client": "2.2.5" });
+  assert.deepEqual(without.peerDependenciesMeta, { "@opencode/client": { optional: true } });
+  assert.equal((appManifest(manifest, { opencode: true }).dependencies as Record<string, string>)["@opencode/client"], "2.2.5");
+});
+
+test("setup and update recompute the OpenCode client for v2, v1, configured paths, removal and explicit opt-in", async () => {
+  const system = new FakeSystem();
+  const bridgeHome = join(root, "conditional-opencode");
+  const ctx = context(system, new ScriptedUi(), { PORTALS_BRIDGE_HOME: bridgeHome });
+  const paths = pathsFor(bridgeHome);
+  const selected = () => JSON.parse(readFileSync(join(paths.app, "package.json"), "utf8")).dependencies["@opencode/client"];
+  assert.equal(await setup({ service: false, tailscale: false }, ctx), 0);
+  assert.equal(selected(), undefined);
+
+  const program = join(home, "tools", "opencode");
+  mkdirSync(dirname(program), { recursive: true });
+  writeFileSync(program, "#!/bin/sh\nexit 1\n");
+  chmodSync(program, 0o755);
+  system.opencode = program;
+  system.opencodeVersion = "1.18.35";
+  assert.equal(await update(ctx), 0);
+  assert.equal(selected(), undefined);
+  system.opencodeVersion = "2.1.9";
+  assert.equal(await update(ctx), 0);
+  assert.equal(selected(), undefined);
+  system.opencodeVersion = "2.2.5";
+  assert.equal(await update(ctx), 0);
+  assert.equal(selected(), "2.2.5");
+
+  // A custom executable is found even when it isn't on PATH.
+  system.opencode = null;
+  const config = JSON.parse(readFileSync(paths.config, "utf8"));
+  config.opencode = { path: program };
+  config.providers.opencode = false;
+  writeFileSync(paths.config, JSON.stringify(config));
+  assert.equal(await update(ctx), 0);
+  assert.equal(selected(), "2.2.5");
+  assert.equal(await setup({ service: false, tailscale: false }, ctx), 0);
+  assert.equal(selected(), "2.2.5");
+
+  rmSync(program);
+  assert.equal(await update(ctx), 0);
+  assert.equal(selected(), undefined);
+  config.providers.opencode = true;
+  writeFileSync(paths.config, JSON.stringify(config));
+  assert.equal(await update(ctx), 0);
+  assert.equal(selected(), "2.2.5");
+
+  // Running setup from the installed copy must not skip a newly needed client.
+  await installApp(system, paths, paths.app, { opencode: false });
+  assert.equal(selected(), undefined);
+  await installApp(system, paths, paths.app, { opencode: true });
+  assert.equal(selected(), "2.2.5");
+  const previous = readFileSync(join(paths.app, "package.json"), "utf8");
+  system.npmCode = 1;
+  await assert.rejects(installApp(system, paths, paths.app, { opencode: false }), /npm install failed/);
+  assert.equal(readFileSync(join(paths.app, "package.json"), "utf8"), previous);
+});
+
 test("setup on a new Mac: password, Claude through an API key, a tailnet address, the LaunchAgent and the pairing code", async () => {
   const system = new FakeSystem();
   const ui = new ScriptedUi();
@@ -462,7 +533,7 @@ test("setup on a new Mac: password, Claude through an API key, a tailnet address
   assert.equal(config.generalFolder, "~/Portals");
   assert.ok(existsSync(join(home, "Portals")));
   // No Pi on this Mac: it is off, and setup says how to get it.
-  assert.deepEqual(config.providers, { claude: true, codex: true, pi: false, cursor: false, droid: false, hermes: true, fake: false });
+  assert.deepEqual(config.providers, { claude: true, codex: true, pi: false, cursor: false, droid: false, hermes: true, opencode: false, fake: false });
   assert.ok(ui.lines.includes("Pi: not found. Install it with: npm install -g @earendil-works/pi-coding-agent"));
   // No Cursor either: a new install turns it off, and says nothing of it.
   assert.ok(!ui.text.includes("Cursor"), ui.text);
@@ -1582,7 +1653,7 @@ test("Pi found on a new Mac is on with its path and a line that it does not ask,
     assert.equal(await setup({ service: true, tailscale: false, port: bridge.port, claude: "off" }, context(system, ui, { PORTALS_BRIDGE_HOME: bridgeHome })), 0, ui.text);
     const paths = pathsFor(bridgeHome);
     const config = JSON.parse(readFileSync(paths.config, "utf8"));
-    assert.deepEqual(config.providers, { claude: false, codex: true, pi: true, cursor: false, droid: false, hermes: true, fake: false });
+    assert.deepEqual(config.providers, { claude: false, codex: true, pi: true, cursor: false, droid: false, hermes: true, opencode: false, fake: false });
     assert.deepEqual(config.pi, { path: system.pi, idleMinutes: 15, maxWarm: 6, model: null });
     assert.ok(ui.lines.includes(`ok Pi 1.1.0 at ${system.pi}`));
     assert.ok(ui.lines.includes("Pi runs commands and edits files without asking first, from the phone as at the desk."));
@@ -1666,7 +1737,7 @@ test("Cursor is found when it is installed: reported, written to config.json, on
     // What `cursor-agent status` printed is read for whether it is signed in, and never shown.
     assert.ok(!ui.text.includes("dana@example.com"));
     const config = JSON.parse(readFileSync(path, "utf8"));
-    assert.deepEqual(config.providers, { claude: false, codex: true, pi: false, cursor: true, droid: false, hermes: true, fake: false });
+    assert.deepEqual(config.providers, { claude: false, codex: true, pi: false, cursor: true, droid: false, hermes: true, opencode: false, fake: false });
     assert.deepEqual(config.cursor, { path: program, idleMinutes: 15 });
     // A LaunchAgent does not get a terminal's PATH: the program's folder is put on it.
     const plistText = readFileSync(join(home, "Library", "LaunchAgents", "com.danielou.portals.bridge.with-cursor.plist"), "utf8");
@@ -1717,6 +1788,66 @@ test("Cursor is found when it is installed: reported, written to config.json, on
   }
 });
 
+test("OpenCode 2 is found when it is installed and turned on, an OpenCode 1 said with how to upgrade, and none heard of where there is none", async () => {
+  const system = new FakeSystem();
+  const program = join(home, "tools", "opencode");
+  mkdirSync(join(home, "tools"), { recursive: true });
+  writeFileSync(program, "#!/bin/sh\nexit 1\n");
+  chmodSync(program, 0o755);
+  const ui = new ScriptedUi();
+  const bridgeHome = join(root, "with-opencode");
+  const env = { PORTALS_BRIDGE_HOME: bridgeHome };
+  const path = pathsFor(bridgeHome).config;
+  const bridge = await healthCheck();
+  try {
+    const options = { service: true, tailscale: false, port: bridge.port, claude: "off" } satisfies SetupOptions;
+    // None: nothing is said of it.
+    assert.equal(await setup(options, context(system, ui, env)), 0, ui.text);
+    assert.ok(!ui.text.includes("OpenCode"), ui.text);
+    assert.equal(JSON.parse(readFileSync(path, "utf8")).providers.opencode, false);
+
+    system.opencode = program;
+    const found = new ScriptedUi();
+    assert.equal(await setup(options, context(system, found, env)), 0, found.text);
+    assert.ok(found.lines.includes(`ok OpenCode 2.2.5 at ${program}`), found.text);
+    // It is asked for its version, with no update of itself.
+    const asked = system.calls.find((call) => call.program === program)!;
+    assert.deepEqual(asked.args, ["--version"]);
+    assert.equal(asked.options.env?.OPENCODE_DISABLE_AUTOUPDATE, "1");
+    // Off since the setup that found none: it stays off unless setup is told to turn it on.
+    assert.ok(found.lines.includes("? OpenCode is off on this host. Turn it on?"), found.text);
+    assert.equal(JSON.parse(readFileSync(path, "utf8")).providers.opencode, false);
+    const turnedOn = new ScriptedUi({ "OpenCode is off": true });
+    assert.equal(await setup(options, context(system, turnedOn, env)), 0, turnedOn.text);
+    assert.ok(turnedOn.text.includes("OpenCode follows its own permission settings"), turnedOn.text);
+    const config = JSON.parse(readFileSync(path, "utf8"));
+    assert.equal(config.providers.opencode, true);
+    assert.equal(config.opencode.path, program);
+    const listed = new ScriptedUi();
+    assert.equal(await status(context(system, listed, env)), 0, listed.text);
+    assert.match(listed.text, /Agents: +Codex, OpenCode(, Hermes)?\n/);
+
+    // OpenCode 1 in its place: said, with how to upgrade; the setting is left as it was.
+    system.opencodeVersion = "1.18.35";
+    const old = new ScriptedUi();
+    assert.equal(await setup(options, context(system, old, env)), 0, old.text);
+    assert.match(old.text, /OpenCode 1\.18\.35.*Portals runs OpenCode 2 \(2\.2\.0 or newer\).*opencode upgrade --major/);
+    assert.ok(!old.text.includes("OpenCode follows its own permission settings"), old.text);
+    // On a new install it is not turned on.
+    const fresh = new ScriptedUi();
+    const freshHome = join(root, "with-opencode-1");
+    assert.equal(await setup(options, context(system, fresh, { PORTALS_BRIDGE_HOME: freshHome })), 0, fresh.text);
+    assert.equal(JSON.parse(readFileSync(pathsFor(freshHome).config, "utf8")).providers.opencode, false);
+    system.opencodeVersion = "2.1.9";
+    const tooOld = new ScriptedUi();
+    const oldV2Home = join(root, "with-old-opencode-2");
+    assert.equal(await setup(options, context(system, tooOld, { PORTALS_BRIDGE_HOME: oldV2Home })), 0, tooOld.text);
+    assert.match(tooOld.text, /OpenCode 2\.1\.9.*2\.2\.0 or newer/);
+    assert.equal(JSON.parse(readFileSync(pathsFor(oldV2Home).config, "utf8")).providers.opencode, false);
+  } finally {
+    bridge.close();
+  }
+});
 test("status says when a later version is out, as the bridge last heard from npm's registry, while it asks", async () => {
   const system = new FakeSystem();
   const ui = new ScriptedUi();
@@ -1780,7 +1911,7 @@ test("Cursor alone is an agent to run; a bridge set up before it could run Curso
   rmSync(join(home, "bin", "codex"));
   const none = new ScriptedUi();
   assert.equal(await setup({ service: false, tailscale: false, port: 39127 }, context(new FakeSystem(), none, { PORTALS_BRIDGE_HOME: join(root, "no-agent") })), 1);
-  assert.match(none.text, /There is no agent for Portals host to run\. Install Claude Code, Codex, Pi, Cursor, Droid or Hermes, then run setup again\./);
+  assert.match(none.text, /There is no agent for Portals host to run\. Install Claude Code, Codex, Pi, Cursor, Droid, Hermes or OpenCode, then run setup again\./);
 
   const system = new FakeSystem();
   const program = installCursor(system);
@@ -1788,7 +1919,7 @@ test("Cursor alone is an agent to run; a bridge set up before it could run Curso
   const bridgeHome = join(root, "only-cursor");
   assert.equal(await setup({ service: false, tailscale: false, port: 39128, address: "https://mac.example.ts.net:443" }, context(system, ui, { PORTALS_BRIDGE_HOME: bridgeHome })), 0, ui.text);
   const config = JSON.parse(readFileSync(pathsFor(bridgeHome).config, "utf8"));
-  assert.deepEqual(config.providers, { claude: false, codex: false, pi: false, cursor: true, droid: false, hermes: true, fake: false });
+  assert.deepEqual(config.providers, { claude: false, codex: false, pi: false, cursor: true, droid: false, hermes: true, opencode: false, fake: false });
   assert.equal(config.cursor.path, program);
 
   // A config.json from before: no word of Cursor in it. Without the program nothing is said or written of it.

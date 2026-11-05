@@ -26,7 +26,7 @@
 
 ---
 
-A native iPhone, iPad and Mac app for Claude Code, Codex, Cursor, Droid, Pi and Hermes. Agents run on your own Mac or Linux computers, and you can pick up any thread from any device. Currently in alpha.
+A native iPhone, iPad and Mac app for Claude Code, Codex, Cursor, Droid, Pi, Hermes and OpenCode 2. Agents run on your own Mac or Linux computers, and you can pick up any thread from any device. Currently in alpha.
 
 <p align="center">
   <img src="docs/images/portals-mac.jpg" alt="Portals on a Mac: a sidebar of threads across two computers, and Codex at work on a test suite" width="800">

@@ -28,7 +28,7 @@ type Row = Record<string, number>;
 export type ConnectionKind = "app" | "link" | "local";
 export type FrameKind = "ready" | "answers" | "events" | "asks";
 export type HttpRoute = "login" | "ticket" | "status" | "push" | "other";
-export type SpawnKind = "claude" | "claude_cli" | "codex" | "pi" | "cursor" | "hermes" | "ps";
+export type SpawnKind = "claude" | "claude_cli" | "codex" | "pi" | "cursor" | "hermes" | "opencode" | "ps";
 export type FleetRejection = "schema" | "position" | "digest" | "page";
 
 export interface CountersOptions {

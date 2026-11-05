@@ -135,7 +135,7 @@ export class Scratch {
       port: 0,
       auth: { username: this.account.username, passwordHash: await this.passwordHash },
       generalFolder: this.folder("general"),
-      providers: { claude: false, codex: false, pi: false, cursor: false, droid: false, hermes: false, fake: true },
+      providers: { claude: false, codex: false, pi: false, cursor: false, droid: false, hermes: false, opencode: false, fake: true },
       // A file in place of the relay: without either the bridge makes no notifier, and
       // an installed bridge has one.
       push: { relay: null, dryRun: join(home, "notifications.jsonl") },

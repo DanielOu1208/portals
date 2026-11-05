@@ -16,6 +16,7 @@ import Testing
         #expect(logo("pi", kind: "pi", on: .bridge) == .pi)
         #expect(logo("cursor", kind: "cursor", on: .bridge) == .cursor)
         #expect(logo("droid", kind: "droid", on: .bridge) == .droid)
+        #expect(logo("opencode", kind: "opencode", on: .bridge) == .opencode)
     }
 
     /// A Hermes profile keeps a name the bridge's own agents leave free, so one can be
@@ -26,11 +27,12 @@ import Testing
         #expect(logo("claude", kind: "hermes", on: .bridge) == nil)
         #expect(logo("codex", kind: "hermes", on: .bridge) == nil)
         #expect(logo("droid", kind: "hermes", on: .bridge) == nil)
+        #expect(logo("opencode", kind: "hermes", on: .bridge) == nil)
         // The bridge's own agent and its test agent are kinds with no logo.
         #expect(logo("portals-aeri", kind: "aeri", on: .bridge) == nil)
         #expect(logo("fake", kind: "fake", on: .bridge) == nil)
         // A kind this version does not know, under a name it does.
-        #expect(logo("pi", kind: "opencode", on: .bridge) == nil)
+        #expect(logo("pi", kind: "kilo", on: .bridge) == nil)
         // Only a bridge's agents have one, whatever a Hermes host says of its own.
         #expect(logo("pi", kind: "pi", on: nil) == nil)
     }
@@ -90,6 +92,7 @@ import Testing
         #expect(CodingAgentLogo.pi.brand == "Pi")
         #expect(CodingAgentLogo.cursor.brand == "Cursor")
         #expect(CodingAgentLogo.droid.brand == "Factory")
+        #expect(CodingAgentLogo.opencode.brand == "OpenCode")
     }
 }
 
