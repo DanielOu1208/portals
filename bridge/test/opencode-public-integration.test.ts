@@ -174,10 +174,9 @@ test("OpenCode's skills are offered as skills, and a message that names one carr
   const graphify = offered.find((command) => command.name === "graphify");
   assert.equal(graphify?.skill, true);
   assert.equal(graphify?.description, "Graph a codebase");
-  // The command of the same name wins, and a name the app cannot send is left out.
+  // The command of the same name wins.
   assert.equal(offered.filter((command) => command.name === "init").length, 1);
   assert.equal(offered.find((command) => command.name === "init")?.skill, false);
-  assert.equal(offered.some((command) => command.name === "OpenCode"), false);
 
   const events: ProviderEvent[] = [];
   const session = await provider.startSession({ id, cwd: folder, settings }, { emit: (event) => events.push(event), ask: async () => ({ kind: "withdrawn", reason: "unused" }) });
@@ -201,7 +200,7 @@ test("skills OpenCode is still reading are waited for, the first time a folder i
     const timers = [setTimeout(() => { fake.skills = early; }, 50), setTimeout(() => { fake.skills = whole; }, 400)];
     t.after(() => timers.forEach(clearTimeout));
     const offered = await provider.commands({ id: "ses_skills", cwd });
-    assert.deepEqual(offered.filter((command) => command.skill).map((command) => command.name), ["graphify", "late"]);
+    assert.deepEqual(offered.filter((command) => command.skill).map((command) => command.name), ["graphify", "opencode", "late"]);
     // Read once, a folder's list is whole: the next menu asks once.
     const reads = fake.callsOf("GET", /^\/api\/skill$/).length;
     await provider.commands({ id: "ses_skills", cwd });
@@ -311,5 +310,39 @@ test("a freshly started OpenCode slow to answer its first skill read still fills
     } else original(req, res);
   });
   const offered = await provider.commands({ id: "ses_cold", cwd: folder });
-  assert.deepEqual(offered.filter((command) => command.skill).map((command) => command.name), ["graphify"]);
+  assert.deepEqual(offered.filter((command) => command.skill).map((command) => command.name), ["graphify", "opencode"]);
+});
+
+test("a skill named with capitals is offered by its name lower cased, and a message naming it carries the skill itself", async (t) => {
+  const { folder, fake, provider } = await rig(t);
+  fake.skills = [
+    ...fake.skills,
+    { id: "report", name: "Report", description: "Write Dana's weekly report", path: "/skills/report/SKILL.md" },
+    { id: "graphify-upper", name: "Graphify", description: "Named like another skill", path: "/skills/Graphify/SKILL.md" },
+    { id: "spaced", name: "two words", description: "A name the app cannot send", path: "/skills/spaced/SKILL.md" },
+  ];
+  const id = await provider.newThread({ cwd: folder, settings });
+  const offered = await provider.commands({ id, cwd: folder });
+  // The skill already named "graphify" keeps the name; a command's name and a spaced one are left out.
+  assert.deepEqual(offered.filter((command) => command.skill).map((command) => [command.name, command.description]), [
+    ["graphify", "Graph a codebase"],
+    ["opencode", "Named with capitals"],
+    ["report", "Write Dana's weekly report"],
+  ]);
+
+  const events: ProviderEvent[] = [];
+  const session = await provider.startSession({ id, cwd: folder, settings }, { emit: (event) => events.push(event), ask: async () => ({ kind: "withdrawn", reason: "unused" }) });
+  t.after(() => session.close());
+  session.attached?.();
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==", "base64");
+  // As the app sends it from the menu, and with a picture, as a turn of its own sends it.
+  for (const prompt of [{ text: "/report this week", images: [] }, { text: "/report this week", images: [{ filename: "chart.png", data: png }] }]) {
+    const ends = events.filter((event) => event.type === "turn.end").length;
+    fake.queueTurn(id, "plain");
+    session.startTurn(prompt);
+    await until(() => events.filter((event) => event.type === "turn.end").length === ends + 1);
+    const sent = fake.callsOf("POST", new RegExp(`/session/${id}/prompt$`)).at(-1)!.body;
+    assert.equal(sent.text, "/report this week");
+    assert.deepEqual(sent.skills, [{ id: "report", name: "Report" }]);
+  }
 });

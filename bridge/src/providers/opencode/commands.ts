@@ -22,16 +22,27 @@ export function commandCatalog(commands: { name: string; description?: string }[
 }
 
 /**
- * OpenCode's skills as the app's commands. Left out: a name the app cannot send (`/name`
- * goes to the bridge lower cased, and is read up to the first space or second slash), and
- * one `taken`, a command of OpenCode's or the bridge's, already offers.
+ * OpenCode's skills by the name the app sends: `/name` goes to the bridge lower cased, and is
+ * read up to the first space or second slash. So a skill named with capitals goes by its name
+ * lower cased, unless a skill already has that name; one with a space or a slash is left out.
  */
+function slashNames(skills: readonly SkillInfo[]): Map<string, SkillInfo> {
+  const sendable = skills.filter((skill) => typeof skill.name === "string" && skill.name !== "" && !/[\s/]/.test(skill.name));
+  const lower = (skill: SkillInfo) => skill.name === skill.name.toLowerCase();
+  const named = new Map<string, SkillInfo>();
+  for (const skill of [...sendable.filter(lower), ...sendable.filter((skill) => !lower(skill))]) {
+    if (!named.has(skill.name.toLowerCase())) named.set(skill.name.toLowerCase(), skill);
+  }
+  return named;
+}
+
+/** OpenCode's skills as the app's commands, but for a name `taken`, a command of OpenCode's or the bridge's, already offers. */
 export function skillCommands(skills: readonly SkillInfo[], taken: readonly string[]): AgentCommand[] {
+  const named = slashNames(skills);
   const seen = new Set(taken);
   return skills.flatMap((skill): AgentCommand[] => {
-    const name = skill.name;
-    if (typeof name !== "string" || name === "" || name !== name.toLowerCase() || /[\s/]/.test(name) || seen.has(name)) return [];
-    seen.add(name);
+    const name = typeof skill.name === "string" ? skill.name.toLowerCase() : "";
+    if (named.get(name) !== skill || seen.has(name)) return [];
     return [{ name, description: skill.description || "A skill of yours", usage: "[instructions]", skill: true }];
   });
 }
@@ -39,7 +50,7 @@ export function skillCommands(skills: readonly SkillInfo[], taken: readonly stri
 /** The skill a message runs ("/name …"), when its first word names one. */
 export function skillIn(text: string, skills: readonly SkillInfo[]): SkillInfo | null {
   const name = /^\/([^\s/]+)(\s|$)/.exec(text.trim())?.[1];
-  return (name && skills.find((skill) => skill.name === name)) || null;
+  return (name && slashNames(skills).get(name.toLowerCase())) || null;
 }
 
 /**
