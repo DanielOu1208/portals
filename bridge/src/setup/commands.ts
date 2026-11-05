@@ -16,6 +16,7 @@ import { moveOldInstall, oldBridgeHome, oldInstallToMove } from "./migrate.ts";
 import { pairingLink, qrCode } from "./pairing.ts";
 import { newPassword, readSavedPassword, savePassword } from "./password.ts";
 import { serviceFor, serviceKind, type Service, type ServiceState } from "./service.ts";
+import { UnsupportedServiceDefinition, type DefinitionUpdate } from "./serviceDefinition.ts";
 import { namesFor, readSetupState, writeSetupState, type SetupState } from "./state.ts";
 import { enableLingering, lingering, userManagerAnswers } from "./systemd.ts";
 import type { System } from "./system.ts";
@@ -862,7 +863,30 @@ export async function update(context: Context): Promise<number> {
   ui.say("Restarting it. Claude Code, Pi, Cursor and Droid turns in progress stop; Codex's keep going.");
   const config = parseConfig(readJSON<Record<string, unknown>>(paths.config, {}));
   const up = await ui.task("Restarting Portals host", async () => {
-    await agent.restart();
+    let definition: DefinitionUpdate | undefined;
+    try {
+      definition = await agent.refreshDefinition();
+    } catch (error) {
+      if (!(error instanceof UnsupportedServiceDefinition)) throw error;
+      ui.say(`Service settings left unchanged (${error.message}); \`portals-host setup\` will refresh them.`);
+    }
+    try {
+      await agent.restart();
+    } catch (error) {
+      if (definition?.changed) {
+        // Reload never stops a service. If restart did, put back the last definition
+        // and start it again before reporting the update's failure.
+        try {
+          await definition.rollback();
+          await agent.restart();
+        } catch (recovery) {
+          throw new AggregateError([error, recovery], `Restart failed and ${agent.name} could not be recovered: ${(recovery as Error).message}`);
+        }
+      }
+      throw error;
+    }
+    definition?.commit();
+    if (definition?.changed && os === "macos") ui.say("Service settings updated; they take full effect after your next login or `portals-host setup`.");
     return answers(config.port);
   });
   if (up) ui.ok(`Restarted. It answers on 127.0.0.1:${config.port}.`);

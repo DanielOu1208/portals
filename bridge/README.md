@@ -202,6 +202,14 @@ A restart stops Claude Code, Pi, Cursor and Droid turns in progress; Codex's kee
 
 To update, run `npx portals-host@latest update` on the computer the host runs on, the
 same on a Mac and on Linux. It installs the newest version and restarts the host.
+It also refreshes the service definition, keeping its existing paths and environment.
+Linux applies changed service settings immediately. On a Mac, they take full effect
+after your next login or `npx portals-host setup`; update never unloads the running
+LaunchAgent. Custom definitions that cannot be refreshed safely are kept as they are,
+with a note to run setup. Your `config.json` is not changed.
+Existing file permissions and ACLs are kept. On Linux, refreshing the definition
+requires GNU `cp` and `getfacl` to verify those permissions. If they cannot be
+preserved or verified, update skips the definition refresh and still restarts normally.
 
 You don't have to watch for new versions. The host asks npm's registry for the newest
 version of `portals-host` when it starts and about once a day after, never more often,
