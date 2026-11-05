@@ -576,7 +576,7 @@ export class AgentPrograms {
   private async follow(spec: ProgramSpec, update: ProgramUpdate): Promise<void> {
     let record = this.readRecord(spec.id);
     while (!this.closed && record && !record.ended && this.isUnderWay(record)) {
-      await sleep(followEveryMs, undefined, { ref: false });
+      await sleep(followEveryMs);
       record = this.readRecord(spec.id);
     }
     if (this.closed) return;
