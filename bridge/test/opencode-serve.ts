@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { onTestCleanup } from "./opencode-test.ts";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { dirname, join } from "node:path";
@@ -102,7 +103,14 @@ export class FakeOpenCode {
 
   static async start(options: { password?: string | null } = {}): Promise<FakeOpenCode> {
     const fake = new FakeOpenCode(options.password === undefined ? "test-password" : options.password);
-    await new Promise<void>((resolve) => fake.server.listen(0, "127.0.0.1", resolve));
+    onTestCleanup(() => fake.close());
+    await new Promise<void>((resolve, reject) => {
+      fake.server.once("error", reject);
+      fake.server.listen(0, "127.0.0.1", () => {
+        fake.server.removeListener("error", reject);
+        resolve();
+      });
+    });
     return fake;
   }
 

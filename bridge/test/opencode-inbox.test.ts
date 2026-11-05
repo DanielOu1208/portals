@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "./opencode-test.ts";
 import { OpenCodeInbox } from "../src/providers/opencode/inbox.ts";
 import type { OpenCodeApi } from "../src/providers/opencode/client.ts";
 import type { ProviderEvent, SessionSink } from "../src/providers/types.ts";

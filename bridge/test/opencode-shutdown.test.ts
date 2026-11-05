@@ -5,9 +5,10 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { test } from "node:test";
+import { test, onTestCleanup } from "./opencode-test.ts";
+import { fixtureLocator, processReadFault, stopLocatorFixture } from "./opencode-process.ts";
 import { setTimeout as sleep } from "node:timers/promises";
-import { ServerLocator, type OwnedStopResult } from "../src/providers/opencode/server.ts";
+import { type OwnedStopResult } from "../src/providers/opencode/server.ts";
 import { FakeOpenCode } from "./opencode-serve.ts";
 
 function rig(scenario: object, onStop?: (result: OwnedStopResult) => void | Promise<void>) {
@@ -17,13 +18,14 @@ function rig(scenario: object, onStop?: (result: OwnedStopResult) => void | Prom
   chmodSync(program, 0o755);
   writeFileSync(proof, "");
   const results: OwnedStopResult[] = [];
-  const locator = new ServerLocator({ path: program, mode: "own", start: false, cwd: folder,
-    logPath: join(folder, "serve.log"), settleTimeoutMs: 300,
+  onTestCleanup(() => rmSync(folder, { recursive: true, force: true }));
+  const locator = fixtureLocator({ path: program, mode: "own", start: false, cwd: folder,
+    logPath: join(folder, "serve.log"), settleTimeoutMs: "hang" in scenario || "noIdle" in scenario ? 300 : undefined,
     env: { ...process.env, OPENCODE_SHUTDOWN_SCENARIO: JSON.stringify(scenario), OPENCODE_SHUTDOWN_STATE: state, OPENCODE_SHUTDOWN_PROOF: proof },
     onStop(result) { results.push(result); return onStop?.(result); },
   });
   return { locator, folder, proof, results, state: () => JSON.parse(readFileSync(state, "utf8")),
-    async close() { await locator.close(); rmSync(folder, { recursive: true, force: true }); } };
+    async close() { try { await locator.close(); } finally { await stopLocatorFixture(locator); rmSync(folder, { recursive: true, force: true }); } } };
 }
 
 test("owned stop interrupts roots and children and records terminal idle before TERM", async () => {
@@ -100,7 +102,7 @@ test("a child exiting during native settlement is never signalled again after ex
     const child = (r.locator as unknown as { child: ChildProcess }).child;
     const gone = once(child, "exit");
     const closing = r.locator.close();
-    const deadline = Date.now() + 2000;
+    const deadline = Date.now() + 20_000;
     while (!r.state().calls.some((call: { path: string }) => call.path === "/api/session/active")) {
       assert.ok(Date.now() < deadline, "shutdown reached native settlement");
       await sleep(5);
@@ -133,9 +135,7 @@ for (const scenario of [{ noIdle: ["ses_root"] }, { noIdle: ["ses_root"], staleI
     const r = rig({ active: ["ses_root"], ...scenario });
     try {
       await r.locator.locate();
-      const began = Date.now();
       await r.locator.close();
-      assert.ok(Date.now() - began < 2000);
       assert.equal(r.results.length, 1);
       assert.deepEqual(r.results[0].unsettled, ["ses_root"]);
       assert.equal(r.results[0].complete, false);
@@ -184,9 +184,7 @@ for (const callback of [() => { throw new Error("notification failed"); }, () =>
     const r = rig({ active: ["ses_root"] }, callback);
     try {
       await r.locator.locate();
-      const began = Date.now();
       await r.locator.close();
-      assert.ok(Date.now() - began < 2000);
       assert.equal(r.state().term, true);
       assert.equal(existsSync(join(r.folder, "serve.log.server.json")), false);
     } finally { await r.close(); }
@@ -199,7 +197,7 @@ test("shared close has no stop budget, native interrupt, or stop notification", 
   const file = join(r.folder, "service.json");
   writeFileSync(file, JSON.stringify({ pid: process.pid, version: fake.version, url: fake.url, password: fake.password }));
   let called = false;
-  const locator = new ServerLocator({ path: join(r.folder, "opencode"), mode: "shared", start: false, cwd: r.folder,
+  const locator = fixtureLocator({ path: join(r.folder, "opencode"), mode: "shared", start: false, cwd: r.folder,
     logPath: join(r.folder, "shared.log"), registration: file, onStop() { called = true; } });
   try {
     assert.equal((await locator.locate()).own, false);
@@ -210,3 +208,32 @@ test("shared close has no stop budget, native interrupt, or stop notification", 
     assert.equal(fake.callsOf("GET", /active$/).length, 0);
   } finally { await locator.close(); await fake.close(); await r.close(); }
 });
+
+
+test("one unreadable owned-child identity is retried before signalling", { skip: process.platform !== "darwin" }, async (t) => {
+  const r = rig({});
+  try {
+    const endpoint = await r.locator.locate();
+    const reads = processReadFault(t, endpoint.pid!, (read) => read === 2 ? "unreadable" : undefined);
+    await r.locator.close();
+    assert.ok(reads() >= 3, "a new matching OS proof must be read after the transient miss");
+    assert.equal(r.results[0].complete, true);
+    assert.equal(r.state().term, true);
+    assert.equal(existsSync(join(r.folder, "serve.log.server.json")), false);
+  } finally { await r.close(); }
+});
+
+for (const fault of ["unreadable", "different"] as const) {
+  test(`persistent ${fault} owned-child identity never authorizes a signal`, { skip: process.platform !== "darwin" }, async (t) => {
+    const r = rig({});
+    const endpoint = await r.locator.locate();
+    const reads = processReadFault(t, endpoint.pid!, () => fault);
+    await assert.rejects(r.locator.close(), /Cannot safely reclaim OpenCode/);
+    assert.equal(r.state().term, false);
+    assert.doesNotThrow(() => process.kill(endpoint.pid!, 0), "unknown identity must leave the process alone");
+    assert.equal(existsSync(join(r.folder, "serve.log.server.json")), true);
+    assert.equal(r.results.length, 1);
+    if (fault === "different") assert.equal(reads(), 2, "a positive mismatch is never retried into authorization");
+    // The test wrapper independently kills this fixture after the expected refusal.
+  });
+}

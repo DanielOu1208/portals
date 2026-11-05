@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test, type TestContext } from "node:test";
+import type { TestContext } from "node:test";
+import { onTestCleanup, test } from "./opencode-test.ts";
 import { OpenCodeStopNotes, restartsExecution, stopNoteLimits } from "../src/providers/opencode/stopNotes.ts";
 import type { Message } from "../src/providers/opencode/protocol.ts";
 import { OpenCodeSession } from "../src/providers/opencode/session.ts";
@@ -257,7 +258,9 @@ test("shutdown annotation survives the real manager's close order and overlays o
     locate: async () => ({ ...fake.endpoint(), own: true }),
   });
   const bridge = await startTestBridge({ keepHome: true, providers: new Map([["opencode", provider]]), config: { generalFolder: r.home } });
+  onTestCleanup(() => bridge.dispose());
   const phone = await TestClient.open(bridge);
+  onTestCleanup(() => phone.close());
   let closed = false;
   try {
     const thread = (await phone.call("session.create", { profile: "opencode", cwd: r.home })).session_id;
@@ -293,7 +296,9 @@ test("shutdown annotation survives the real manager's close order and overlays o
       locate: async () => ({ ...fake.endpoint(), own: true }),
     });
     const again = await startTestBridge({ home: bridge.home, providers: new Map([["opencode", againProvider]]) });
+    onTestCleanup(() => again.dispose());
     const reopened = await TestClient.open(again);
+    onTestCleanup(() => reopened.close());
     try {
       const nativeBefore = JSON.stringify(fake.sessions.get(thread)!.messages);
       const writes = fake.calls.filter((call) => call.method !== "GET").length;

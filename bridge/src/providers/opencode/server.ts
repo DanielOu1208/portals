@@ -98,9 +98,10 @@ export class ServerLocator {
   /** Extra signal grace only while there is an owned process to settle and stop. */
   get stopDeadlineMs(): number | undefined {
     const child = this.child;
-    const server = this.record?.server;
+    // The record was adopted only after ownership proof. Granting time is not
+    // permission to signal: stopOwned still requires a fresh matching identity.
     return (child && child.exitCode === null && child.signalCode === null)
-      || (server && same(server, processOf(server.pid, 250))) ? 16_000 : undefined;
+      || this.record?.server ? 16_000 : undefined;
   }
 
   locate(): Promise<Endpoint> {
@@ -338,7 +339,7 @@ export class ServerLocator {
     const server = record.server;
     const child = this.child;
     let result: OwnedStopResult = { serverIdentity: record.id, settled: [], unsettled: [], complete: false };
-    if (server && record.url && same(server, processOf(server.pid, 250))) {
+    if (server && record.url && same(server, await processForStop(server.pid))) {
       result = await settleOwned({
         url: record.url, headers: authorization(record.password), own: true,
         pid: server.pid, serverIdentity: record.id,
@@ -351,12 +352,15 @@ export class ServerLocator {
     // Settlement and the callback can outlive this child. Its exit listener has
     // already cleaned up the group; never signal its possibly reused PID here.
     if (child?.pid !== undefined && child.exitCode === null && child.signalCode === null) {
-      if (server && !same(server, processOf(child.pid, 250))) {
-        // The OS can reap the process before Node delivers its exit event. Wait
-        // for that event, without signalling an identity we no longer recognize.
-        const deadline = Date.now() + 1000;
-        while (child.exitCode === null && child.signalCode === null && Date.now() < deadline) await sleep(20);
-        if (child.exitCode === null && child.signalCode === null) throw this.uncertain(`owned server PID ${child.pid} no longer has the recorded identity`);
+      if (server) {
+        const current = await processForStop(child.pid);
+        if (current && !same(server, current)) throw this.uncertain(`owned server PID ${child.pid} has a different start identity or process group`);
+        if (!current) {
+          // The OS can reap the process before Node delivers its exit event.
+          const deadline = Date.now() + 1000;
+          while (child.exitCode === null && child.signalCode === null && Date.now() < deadline) await sleep(20);
+          if (child.exitCode === null && child.signalCode === null) throw this.uncertain(`owned server PID ${child.pid}'s identity could not be read`);
+        }
       }
       if (child.exitCode === null && child.signalCode === null) await endGroup(child.pid);
       // SIGKILL can leave a zombie until Node receives and reaps the child.
@@ -364,8 +368,12 @@ export class ServerLocator {
       while (child.exitCode === null && child.signalCode === null && Date.now() < deadline) await sleep(20);
       if (child.exitCode === null && child.signalCode === null) throw this.uncertain(`owned server PID ${child.pid} did not report its exit after SIGKILL`);
     }
-    else if (!child && server && same(server, processOf(server.pid, 250))) await endGroup(server.group);
-    else if (!child && server && alive(server.pid)) throw this.uncertain(`recorded server PID ${server.pid} no longer has the recorded identity`);
+    else if (!child && server) {
+      const current = await processForStop(server.pid);
+      if (same(server, current)) await endGroup(server.group);
+      else if (current) throw this.uncertain(`recorded server PID ${server.pid} has a different start identity or process group`);
+      else if (alive(server.pid)) throw this.uncertain(`recorded server PID ${server.pid}'s identity could not be read`);
+    }
     if (server) {
       const deadline = Date.now() + 1000;
       while (processOf(server.pid, 250) && Date.now() < deadline) await sleep(20);
@@ -497,6 +505,17 @@ function same(left: Identity, right: Identity | null): boolean {
 
 function alive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code !== "ESRCH"; }
+}
+
+/** A busy host can miss one short OS read. Retry unreadable proofs within one
+ * second; a positive identity (including a mismatch) is never retried away. */
+async function processForStop(pid: number): Promise<Identity | null> {
+  const deadline = Date.now() + 1000;
+  for (;;) {
+    const current = processOf(pid, Math.max(1, Math.min(250, deadline - Date.now())));
+    if (current || !alive(pid) || Date.now() >= deadline) return current;
+    await sleep(20);
+  }
 }
 
 function processOf(pid: number, timeout = 5000): Identity | null {

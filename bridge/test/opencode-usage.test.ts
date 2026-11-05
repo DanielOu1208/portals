@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "./opencode-test.ts";
 import type { UsageLimitsBudget } from "@opencode/client";
 import { usageReport } from "../src/providers/opencode/usage.ts";
 

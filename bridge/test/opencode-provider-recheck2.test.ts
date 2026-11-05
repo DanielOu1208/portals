@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { onTestCleanup, test } from "./opencode-test.ts";
 import { createServer } from "node:http";
 import { once } from "node:events";
 import { OpenCode, isSessionNotFoundError } from "@opencode/client";
@@ -166,6 +166,10 @@ test("round3: real client tagged SessionNotFound must enter independent deletion
   const server = createServer((_req, res) => {
     res.writeHead(404, { "content-type": "application/json" });
     res.end(JSON.stringify({ _tag: "SessionNotFoundError", sessionID: id, message: "Session not found" }));
+  });
+  onTestCleanup(async () => {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");

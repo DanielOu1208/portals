@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "./opencode-test.ts";
 import { formCard, formAnswer } from "../src/providers/opencode/forms.ts";
 import type { FormInfo } from "@opencode/client";
 

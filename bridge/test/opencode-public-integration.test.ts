@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { test } from "./opencode-test.ts";
 import { OpenCodeProvider } from "../src/providers/opencode/provider.ts";
 import type { ProviderEvent } from "../src/providers/types.ts";
 import { FakeOpenCode } from "./opencode-serve.ts";

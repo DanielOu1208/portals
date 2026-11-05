@@ -3,7 +3,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
-import { test, type TestContext } from "node:test";
+import type { TestContext } from "node:test";
+import { onTestCleanup, test } from "./opencode-test.ts";
 import { OpenCodeStopNotes, restartsExecution } from "../src/providers/opencode/stopNotes.ts";
 import { OpenCodeProvider } from "../src/providers/opencode/provider.ts";
 import { settleOwned } from "../src/providers/opencode/shutdown.ts";
@@ -98,6 +99,10 @@ test("round5 control: truncated provenance does not guess an opener or block nat
         : send({ data: [idle("idle_exact", Date.now())], cursor: {} });
     }
     response.writeHead(404); response.end();
+  });
+  onTestCleanup(async () => {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   try {

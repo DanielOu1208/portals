@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "./opencode-test.ts";
 import { storedMessages } from "../src/providers/opencode/history.ts";
 import { majorVersion } from "../src/providers/opencode/options.ts";
 import type { Message, PermissionRequest } from "../src/providers/opencode/protocol.ts";

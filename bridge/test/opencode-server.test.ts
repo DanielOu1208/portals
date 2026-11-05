@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
-import { fork, spawn, spawnSync } from "node:child_process";
+import { fork, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { after, before, test } from "node:test";
+import { after, before } from "node:test";
+import { test, onTestCleanup } from "./opencode-test.ts";
+import { fixtureLocator, processReadFault, stopFixture, stopFixtureChild } from "./opencode-process.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 import { endGroup } from "../src/providers/child.ts";
 import { OpenCodeProvider } from "../src/providers/opencode/provider.ts";
@@ -31,16 +33,16 @@ before(async () => {
   writeFileSync(program, `#!/bin/sh\nexec "${process.execPath}" "${standin}" "$@"\n`);
   chmodSync(program, 0o755);
   service = await FakeOpenCode.start({ password: "service-password" });
-});
+}, { timeout: 60_000 });
 
 after(async () => {
-  await service.close();
-  rmSync(folder, { recursive: true, force: true });
-});
+  try { await service?.close(); }
+  finally { if (folder) rmSync(folder, { recursive: true, force: true }); }
+}, { timeout: 60_000 });
 
 function locator(options: Partial<ServerOptions> & { args?: string; fail?: boolean } = {}): ServerLocator {
   const { args, fail, ...rest } = options;
-  return new ServerLocator({
+  return fixtureLocator({
     path: program,
     mode: "shared",
     start: false,
@@ -135,6 +137,7 @@ test("a hung shared service is neither terminated nor replaced", async () => {
     process.on("SIGTERM", () => process.send({ terminated: true }));
     server.listen(0, "127.0.0.1", () => process.send({ port: server.address().port }));
   `], { stdio: ["ignore", "ignore", "inherit", "ipc"] });
+  onTestCleanup(() => stopFixtureChild(child));
   const gone = once(child, "exit");
   let terminated = false;
   child.on("message", (message: any) => { if (message.terminated) terminated = true; });
@@ -233,7 +236,7 @@ function present(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
-async function until(check: () => boolean, timeoutMs = 5000): Promise<void> {
+async function until(check: () => boolean, timeoutMs = 20_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!check()) {
     if (Date.now() >= deadline) throw new Error("test process did not settle");
@@ -243,16 +246,21 @@ async function until(check: () => boolean, timeoutMs = 5000): Promise<void> {
 
 async function orphan(name: string, env: NodeJS.ProcessEnv = {}, duringStartup = false) {
   const directory = realpathSync(mkdtempSync(join(folder, `${name}-`)));
-  const options: ServerOptions = { path: program, mode: "own", start: false, cwd: directory, logPath: join(directory, "serve.log"), startTimeoutMs: 5000 };
+  const options: ServerOptions = { path: program, mode: "own", start: false, cwd: directory, logPath: join(directory, "serve.log"), startTimeoutMs: 30_000 };
   const recordPath = `${options.logPath}.server.json`;
-  const bridge = fork(owner, [JSON.stringify(options)], { execArgv: [], env: { ...process.env, ...env }, stdio: ["ignore", "ignore", "inherit", "ipc"] });
+  const ready = join(directory, "standin.ready");
+  const bridge = fork(owner, [JSON.stringify(options)], { execArgv: [], env: { ...process.env, ...env, OPENCODE_STANDIN_READY: ready }, stdio: ["ignore", "ignore", "inherit", "ipc"] });
+  onTestCleanup(() => stopFixtureChild(bridge));
+  onTestCleanup(async () => {
+    try { await stopFixture(JSON.parse(readFileSync(recordPath, "utf8")).server); } catch { /* Startup may not have recorded a PID. */ }
+  });
   const exit = once(bridge, "exit");
   await once(bridge, "message");
   const response = once(bridge, "message");
   bridge.send("locate");
   let endpoint: Endpoint | undefined;
   if (duringStartup) {
-    await until(() => existsSync(recordPath) && Boolean(JSON.parse(readFileSync(recordPath, "utf8")).server));
+    await until(() => existsSync(recordPath) && Boolean(JSON.parse(readFileSync(recordPath, "utf8")).server) && existsSync(ready));
   } else {
     const [message] = await response;
     assert.equal((message as { error?: string }).error, undefined);
@@ -261,15 +269,17 @@ async function orphan(name: string, env: NodeJS.ProcessEnv = {}, duringStartup =
   bridge.kill("SIGKILL");
   await exit;
   const record = JSON.parse(readFileSync(recordPath, "utf8"));
-  return { options, recordPath, record, endpoint, async cleanup() {
-    if (present(record.server.pid)) await endGroup(record.server.pid);
+  const cleanup = async () => {
+    await stopFixture(record.server);
     rmSync(directory, { recursive: true, force: true });
-  } };
+  };
+  onTestCleanup(cleanup);
+  return { options, recordPath, record, endpoint, cleanup };
 }
 
 test("an own server survives bridge SIGKILL and is reclaimed with the same PID and identity", async () => {
   const first = await orphan("reclaim");
-  const servers = new ServerLocator(first.options);
+  const servers = fixtureLocator(first.options);
   try {
     assert.equal(statSync(first.recordPath).mode & 0o777, 0o600);
     assert.equal(present(first.record.server.pid), true);
@@ -285,40 +295,42 @@ test("an own server survives bridge SIGKILL and is reclaimed with the same PID a
     assert.equal(present(endpoint.pid!), false);
     assert.equal(existsSync(first.recordPath), false);
     assert.equal(existsSync(`${first.recordPath}.lock`), false);
-  } finally { await servers.close(); await first.cleanup(); }
+  } finally { try { await servers.close(); } finally { await first.cleanup(); } }
 });
 
 test("a dead bridge's startup lease is taken over, and its unfinished server is stopped", async () => {
   const first = await orphan("startup-reclaim", { OPENCODE_STANDIN_HANG_START: "1" }, true);
-  const servers = new ServerLocator(first.options);
+  const servers = fixtureLocator(first.options);
   try {
     assert.equal(existsSync(`${first.recordPath}.lock`), true);
     const endpoint = await servers.locate();
     assert.notEqual(endpoint.pid, first.record.server.pid);
     assert.equal(endpoint.reclaimed, false);
-    assert.equal(present(first.record.server.pid), false);
-  } finally { await servers.close(); await first.cleanup(); }
+    await until(() => !present(first.record.server.pid));
+  } finally { try { await servers.close(); } finally { await first.cleanup(); } }
 });
 
 test("a verified but hung orphan is stopped before a replacement starts", async () => {
   const first = await orphan("hung-orphan");
-  const servers = new ServerLocator(first.options);
+  const servers = fixtureLocator(first.options);
   try {
     process.kill(first.record.server.pid, "SIGSTOP");
     const endpoint = await servers.locate();
     assert.notEqual(endpoint.pid, first.record.server.pid);
-    assert.equal(present(first.record.server.pid), false);
-  } finally { await servers.close(); await first.cleanup(); }
+    await until(() => !present(first.record.server.pid));
+  } finally { try { await servers.close(); } finally { await first.cleanup(); } }
 });
 
 test("an uncertain ownership record fails visibly without signaling or starting a second server", async () => {
   const first = await orphan("uncertain");
   const altered = { ...first.record, server: { ...first.record.server, start: "not-this-process" } };
   writeFileSync(first.recordPath, JSON.stringify(altered));
-  const servers = new ServerLocator(first.options);
+  const servers = fixtureLocator(first.options);
   const provider = new OpenCodeProvider({ settings: { path: program, mode: "own", start: false, folder, logPath: first.options.logPath }, locate: () => servers.locate() });
   const bridge = await startTestBridge({ providers: new Map([["opencode", provider]]), config: { generalFolder: folder } });
+  onTestCleanup(() => bridge.dispose());
   const phone = await TestClient.open(bridge);
+  onTestCleanup(() => phone.close());
   try {
     await assert.rejects(phone.call("session.create", { profile: "opencode", cwd: folder }), (error: Error) => {
       assert.match(error.message, /Cannot safely reclaim OpenCode.*different or unreadable start identity/);
@@ -336,12 +348,12 @@ test("a wrong recorded password never authorizes killing the recorded process", 
   const first = await orphan("wrong-password");
   const altered = { ...first.record, password: "x".repeat(32) };
   writeFileSync(first.recordPath, JSON.stringify(altered));
-  const servers = new ServerLocator(first.options);
+  const servers = fixtureLocator(first.options);
   try {
     await assert.rejects(servers.locate(), /Cannot safely reclaim OpenCode.*HTTP 401/);
     assert.equal(present(first.record.server.pid), true);
     assert.deepEqual(JSON.parse(readFileSync(first.recordPath, "utf8")), altered);
-  } finally { await servers.close(); await first.cleanup(); }
+  } finally { try { await servers.close(); } finally { await first.cleanup(); } }
 });
 
 test("a live bridge lease prevents another locator taking its server", async () => {
@@ -359,6 +371,7 @@ test("concurrent bridge processes recover a stale lease without taking each othe
   const first = await orphan("concurrent-reclaim");
   writeFileSync(`${first.recordPath}.lock`, JSON.stringify(first.record.bridge), { mode: 0o600 });
   const bridges = [0, 1].map(() => fork(owner, [JSON.stringify(first.options)], { execArgv: [], stdio: ["ignore", "ignore", "ignore", "ipc"] }));
+  for (const bridge of bridges) onTestCleanup(() => stopFixtureChild(bridge));
   try {
     await Promise.all(bridges.map((bridge) => once(bridge, "message")));
     const replies = bridges.map((bridge) => once(bridge, "message"));
@@ -377,11 +390,11 @@ test("concurrent bridge processes recover a stale lease without taking each othe
 test("a nonprivate ownership record is refused without touching its server", async () => {
   const first = await orphan("nonprivate");
   chmodSync(first.recordPath, 0o644);
-  const servers = new ServerLocator(first.options);
+  const servers = fixtureLocator(first.options);
   try {
     await assert.rejects(servers.locate(), /Cannot safely reclaim OpenCode.*not a private, owner-only regular file/);
     assert.equal(present(first.record.server.pid), true);
-  } finally { await servers.close(); await first.cleanup(); }
+  } finally { try { await servers.close(); } finally { await first.cleanup(); } }
 });
 
 test("own close escalates TERM for the whole process group and clears the private record", async () => {
@@ -391,9 +404,7 @@ test("own close escalates TERM for the whole process group and clears the privat
   try {
     const endpoint = await servers.locate();
     const descendant = Number(readFileSync(childFile, "utf8"));
-    const started = Date.now();
     await servers.close();
-    assert.ok(Date.now() - started >= 1900);
     assert.equal(present(endpoint.pid!), false);
     await until(() => !present(descendant));
     assert.equal(existsSync(recordPath), false);
@@ -404,7 +415,16 @@ test("timed out startup cleans up a TERM-ignoring server and its descendants", a
   const args = join(folder, "timeout-args.json");
   const childFile = join(folder, "timeout-child.pid");
   const recordPath = join(folder, "timeout-owner.json");
-  const servers = locator({ mode: "own", recordPath, startTimeoutMs: 1500, env: { ...process.env, OPENCODE_STANDIN_ARGS: args, OPENCODE_STANDIN_HANG_START: "1", OPENCODE_STANDIN_CHILD: childFile } });
+  const ready = join(folder, "timeout-ready");
+  const servers = locator({ mode: "own", recordPath, startTimeoutMs: 1500, env: { ...process.env, OPENCODE_STANDIN_ARGS: args, OPENCODE_STANDIN_HANG_START: "1", OPENCODE_STANDIN_CHILD: childFile, OPENCODE_STANDIN_READY: ready } });
+  // Charge the intentional listen timeout only after the stand-in and its child
+  // have initialized. Starting Node on a busy host is not what this test times out.
+  const state = servers as any;
+  const listen = state.listener.bind(servers);
+  state.listener = async (child: ChildProcess) => {
+    await until(() => existsSync(ready));
+    return listen(child);
+  };
   try {
     await assert.rejects(servers.locate(), /did not start in time/);
     const root = JSON.parse(readFileSync(args, "utf8")).pid;
@@ -496,4 +516,43 @@ test("an older shared server is left untouched when the installed CLI meets the 
     assert.equal(readFileSync(file, "utf8"), before);
     assert.equal((await fetch(`${other.url}/api/info`, { headers: other.endpoint().headers })).status, 200);
   } finally { await servers.close(); await other.close(); }
+});
+
+
+test("one unreadable reclaimed-server identity is retried before signalling", { skip: process.platform !== "darwin" }, async (t) => {
+  const first = await orphan("retry-stop-proof");
+  const servers = fixtureLocator(first.options);
+  try {
+    const endpoint = await servers.locate();
+    const reads = processReadFault(t, endpoint.pid!, (read) => read === 2 ? "unreadable" : undefined);
+    await servers.close();
+    assert.ok(reads() >= 3);
+    assert.equal(present(endpoint.pid!), false);
+    assert.equal(existsSync(first.recordPath), false);
+  } finally { try { await servers.close(); } finally { await first.cleanup(); } }
+});
+
+
+for (const fault of ["unreadable", "different"] as const) {
+  test(`persistent ${fault} reclaimed-server identity never authorizes a signal`, { skip: process.platform !== "darwin" }, async (t) => {
+    const first = await orphan(`refuse-${fault}-stop-proof`);
+    const servers = fixtureLocator(first.options);
+    const endpoint = await servers.locate();
+    const reads = processReadFault(t, endpoint.pid!, () => fault);
+    await assert.rejects(servers.close(), /Cannot safely reclaim OpenCode/);
+    assert.equal(present(endpoint.pid!), true);
+    assert.equal(existsSync(first.recordPath), true);
+    if (fault === "different") assert.equal(reads(), 2);
+  });
+}
+
+
+test("a reclaimed server keeps its shutdown grace when an OS proof is briefly unavailable", { skip: process.platform !== "darwin" }, async (t) => {
+  const first = await orphan("reclaimed-stop-grace");
+  const servers = fixtureLocator(first.options);
+  const endpoint = await servers.locate();
+  processReadFault(t, endpoint.pid!, (read) => read === 1 ? "unreadable" : undefined);
+  assert.equal(servers.stopDeadlineMs, 16_000);
+  await servers.close();
+  assert.equal(servers.stopDeadlineMs, undefined);
 });

@@ -33,12 +33,18 @@ if (process.env.OPENCODE_STANDIN_CHILD) {
   writeFileSync(process.env.OPENCODE_STANDIN_CHILD, String(child.pid));
   child.disconnect();
 }
+function ready(): void {
+  if (process.env.OPENCODE_STANDIN_READY) writeFileSync(process.env.OPENCODE_STANDIN_READY, String(process.pid));
+}
+
 if (process.env.OPENCODE_STANDIN_HANG_START) {
   process.on("SIGTERM", () => {});
+  ready();
   setInterval(() => {}, 1000);
   await new Promise(() => {});
 }
 const fake = await FakeOpenCode.start({ password: process.env.OPENCODE_PASSWORD ?? null });
+ready();
 process.stdout.write(`opencode server listening on ${fake.url}\n`);
 process.on("SIGTERM", () => {
   if (process.env.OPENCODE_STANDIN_IGNORE_TERM) return;

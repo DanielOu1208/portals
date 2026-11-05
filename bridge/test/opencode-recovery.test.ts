@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "./opencode-test.ts";
 import { OpenCodeSession } from "../src/providers/opencode/session.ts";
 import { OpenCodeTurn, recoveryBufferLimit } from "../src/providers/opencode/turn.ts";
 import type { OpenCodeApi } from "../src/providers/opencode/client.ts";

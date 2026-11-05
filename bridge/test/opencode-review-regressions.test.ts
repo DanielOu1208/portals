@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "./opencode-test.ts";
 import { OpenCodeSession } from "../src/providers/opencode/session.ts";
 import { OpenCodeInbox } from "../src/providers/opencode/inbox.ts";
 import { OpenCodeSubagents } from "../src/providers/opencode/subagents.ts";

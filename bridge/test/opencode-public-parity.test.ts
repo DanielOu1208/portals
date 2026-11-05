@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "./opencode-test.ts";
 import { OpenCodeApi } from "../src/providers/opencode/client.ts";
 import { storedMessages } from "../src/providers/opencode/history.ts";
 import type { Message, OpenCodeEvent, TokenUsage } from "../src/providers/opencode/protocol.ts";

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { test } from "node:test";
+import { test } from "./opencode-test.ts";
 
 test("an enabled OpenCode provider with no client reports the setup/update repair instead of crashing", () => {
   const module = new URL("../src/providers/opencode/client.ts", import.meta.url).href;

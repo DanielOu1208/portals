@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { after, before, test } from "node:test";
+import { after, before } from "node:test";
+import { onTestCleanup, test } from "./opencode-test.ts";
 import { OpenCodeProvider } from "../src/providers/opencode/provider.ts";
 import { inboxRetentionLimit } from "../src/providers/opencode/inbox.ts";
 import type { Provider } from "../src/providers/types.ts";
@@ -38,15 +39,14 @@ before(async () => {
   state = mkdtempSync(join(tmpdir(), "portals-opencode-state-"));
   bridge = await startTestBridge({ providers: agents(), config: { generalFolder: cwd } });
   client = await TestClient.open(bridge);
-});
+}, { timeout: 60_000 });
 
 after(async () => {
-  await client.close();
-  await bridge.dispose();
-  await opencode.close();
-  rmSync(cwd, { recursive: true, force: true });
-  rmSync(state, { recursive: true, force: true });
-});
+  // Close independent fixtures together so a stuck bridge cannot retain its server.
+  await Promise.all([client?.close(), bridge?.dispose(), opencode?.close()]);
+  if (cwd) rmSync(cwd, { recursive: true, force: true });
+  if (state) rmSync(state, { recursive: true, force: true });
+}, { timeout: 60_000 });
 
 async function until(check: () => boolean | Promise<boolean>, timeoutMs = 3000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -590,14 +590,18 @@ test("a question answered in OpenCode's terminal closes on the phone", async () 
 
 test("a thread opened again after a restart shows OpenCode's own record of it, its tools as the phone shows them", async () => {
   const first = await startTestBridge({ keepHome: true, providers: agents(), config: { generalFolder: cwd } });
+  onTestCleanup(() => first.dispose());
   const phone = await TestClient.open(first);
+  onTestCleanup(() => phone.close());
   const thread = (await phone.call("session.create", { profile: "opencode", source: "tui", cwd })).session_id;
   await phone.close();
   await first.dispose();
   // What OpenCode kept of it, as the recording's session had it.
   opencode.sessions.get(thread)!.messages = recordedMessages();
   const again = await startTestBridge({ home: first.home, providers: agents() });
+  onTestCleanup(() => again.dispose());
   const reopened = await TestClient.open(again);
+  onTestCleanup(() => reopened.close());
   try {
     const resumed = await reopened.call("session.resume", { session_id: thread, profile: "opencode" });
     assert.equal(resumed.running, false);
@@ -616,7 +620,9 @@ test("a thread opened again after a restart shows OpenCode's own record of it, i
 
 for (const active of [true, false]) test(`${active ? "active" : "idle"} restart keeps native requests recovered before any phone connects`, async () => {
   const first = await startTestBridge({ keepHome: true, providers: agents(), config: { generalFolder: cwd } });
+  onTestCleanup(() => first.dispose());
   const phone = await TestClient.open(first);
+  onTestCleanup(() => phone.close());
   const thread = (await phone.call("session.create", { profile: "opencode", source: "tui", cwd })).session_id;
   await phone.close();
   await first.dispose();
@@ -635,11 +641,13 @@ for (const active of [true, false]) test(`${active ? "active" : "idle"} restart 
   native.permissions = [{ id: "per_restart", sessionID: thread, action: "shell", resources: ["echo harmless"] }];
   native.forms = [{ id: "frm_restart", sessionID: thread, title: "Idle or active", fields: [{ key: "answer", type: "string" }] }];
   const again = await startTestBridge({ home: first.home, providers: agents() });
+  onTestCleanup(() => again.dispose());
   let reopened: TestClient | undefined;
   try {
     // Warm the thread with no connection. The broker must retain both cards.
     await until(async () => (await again.fleet.read(thread)).open_requests.length === 2);
     reopened = await TestClient.open(again);
+    onTestCleanup(() => reopened!.close());
     const resumed = await reopened.call("session.resume", { session_id: thread, profile: "opencode" });
     assert.equal(resumed.running, active);
     assert.deepEqual(resumed.open_requests.map((request: Frame) => request.method).sort(), ["approval", "clarify"]);

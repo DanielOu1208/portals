@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "./opencode-test.ts";
 import { chooseModel } from "../src/fleet/fleet.ts";
 import { modelKey, nativeModelID } from "../src/providers/opencode/models.ts";
 import type { ModelCatalog, Provider } from "../src/providers/types.ts";
