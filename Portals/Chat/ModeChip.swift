@@ -3,8 +3,8 @@ import SwiftUI
 
 /// The composer's mode chip: how much a coding agent's thread asks before acting, as the
 /// mode's symbol (a bolt for full access, a map for plan mode, …) and, on a Mac, its name,
-/// like the model chip beside it. Tap it for a popover with every mode, what each one
-/// does, and a checkmark on the thread's, as the model chip's popover lists the models.
+/// like the model chip beside it. Tap it for a popover with every mode and a checkmark
+/// on the thread's, as the model chip's popover lists the models.
 /// A thread that follows the agent's settings shows what those come to.
 struct ModeChip: View {
     let mode: ModeState
@@ -75,7 +75,7 @@ private final class ModeShown {
     var mode: ModeState?
 }
 
-/// The popover: every mode as a row, its symbol, its name and what it does, with a
+/// The popover: every mode as a row, its symbol and its name, with a
 /// checkmark on the thread's. With large text it scrolls, rather than leave modes out.
 private struct ModePanel: View {
     let shown: ModeShown
@@ -84,24 +84,29 @@ private struct ModePanel: View {
     var onPick: (ThreadMode) -> Void
 
     private var mode: ModeState { shown.mode ?? opened }
+    @ScaledMetric(relativeTo: .body) private var iconWidth: CGFloat = 24
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                Text("Mode")
-                    .font(.app.headline)
-                    .accessibilityAddTraits(.isHeader)
-                    .padding(.horizontal, Theme.grid * 2)
-                    .padding(.top, Theme.grid * 2)
-                    .padding(.bottom, Theme.grid)
-                ForEach(mode.offeredModes, id: \.self) { item in
-                    row(item)
-                }
-            }
-            .padding(.bottom, Theme.grid)
+        ViewThatFits(in: .vertical) {
+            rows
+            ScrollView { rows }
+                .scrollBounceBehavior(.basedOnSize)
         }
-        .scrollBounceBehavior(.basedOnSize)
-        .frame(width: 320)
+    }
+
+    private var rows: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Mode")
+                .font(.app.headline)
+                .accessibilityAddTraits(.isHeader)
+                .padding(.horizontal, Theme.grid * 2)
+                .padding(.top, Theme.grid * 2)
+                .padding(.bottom, Theme.grid)
+            ForEach(mode.offeredModes, id: \.self) { item in
+                row(item)
+            }
+        }
+        .padding(.bottom, Theme.grid)
     }
 
     private func row(_ item: ThreadMode) -> some View {
@@ -111,20 +116,15 @@ private struct ModePanel: View {
                 Image(systemName: item.symbol)
                     .font(.app.body.weight(.medium))
                     .foregroundStyle(.secondary)
-                    .frame(width: 24)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(mode.pickerTitle(for: item))
-                        .font(.app.body)
-                    Text(mode.pickerDescription(for: item))
-                        .font(.app.subheadline)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                if isSelected {
-                    Image(systemName: "checkmark")
-                        .font(.app.body.weight(.semibold))
-                }
+                    .frame(width: iconWidth)
+                Text(mode.pickerTitle(for: item))
+                    .font(.app.body)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Image(systemName: "checkmark")
+                    .font(.app.body.weight(.semibold))
+                    .opacity(isSelected ? 1 : 0)
+                    .accessibilityHidden(true)
             }
             .padding(.horizontal, Theme.grid * 2)
             .padding(.vertical, Theme.grid)
@@ -132,6 +132,8 @@ private struct ModePanel: View {
             .contentShape(.rect)
         }
         .buttonStyle(PressedRowStyle())
+        .accessibilityLabel(mode.pickerTitle(for: item))
+        .accessibilityHint(mode.pickerDescription(for: item))
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .accessibilityIdentifier("mode-\(item.rawValue)")
     }

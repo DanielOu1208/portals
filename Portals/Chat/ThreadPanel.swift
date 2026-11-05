@@ -101,16 +101,10 @@ final class ThreadPanelState {
         case loading
         case loaded(Value)
         case failed(String)
-
-        var value: Value? {
-            if case let .loaded(value) = self { value } else { nil }
-        }
     }
 
-    /// While nothing is known of the plan (`ThreadPanelMemory`): being asked, or why it
-    /// could not be. nil from a host that does not say: the line is left out.
-    private var usageAsked: Load<UsageLimits?>?
-    /// While nothing is known of its repository, the same. nil from a host that does not say.
+    /// While nothing is known of its repository: being asked, or why it could not be.
+    /// nil from a host that does not say.
     private var gitAsked: Load<GitState>?
     /// Why the last Open in, or opening the changes, did not work.
     private(set) var notice: String?
@@ -122,9 +116,8 @@ final class ThreadPanelState {
     var fetchingDiff: Bool { fetchingChanges != nil }
 
     /// What is known of the plan of the chat's agent, from any chat that asked.
-    func usage(for chat: ThreadController) -> Load<UsageLimits?>? {
-        if let known = ThreadPanelMemory.shared.usage[chat.agent.id] { return .loaded(known) }
-        return usageAsked
+    func usage(for chat: ThreadController) -> UsageLimits? {
+        ThreadPanelMemory.shared.usage[chat.agent.id] ?? nil
     }
 
     /// What is known of the thread's repository.
@@ -135,7 +128,6 @@ final class ThreadPanelState {
 
     func refresh(_ chat: ThreadController) async {
         guard let host = chat.panelHost, let thread = chat.thread?.id else {
-            usageAsked = nil
             gitAsked = nil
             return
         }
@@ -145,10 +137,7 @@ final class ThreadPanelState {
         let readsGit = await host.readsGitStatus ?? false
         let opens = ThreadPanel.opensInApps ? await host.opensFolders ?? false : false
         if !readsUsage {
-            usageAsked = nil
             memory.forgetUsage(of: agent)
-        } else if usageAsked == nil {
-            usageAsked = .loading
         }
         if !readsGit {
             gitAsked = nil
@@ -161,11 +150,8 @@ final class ThreadPanelState {
         // screen meanwhile.
         let usageAnswer = Task {
             guard readsUsage else { return }
-            do {
-                try await memory.askUsage(of: agent, thread: thread, from: host)
-            } catch {
-                usageAsked = .failed(error.localizedDescription)
-            }
+            // A failure stays beside known windows in the shared memory.
+            try? await memory.askUsage(of: agent, thread: thread, from: host)
         }
         let gitAnswer = Task {
             if readsGit { await refreshGit(chat) }
@@ -408,14 +394,28 @@ struct ThreadPanelContent: View {
             if ThreadPanel.opensInApps, let apps = ThreadPanelMemory.shared.apps[chat.agent.id.host], !apps.isEmpty, chat.thread != nil {
                 OpenInLine(chat: chat, state: state, apps: apps)
             }
-            if let usage = state.usage(for: chat) {
+            if let usage, !usage.windows.isEmpty {
                 PartRule()
                 UsagePart(
-                    agent: chat.agent.displayName, load: usage,
+                    agent: chat.agent.displayName, limits: usage,
                     failure: ThreadPanelMemory.shared.usageFailures[chat.agent.id],
                     asOf: ThreadPanelMemory.shared.usageAsOf(of: chat.agent.id, isConnected: host.isConnected),
                     tint: tint
                 )
+                .transition(.opacity)
+            } else if let note = usage?.blockingNote {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(note).foregroundStyle(.orange)
+                    if let asOf = ThreadPanelMemory.shared.usageAsOf(of: chat.agent.id, isConnected: host.isConnected) {
+                        Text(UsagePart.asOf(asOf)).foregroundStyle(.secondary)
+                    }
+                    if let failure = ThreadPanelMemory.shared.usageFailures[chat.agent.id] {
+                        Text(failure).foregroundStyle(.orange)
+                    }
+                }
+                .font(.app.caption)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, Theme.grid)
             }
             PartRule()
             DeviceRow(host: host)
@@ -432,7 +432,12 @@ struct ThreadPanelContent: View {
         // the ✕ in the corner.
         .padding(.horizontal, ThreadPanel.inset)
         .padding(.bottom, ThreadPanel.inset)
+        // Preloaded limits draw at once. A first answer arriving while open eases the
+        // rows into place; no room is held for an agent that may have no limits.
+        .animation(.smooth(duration: 0.25), value: usage?.windows.isEmpty == false)
     }
+
+    private var usage: UsageLimits? { state.usage(for: chat) }
 
     private var heading: some View {
         HStack(spacing: 0) {
@@ -478,7 +483,7 @@ private struct PartRule: View {
 /// how much is in reserve or over, and whether it lasts until the reset.
 private struct UsagePart: View {
     let agent: String
-    let load: ThreadPanelState.Load<UsageLimits?>
+    let limits: UsageLimits
     /// Why they could not be asked again: what is known stays, not the whole truth by itself.
     let failure: String?
     /// When what is known was true, where that is not just now.
@@ -490,7 +495,7 @@ private struct UsagePart: View {
             HStack(alignment: .firstTextBaseline, spacing: Theme.grid) {
                 // Headed as the Codex app heads its parts ("Subagents"): the plan as people
                 // name it (2026-11-01: "it should just say claude max").
-                Text(load.value??.title ?? agent)
+                Text(limits.title ?? agent)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 Spacer(minLength: 0)
@@ -504,35 +509,23 @@ private struct UsagePart: View {
                         .modifier(LateReveal(isWaiting: true))
                 }
             }
-            switch load {
-            case .loading:
-                ProgressView().controlSize(.small)
-            case let .failed(message):
-                Text(message).foregroundStyle(.secondary).lineLimit(2)
-            case .loaded(nil):
-                Text("\(agent) does not share its usage").foregroundStyle(.secondary)
-            case let .loaded(limits?):
-                if limits.windows.isEmpty {
-                    Text(limits.note ?? "\(agent) has not said yet").foregroundStyle(.secondary).lineLimit(2)
-                } else {
-                    // Asked each minute while open: the times and the pace follow it.
-                    TimelineView(.periodic(from: .now, by: 60)) { context in
-                        VStack(alignment: .leading, spacing: Theme.grid * 1.25) {
-                            ForEach(limits.windows) { window in
-                                UsageWindowView(window: window, now: context.date, asOf: asOf, tint: tint)
-                            }
-                        }
-                    }
-                    if let note = limits.note {
-                        Text(note).font(.app.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            // Asked each minute while open: the times and the pace follow it.
+            TimelineView(.periodic(from: .now, by: 60)) { context in
+                VStack(alignment: .leading, spacing: Theme.grid * 1.25) {
+                    ForEach(limits.windows) { window in
+                        UsageWindowView(window: window, now: context.date, asOf: asOf, tint: tint)
                     }
                 }
             }
-            if case .loaded = load, let failure {
+            if let note = limits.note {
+                Text(note).font(.app.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            if let failure {
                 Text(failure).font(.app.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
             }
         }
-        .modifier(LateReveal(isWaiting: load == .loading))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("thread-panel-usage")
     }
 
     /// "As of 3:05 PM", with the day when it was not today.
@@ -543,7 +536,7 @@ private struct UsagePart: View {
 
 /// What says an answer is on its way shows only once it is late: most come within a blink,
 /// which a spinner only made flash (2026-11-01: "it does take less than second but
-/// still shows loading"). The room stays taken, so that nothing moves as it comes.
+/// still shows loading"). These labels keep their room; usage without windows has none.
 private struct LateReveal: ViewModifier {
     let isWaiting: Bool
 

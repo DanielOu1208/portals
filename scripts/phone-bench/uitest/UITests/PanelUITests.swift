@@ -11,7 +11,8 @@ import XCTest
 ///
 /// Writes notes.txt and pictures of the screen there.
 final class PanelUITests: XCTestCase {
-    private let folder = "/private/tmp/portals-panel/uitest-" + (ProcessInfo.processInfo.environment["SIMULATOR_UDID"] ?? "unknown")
+    private var root: String { ProcessInfo.processInfo.environment["PANEL_UITEST_ROOT"] ?? "/tmp/portals-panel" }
+    private var folder: String { root + "/uitest-" + (ProcessInfo.processInfo.environment["SIMULATOR_UDID"] ?? "unknown") }
 
     private func note(_ text: String) {
         let url = URL(fileURLWithPath: "\(folder)/notes.txt")
@@ -33,13 +34,139 @@ final class PanelUITests: XCTestCase {
     /// How many times the states host has been asked this, as it counts them
     /// (`panel-states-bridge.mts`).
     private func asks(_ method: String) -> Int {
-        let lines = (try? String(contentsOfFile: "/private/tmp/portals-panel/states-asks.txt", encoding: .utf8)) ?? ""
+        let lines = (try? String(contentsOfFile: "\(root)/states-asks.txt", encoding: .utf8)) ?? ""
         return lines.split(separator: "\n").filter { $0 == method }.count
     }
 
     /// Says how the states host should be, as `panel-states-bridge.mts` reads it.
     private func setStatesMode(_ mode: String) throws {
-        try mode.write(to: URL(fileURLWithPath: "/private/tmp/portals-panel/states-mode.txt"), atomically: true, encoding: .utf8)
+        try mode.write(to: URL(fileURLWithPath: "\(root)/states-mode.txt"), atomically: true, encoding: .utf8)
+    }
+
+    private func usageApp(_ mode: String, id: String = UUID().uuidString) throws -> XCUIApplication {
+        let planPath = "\(folder)/plan-states.txt"
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: planPath), "no plan for the panel's states")
+        var hosts = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: planPath))) as? [[String: Any]])
+        hosts[0]["id"] = id
+        try setStatesMode(mode)
+        let app = XCUIApplication(bundleIdentifier: "com.danielou.portals")
+        app.terminate()
+        app.launchEnvironment = [
+            "PORTALS_DEBUG_HOSTS": String(decoding: try JSONSerialization.data(withJSONObject: hosts), as: UTF8.self),
+            "PORTALS_DEBUG_AGENT": "fake", "PORTALS_DEBUG_PROMPT": "hello", "PORTALS_DEBUG_PANEL": "1",
+        ]
+        app.launch()
+        declineNotifications()
+        let card = app.descendants(matching: .any)["thread-panel"]
+        if !card.waitForExistence(timeout: 2) {
+            let button = app.buttons["thread-panel-button"]
+            XCTAssertTrue(button.waitForExistence(timeout: 20))
+            button.tap()
+        }
+        XCTAssertTrue(card.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["thread-panel-changes"].waitForExistence(timeout: 10))
+        return app
+    }
+
+    func testUsageWithoutWindowsTakesNoRoom() throws {
+        continueAfterFailure = false
+        defer { try? setStatesMode("ok") }
+        var height: CGFloat?
+        for mode in ["usage-wait", "usage-none", "usage-empty", "usage-note", "usage-fail"] {
+            let answered = asks("usage.answered")
+            let app = try usageApp(mode)
+            if mode == "usage-wait" {
+                let card = app.descendants(matching: .any)["thread-panel"]
+                XCTAssertFalse(card.descendants(matching: .any)["thread-panel-usage"].exists)
+                XCTAssertEqual(card.activityIndicators.count, 0)
+                height = card.frame.height
+                try setStatesMode("usage-empty")
+            }
+            let condition = NSPredicate { _, _ in self.asks("usage.answered") > answered }
+            expectation(for: condition, evaluatedWith: app)
+            waitForExpectations(timeout: 10)
+            sleep(1)
+            let card = app.descendants(matching: .any)["thread-panel"]
+            XCTAssertFalse(card.descendants(matching: .any)["thread-panel-usage"].exists, mode)
+            XCTAssertFalse(card.staticTexts["Test plan"].exists, mode)
+            XCTAssertFalse(card.staticTexts["No plan limits apply."].exists, mode)
+            XCTAssertEqual(card.activityIndicators.count, 0, mode)
+            if let height { XCTAssertEqual(card.frame.height, height, accuracy: 1, mode) }
+            height = card.frame.height
+        }
+        shot("no-usage")
+    }
+
+    func testUsageLoadingAndCachedWindows() throws {
+        continueAfterFailure = false
+        defer { try? setStatesMode("ok") }
+        let id = UUID().uuidString
+        let before = asks("usage.read")
+        let app = try usageApp("usage-wait", id: id)
+        let condition = NSPredicate { _, _ in self.asks("usage.read") > before }
+        expectation(for: condition, evaluatedWith: app)
+        waitForExpectations(timeout: 10)
+        let card = app.descendants(matching: .any)["thread-panel"]
+        let usage = card.descendants(matching: .any)["thread-panel-usage"]
+        let height = card.frame.height
+        XCTAssertFalse(usage.exists, "loading holds no room")
+        XCTAssertEqual(card.activityIndicators.count, 0)
+        try setStatesMode("usage-window")
+        XCTAssertTrue(usage.waitForExistence(timeout: 10), "the first windows arrive")
+        sleep(2)
+        XCTAssertGreaterThan(card.frame.height, height)
+        shot("with-usage")
+        // The same host on a new launch: known windows draw before its held refresh.
+        let cached = try usageApp("usage-wait", id: id)
+        XCTAssertTrue(cached.descendants(matching: .any)["thread-panel-usage"].exists, "cached windows draw immediately")
+        try setStatesMode("usage-fail")
+        XCTAssertTrue(cached.staticTexts["Its sign-in has expired."].waitForExistence(timeout: 10))
+        XCTAssertTrue(cached.descendants(matching: .any)["thread-panel-usage"].exists, "a failure keeps known windows")
+    }
+
+    func testBlockingUsageNoteWithoutWindows() throws {
+        continueAfterFailure = false
+        defer { try? setStatesMode("ok") }
+        let app = try usageApp("usage-blocked")
+        XCTAssertTrue(app.staticTexts["The workspace's credits are used up."].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.descendants(matching: .any)["thread-panel-usage"].exists)
+        XCTAssertFalse(app.staticTexts["Test plan"].exists)
+        XCTAssertFalse(app.staticTexts["Credits left: 100."].exists)
+    }
+
+    func testCachedBlockingUsageNoteKeepsItsContext() throws {
+        continueAfterFailure = true
+        defer { try? setStatesMode("ok") }
+        let id = UUID().uuidString
+        let notice = "The workspace's credits are used up."
+        let app = try usageApp("usage-blocked", id: id)
+        XCTAssertTrue(app.staticTexts[notice].waitForExistence(timeout: 10))
+        sleep(2)
+
+        let cached = try usageApp("usage-wait", id: id)
+        let asOf = cached.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'As of '")).firstMatch
+        XCTAssertTrue(cached.staticTexts[notice].exists)
+        XCTAssertTrue(asOf.waitForExistence(timeout: 5), "a restored notice says when it was heard")
+        try setStatesMode("usage-fail")
+        XCTAssertTrue(cached.staticTexts["Its sign-in has expired."].waitForExistence(timeout: 10), "the retained notice keeps the refresh error")
+        XCTAssertTrue(asOf.exists, "a failed refresh keeps the old timestamp")
+        XCTAssertTrue(cached.staticTexts[notice].exists)
+        XCTAssertFalse(cached.descendants(matching: .any)["thread-panel-usage"].exists)
+        shot("blocking-notice-failed")
+
+        let answered = asks("usage.answered")
+        try setStatesMode("usage-blocked")
+        cached.buttons["thread-panel-close"].tap()
+        let reopen = cached.buttons["thread-panel-button"]
+        XCTAssertTrue(reopen.waitForExistence(timeout: 10))
+        reopen.tap()
+        expectation(for: NSPredicate { _, _ in self.asks("usage.answered") > answered }, evaluatedWith: cached)
+        waitForExpectations(timeout: 10)
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: asOf)
+        waitForExpectations(timeout: 10)
+        XCTAssertTrue(cached.staticTexts[notice].exists)
+        XCTAssertFalse(cached.staticTexts["Its sign-in has expired."].exists)
+        XCTAssertFalse(cached.staticTexts["Test plan"].exists)
     }
 
     func testPanel() throws {
@@ -129,7 +256,7 @@ final class PanelUITests: XCTestCase {
         try XCTSkipUnless(FileManager.default.fileExists(atPath: planPath), "no plan for the panel's states")
         continueAfterFailure = true
         let hosts = try String(contentsOfFile: planPath, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
-        let mode = URL(fileURLWithPath: "/private/tmp/portals-panel/states-mode.txt")
+        let mode = URL(fileURLWithPath: "\(root)/states-mode.txt")
         try "ok".write(to: mode, atomically: true, encoding: .utf8)
         let app = XCUIApplication(bundleIdentifier: "com.danielou.portals")
         app.terminate()
@@ -198,7 +325,7 @@ final class PanelUITests: XCTestCase {
         try XCTSkipUnless(FileManager.default.fileExists(atPath: planPath), "no plan for the panel's states")
         continueAfterFailure = true
         let hosts = try String(contentsOfFile: planPath, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
-        let gitMode = URL(fileURLWithPath: "/private/tmp/portals-panel/states-git.txt")
+        let gitMode = URL(fileURLWithPath: "\(root)/states-git.txt")
         try "many".write(to: gitMode, atomically: true, encoding: .utf8)
         let app = XCUIApplication(bundleIdentifier: "com.danielou.portals")
         app.terminate()
@@ -284,7 +411,7 @@ final class PanelUITests: XCTestCase {
         try XCTSkipUnless(FileManager.default.fileExists(atPath: planPath), "no plan for the panel's states")
         continueAfterFailure = true
         let hosts = try String(contentsOfFile: planPath, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
-        try "many".write(to: URL(fileURLWithPath: "/private/tmp/portals-panel/states-git.txt"), atomically: true, encoding: .utf8)
+        try "many".write(to: URL(fileURLWithPath: "\(root)/states-git.txt"), atomically: true, encoding: .utf8)
         sleep(1)
         let app = XCUIApplication(bundleIdentifier: "com.danielou.portals")
         app.terminate()

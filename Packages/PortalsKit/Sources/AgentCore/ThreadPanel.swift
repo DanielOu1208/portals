@@ -77,6 +77,16 @@ public struct UsageLimits: Hashable, Codable, Sendable {
     /// What else the agent says: why there are none (an API key has none), credits left.
     public var note: String?
 
+    /// A limit that turns work away, even when the host has no window to draw.
+    /// The host's note is plain text; keep only its blocking lines without windows.
+    public var blockingNote: String? {
+        let lines = (note ?? "").split(separator: "\n").filter {
+            $0 == "The workspace's credits are used up." ||
+                $0.hasPrefix("The ") && $0.hasSuffix(" usage limit is reached.")
+        }
+        return lines.isEmpty ? nil : lines.joined(separator: "\n")
+    }
+
     public init(title: String? = nil, windows: [Window], heardAt: Date? = nil, note: String? = nil) {
         self.title = title
         self.windows = windows
