@@ -166,3 +166,27 @@ test("stalled thread loads bound both frame count and bytes before a fresh snaps
     fake.server.on("request", original);
   }
 });
+
+test("OpenCode's skills are offered as skills, and a message that names one carries it", async (t) => {
+  const { folder, fake, provider } = await rig(t);
+  const id = await provider.newThread({ cwd: folder, settings });
+  const offered = await provider.commands({ id, cwd: folder });
+  const graphify = offered.find((command) => command.name === "graphify");
+  assert.equal(graphify?.skill, true);
+  assert.equal(graphify?.description, "Graph a codebase");
+  // The command of the same name wins, and a name the app cannot send is left out.
+  assert.equal(offered.filter((command) => command.name === "init").length, 1);
+  assert.equal(offered.find((command) => command.name === "init")?.skill, false);
+  assert.equal(offered.some((command) => command.name === "OpenCode"), false);
+
+  const events: ProviderEvent[] = [];
+  const session = await provider.startSession({ id, cwd: folder, settings }, { emit: (event) => events.push(event), ask: async () => ({ kind: "withdrawn", reason: "unused" }) });
+  t.after(() => session.close());
+  session.attached?.();
+  fake.queueTurn(id, "plain");
+  session.startTurn({ text: "/graphify the port", images: [] });
+  await until(() => events.some((event) => event.type === "turn.end"));
+  const prompt = fake.callsOf("POST", new RegExp(`/session/${id}/prompt$`))[0];
+  assert.deepEqual(prompt.body.skills, [{ id: "graphify", name: "graphify" }]);
+  assert.equal(prompt.body.text, "/graphify the port");
+});

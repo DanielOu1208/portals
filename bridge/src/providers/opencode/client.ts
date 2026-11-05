@@ -1,7 +1,7 @@
 import { log } from "../../log.ts";
 import type { AgentInfo, CommandInfo, FormInfo, SessionInboxInfo, UsageLimitsInfo, McpServer, Project } from "@opencode/client";
 import type { Endpoint } from "./server.ts";
-import type { Message, ModelInfo, ModelRef, OpenCodeEvent, PermissionDecision, PermissionRequest, SessionInfo } from "./protocol.ts";
+import type { Message, ModelInfo, ModelRef, OpenCodeEvent, PermissionDecision, PermissionRequest, SessionInfo, SkillInfo } from "./protocol.ts";
 
 // The bridge's one way to OpenCode: its own client (`@opencode/client`, an optional
 // peer dependency loaded when OpenCode is first used), with every call the provider
@@ -93,6 +93,29 @@ export class OpenCodeApi {
     return data(await this.client.command.list({ location: { directory } })) ?? [];
   }
 
+  /** The skills OpenCode would use in a folder: its own, the user's, and a plugin's. */
+  async skills(directory: string): Promise<SkillInfo[]> {
+    // OpenCode reads a folder's skills in the background, so the first answer after it
+    // starts is empty or partial (0 → 2 → 153 over ~400 ms on 2.2.5, measured). Ask until
+    // two answers agree, and give up once it has said nothing three times running.
+    let skills: SkillInfo[] = [];
+    let previous = -1;
+    let empty = 0;
+    for (let tries = 0; tries < 10; tries += 1) {
+      skills = await this.skillList(directory);
+      if (skills.length > 0 && skills.length === previous) break;
+      empty = skills.length > 0 ? 0 : empty + 1;
+      if (empty >= 3) break;
+      previous = skills.length;
+      await new Promise((resolve) => setTimeout(resolve, 80));
+    }
+    return skills;
+  }
+
+  private async skillList(directory: string): Promise<SkillInfo[]> {
+    return data(await this.client.skill.list({ location: { directory } })) ?? [];
+  }
+
   async command(id: string, name: string, text: string, files: { uri: string; name: string }[]): Promise<void> {
     await this.client.session.command({ sessionID: id, name, text, ...(files.length ? { files } : {}) });
   }
@@ -160,7 +183,7 @@ export class OpenCodeApi {
   }
 
   /** Hands OpenCode a message; it runs it as soon as the session is free. Resolves with the message's id. */
-  async prompt(id: string, text: string, files: { uri: string; name: string }[], options: { id?: string; delivery?: "steer" | "queue" } = {}): Promise<{ id: string }> {
+  async prompt(id: string, text: string, files: { uri: string; name: string }[], options: { id?: string; delivery?: "steer" | "queue"; skills?: { id: string; name: string }[] } = {}): Promise<{ id: string }> {
     return data(await this.client.session.prompt({ sessionID: id, text, ...(files.length > 0 ? { files } : {}), ...options }));
   }
 

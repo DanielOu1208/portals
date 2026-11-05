@@ -1,5 +1,6 @@
 import type { AgentCommand, Prompt } from "../types.ts";
 import type { OpenCodeApi } from "./client.ts";
+import type { SkillInfo } from "./protocol.ts";
 
 export type AdmissionKind = "prompt" | "compact" | "command";
 interface Admission {
@@ -15,6 +16,27 @@ export function commandCatalog(commands: { name: string; description?: string }[
   ];
 }
 
+/**
+ * OpenCode's skills as the app's commands. Left out: a name the app cannot send (`/name`
+ * goes to the bridge lower cased, and is read up to the first space or second slash), and
+ * one `taken`, a command of OpenCode's or the bridge's, already offers.
+ */
+export function skillCommands(skills: readonly SkillInfo[], taken: readonly string[]): AgentCommand[] {
+  const seen = new Set(taken);
+  return skills.flatMap((skill): AgentCommand[] => {
+    const name = skill.name;
+    if (typeof name !== "string" || name === "" || name !== name.toLowerCase() || /[\s/]/.test(name) || seen.has(name)) return [];
+    seen.add(name);
+    return [{ name, description: skill.description || "A skill of yours", usage: "[instructions]", skill: true }];
+  });
+}
+
+/** The skill a message runs ("/name …"), when its first word names one. */
+export function skillIn(text: string, skills: readonly SkillInfo[]): SkillInfo | null {
+  const name = /^\/([^\s/]+)(\s|$)/.exec(text.trim())?.[1];
+  return (name && skills.find((skill) => skill.name === name)) || null;
+}
+
 /** Dedicated APIs run commands; ordinary slash-prefixed text remains a message. */
 export async function submit(api: OpenCodeApi, id: string, directory: string, prompt: Prompt, files: { uri: string; name: string }[], admission?: Admission): Promise<{ id: string } | undefined> {
   const command = /^\/([^\s/]+)(?:\s+([\s\S]*))?$/.exec(prompt.text.trim());
@@ -28,6 +50,9 @@ export async function submit(api: OpenCodeApi, id: string, directory: string, pr
     await api.command(id, command[1], command[2] ?? "", files);
     return undefined;
   }
+  // A skill is a message OpenCode runs with it, attached as its own input, as its own
+  // apps send a skill picked from a menu.
+  const skill = command ? skillIn(prompt.text, await api.skills(directory)) : null;
   if (admission && !await admission.current("prompt")) return;
-  return api.prompt(id, prompt.text, files, admission ? { id: admission.id } : {});
+  return api.prompt(id, prompt.text, files, { ...(admission ? { id: admission.id } : {}), ...(skill ? { skills: [{ id: skill.id, name: skill.name }] } : {}) });
 }

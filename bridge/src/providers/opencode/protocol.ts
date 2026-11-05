@@ -48,6 +48,16 @@ export interface StructuredError {
   status?: number;
 }
 
+/** A skill OpenCode would use in a folder (`GET /api/skill`): the user's, a plugin's, or one it comes with. */
+export interface SkillInfo {
+  id: string;
+  name: string;
+  description?: string;
+  path?: string;
+  /** OpenCode may reach for it by itself, without the name being written. */
+  autoinvoke?: boolean;
+}
+
 export interface ToolContent {
   type: "text" | "file";
   text?: string;
