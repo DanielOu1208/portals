@@ -171,6 +171,7 @@ struct ThreadRow: View, Equatable {
     let fleet: Fleet
     let onOpen: (ThreadRecord) -> Void
     let onRename: (ThreadRecord) -> Void
+    var searchHit: ThreadSearchHit? = nil
 
     #if targetEnvironment(macCatalyst)
     /// The list's tracker of the pointer, which the row tells where it is in the list, and
@@ -195,7 +196,17 @@ struct ThreadRow: View, Equatable {
         one.record == other.record && one.kind == other.kind && one.height == other.height && one.current === other.current
             && one.activity == other.activity && one.style == other.style && one.caption == other.caption
             && one.age == other.age && one.offersRemoval == other.offersRemoval && one.closing == other.closing
-            && one.isTab == other.isTab && one.isBot == other.isBot && one.fleet === other.fleet
+            && one.isTab == other.isTab && one.isBot == other.isBot && one.fleet === other.fleet && one.searchHit == other.searchHit
+    }
+
+    private static func snippet(_ hit: ThreadSearchHit) -> AttributedString {
+        var text = AttributedString(hit.snippet)
+        for range in hit.matchRanges {
+            if let range = Range(range, in: text) {
+                text[range].inlinePresentationIntent = .stronglyEmphasized
+            }
+        }
+        return AttributedString(hit.role == .user ? "You: " : "") + text
     }
 
     /// How far a swipe goes, with its flick, to close the row rather than slide back.
@@ -231,6 +242,12 @@ struct ThreadRow: View, Equatable {
                             .foregroundStyle(.secondary)
                             .accessibilityLabel(caption.spoken)
                     }
+                    if let searchHit {
+                        Text(Self.snippet(searchHit))
+                            .font(.app.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 roomyFarEnd
@@ -246,7 +263,7 @@ struct ThreadRow: View, Equatable {
         return label
             .allowsHitTesting(false)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(accessibilityText)
+            .accessibilityLabel(accessibilityText + (searchHit.map { ", " + String(Self.snippet($0).characters) } ?? ""))
             .accessibilityAddTraits(isCurrent ? [.isButton, .isSelected] : .isButton)
             .accessibilityIdentifier("thread-row")
             .accessibilityAction { onOpen(record) }
