@@ -797,3 +797,35 @@ test("a command named with capitals keeps its name from a skill that differs onl
     opencode.skills = skills;
   }
 });
+
+test("commands that differ only in case, none named in lower case, run only by their exact names", async () => {
+  const thread = await createThread();
+  const [commands, skills] = [opencode.commands, opencode.skills];
+  const first = { name: "Deploy", description: "Deploy Dana's site" };
+  const second = { name: "DEPLOY", description: "Deploy everything" };
+  opencode.skills = [...skills, { id: "deploy-notes", name: "deploy", description: "Other instructions", path: "/skills/deploy/SKILL.md" }];
+  try {
+    // Whichever order OpenCode lists them in, /deploy is neither, nor the skill they keep the name from.
+    for (const listed of [[first, second], [second, first]]) {
+      opencode.commands = [...commands, ...listed];
+      await assert.rejects(client.call("command.dispatch", { session_id: thread, name: "deploy", arg: "now" }), (error: any) => error.code === -32602);
+    }
+    await client.call("image.attach_bytes", { session_id: thread, filename: "screen.png", content_base64: png.toString("base64") });
+    opencode.queueTurn(thread, "plain");
+    let start = client.frames.length;
+    await client.call("prompt.submit", { session_id: thread, text: "/deploy now", profile: "opencode" });
+    await completed(thread, start);
+    const prompt = opencode.callsOf("POST", new RegExp(`^/api/session/${thread}/prompt$`)).at(-1)!.body;
+    assert.equal(prompt.text, "/deploy now");
+    assert.equal(prompt.skills, undefined);
+    // Its exact name still runs each.
+    opencode.queueTurn(thread, "plain");
+    start = client.frames.length;
+    await client.call("prompt.submit", { session_id: thread, text: "/DEPLOY now", profile: "opencode" });
+    await completed(thread, start);
+    assert.deepEqual(opencode.callsOf("POST", new RegExp(`^/api/session/${thread}/command$`)).map((call) => call.body.name), ["DEPLOY"]);
+  } finally {
+    opencode.commands = commands;
+    opencode.skills = skills;
+  }
+});

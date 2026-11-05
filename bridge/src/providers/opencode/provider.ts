@@ -204,6 +204,8 @@ export class OpenCodeProvider implements Provider {
       // time goes as it was typed, as a message sent without its skills.
       const command = commandNamed(own, name);
       if (command) return [{ ...command, name }];
+      // Commands that differ only in case hold the name from skills too, and none of them is meant.
+      if (own.some((entry) => entry.name.toLowerCase() === name)) return [];
       try {
         const { skills, complete } = await api.skills(folder, undefined, sendSkillsDeadline);
         const skill = skillCommands(skills, own.map((command) => command.name)).filter((command) => command.name === name);

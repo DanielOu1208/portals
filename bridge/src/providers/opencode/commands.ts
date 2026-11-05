@@ -49,9 +49,14 @@ export function skillCommands(skills: readonly SkillInfo[], taken: readonly stri
   });
 }
 
-/** OpenCode's command a typed name runs: one of that name, or else of that name in other case, as the app lower cases it. */
+/**
+ * OpenCode's command a typed name runs: one of that name, or else the one of that name in
+ * other case, as the app lower cases it. Two that differ only in case, and which is meant is
+ * not known: neither.
+ */
 export function commandNamed<T extends { name: string }>(commands: readonly T[], name: string): T | undefined {
-  return commands.find((command) => command.name === name) ?? commands.find((command) => command.name.toLowerCase() === name.toLowerCase());
+  const same = commands.filter((command) => command.name.toLowerCase() === name.toLowerCase());
+  return same.find((command) => command.name === name) ?? (same.length === 1 ? same[0] : undefined);
 }
 
 /** The skill a message runs ("/name …"), when its first word names one. */
@@ -76,15 +81,16 @@ export async function submit(api: OpenCodeApi, id: string, directory: string, pr
     if (admission && !await admission.current("compact")) return;
     return api.compact(id, admission?.id);
   }
-  const native = command ? commandNamed(await api.commands(directory), command[1]) : undefined;
+  const commands = command ? await api.commands(directory) : [];
+  const native = command ? commandNamed(commands, command[1]) : undefined;
   if (command && native) {
     if (admission && !await admission.current("command")) return;
     await api.command(id, native.name, command[2] ?? "", files);
     return undefined;
   }
   // A skill is a message OpenCode runs with it, attached as its own input, as its own
-  // apps send a skill picked from a menu.
-  const skill = command ? skillIn(prompt.text, (await api.skills(directory, admission?.signal, sendSkillsDeadline)).skills) : null;
+  // apps send a skill picked from a menu. A name commands have in any case is not one.
+  const skill = command && !commands.some((entry) => entry.name.toLowerCase() === command[1].toLowerCase()) ? skillIn(prompt.text, (await api.skills(directory, admission?.signal, sendSkillsDeadline)).skills) : null;
   if (admission && !await admission.current("prompt")) return;
   return api.prompt(id, prompt.text, files, { ...(admission ? { id: admission.id } : {}), ...(skill ? { skills: [{ id: skill.id, name: skill.name }] } : {}) });
 }
