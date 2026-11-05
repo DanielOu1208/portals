@@ -346,3 +346,24 @@ test("a skill named with capitals is offered by its name lower cased, and a mess
     assert.deepEqual(sent.skills, [{ id: "report", name: "Report" }]);
   }
 });
+
+test("skills that differ only in case, none named in lower case, are offered by neither", async (t) => {
+  const { folder, fake, provider } = await rig(t);
+  const first = { id: "first-report", name: "Report", description: "Dana's report", path: "/skills/first/SKILL.md" };
+  const second = { id: "second-report", name: "REPORT", description: "Another report", path: "/skills/second/SKILL.md" };
+  const id = await provider.newThread({ cwd: folder, settings });
+  const events: ProviderEvent[] = [];
+  const session = await provider.startSession({ id, cwd: folder, settings }, { emit: (event) => events.push(event), ask: async () => ({ kind: "withdrawn", reason: "unused" }) });
+  t.after(() => session.close());
+  session.attached?.();
+  // Whichever order OpenCode lists them in, the menu and a message agree: neither.
+  for (const skills of [[first, second], [second, first]]) {
+    fake.skills = skills;
+    assert.equal((await provider.commands({ id, cwd: folder })).some((command) => command.name === "report"), false);
+    const ends = events.filter((event) => event.type === "turn.end").length;
+    fake.queueTurn(id, "plain");
+    session.startTurn({ text: "/report this week", images: [] });
+    await until(() => events.filter((event) => event.type === "turn.end").length === ends + 1);
+    assert.equal(fake.callsOf("POST", new RegExp(`/session/${id}/prompt$`)).at(-1)!.body.skills, undefined);
+  }
+});

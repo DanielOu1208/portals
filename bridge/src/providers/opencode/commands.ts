@@ -24,14 +24,16 @@ export function commandCatalog(commands: { name: string; description?: string }[
 /**
  * OpenCode's skills by the name the app sends: `/name` goes to the bridge lower cased, and is
  * read up to the first space or second slash. So a skill named with capitals goes by its name
- * lower cased, unless a skill already has that name; one with a space or a slash is left out.
+ * lower cased, unless a skill already has that name; one with a space or a slash is left out,
+ * and so are skills that differ only in case, none of them named so: which is meant is not known.
  */
 function slashNames(skills: readonly SkillInfo[]): Map<string, SkillInfo> {
   const sendable = skills.filter((skill) => typeof skill.name === "string" && skill.name !== "" && !/[\s/]/.test(skill.name));
-  const lower = (skill: SkillInfo) => skill.name === skill.name.toLowerCase();
   const named = new Map<string, SkillInfo>();
-  for (const skill of [...sendable.filter(lower), ...sendable.filter((skill) => !lower(skill))]) {
-    if (!named.has(skill.name.toLowerCase())) named.set(skill.name.toLowerCase(), skill);
+  for (const name of new Set(sendable.map((skill) => skill.name.toLowerCase()))) {
+    const same = sendable.filter((skill) => skill.name.toLowerCase() === name);
+    const skill = same.find((skill) => skill.name === name) ?? (same.length === 1 ? same[0] : undefined);
+    if (skill) named.set(name, skill);
   }
   return named;
 }
