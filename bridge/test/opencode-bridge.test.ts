@@ -728,3 +728,20 @@ test("a skill named with a picture mid-turn reads nothing from OpenCode first, s
   await client.call("session.interrupt", { session_id: thread });
   await completed(thread, start);
 });
+
+test("a skill message's own turn that OpenCode fails still completes, and leaves nothing waiting", async () => {
+  const thread = await createThread();
+  const start = await send(thread, "Keep thinking", "interrupt", { holdBefore: "session.step.failed" });
+  await client.from(start, (frame) => isEvent(frame, "reasoning.delta", thread));
+  await client.call("image.attach_bytes", { session_id: thread, filename: "screen.png", content_base64: png.toString("base64") });
+  const queued = await client.call("prompt.submit", { session_id: thread, text: "/graphify this screen" });
+  await until(() => keptForItsTurn(thread, queued.queue_id));
+  opencode.queueTurn(thread, "failed-upstream");
+  const end = client.frames.length;
+  await client.call("session.interrupt", { session_id: thread });
+  const own = client.frames.indexOf(await client.from(end, (frame) => isEvent(frame, "message.start", thread) && frame.params.payload.queue_id === queued.queue_id));
+  const done = (await client.from(own, (frame) => isEvent(frame, "message.complete", thread))).params;
+  assert.equal(done.payload.status, "error");
+  await client.from(own, (frame) => isEvent(frame, "queue.changed", thread) && frame.params.payload.queued.length === 0);
+  assert.deepEqual((await client.call("session.resume", { session_id: thread })).queued ?? [], []);
+});
