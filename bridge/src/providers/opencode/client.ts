@@ -31,9 +31,16 @@ function data<T>(value: unknown): T {
 /** How many pages of a long conversation are read, at most. */
 const maxPages = 100;
 
+/** How long a folder's skills are asked for at least, the first time, while OpenCode may still be reading them. */
+const skillsSettle = 1000;
+/** How long a catalog, or a message that names a skill, waits for the skills at most. */
+const skillsDeadline = 2000;
+
 /** The calls the bridge makes, each in the shape the provider reads. */
 export class OpenCodeApi {
   private readonly client: Client;
+  /** The folders whose skills OpenCode has finished reading. */
+  private readonly skillsRead = new Set<string>();
 
   constructor(client: Client) {
     this.client = client;
@@ -95,20 +102,24 @@ export class OpenCodeApi {
 
   /** The skills OpenCode would use in a folder: its own, the user's, and a plugin's. */
   async skills(directory: string): Promise<SkillInfo[]> {
-    // OpenCode reads a folder's skills in the background, so the first answer after it
-    // starts is empty or partial (0 → 2 → 153 over ~400 ms on 2.2.5, measured). Ask until
-    // two answers agree, and give up once it has said nothing three times running.
+    // OpenCode reads a folder's skills in the background, so the first answers after it
+    // starts are empty or partial (0 → 2 → 153 over ~400 ms on 2.2.5, measured), and it
+    // says nothing when it is done. So the first time a folder is asked, keep asking for
+    // `skillsSettle`, then until two answers name the same skills; later, one answer will do.
+    // A list still changing at `skillsDeadline` is taken as it is.
+    if (this.skillsRead.has(directory)) return this.skillList(directory);
+    const started = Date.now();
     let skills: SkillInfo[] = [];
-    let previous = -1;
-    let empty = 0;
-    for (let tries = 0; tries < 10; tries += 1) {
+    let previous: string | undefined;
+    for (;;) {
       skills = await this.skillList(directory);
-      if (skills.length > 0 && skills.length === previous) break;
-      empty = skills.length > 0 ? 0 : empty + 1;
-      if (empty >= 3) break;
-      previous = skills.length;
-      await new Promise((resolve) => setTimeout(resolve, 80));
+      const names = skills.map((skill) => `${skill.id}:${skill.name}`).sort().join("\n");
+      if (Date.now() - started >= skillsSettle && names === previous) break;
+      if (Date.now() - started >= skillsDeadline) return skills;
+      previous = names;
+      await new Promise((resolve) => setTimeout(resolve, 100));
     }
+    this.skillsRead.add(directory);
     return skills;
   }
 

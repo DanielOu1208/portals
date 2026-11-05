@@ -190,3 +190,21 @@ test("OpenCode's skills are offered as skills, and a message that names one carr
   assert.deepEqual(prompt.body.skills, [{ id: "graphify", name: "graphify" }]);
   assert.equal(prompt.body.text, "/graphify the port");
 });
+
+test("skills OpenCode is still reading are waited for, the first time a folder is asked", async (t) => {
+  const { folder, fake, provider } = await rig(t);
+  const whole = [...fake.skills, { id: "late", name: "late", description: "Read last", path: "/skills/late/SKILL.md" }];
+  // Nothing at first, or one skill for a while: either way, all of them by 400 ms.
+  for (const early of [[], fake.skills.slice(0, 1)]) {
+    const cwd = mkdtempSync(join(folder, "project-"));
+    fake.skills = [];
+    const timers = [setTimeout(() => { fake.skills = early; }, 50), setTimeout(() => { fake.skills = whole; }, 400)];
+    t.after(() => timers.forEach(clearTimeout));
+    const offered = await provider.commands({ id: "ses_skills", cwd });
+    assert.deepEqual(offered.filter((command) => command.skill).map((command) => command.name), ["graphify", "late"]);
+    // Read once, a folder's list is whole: the next menu asks once.
+    const reads = fake.callsOf("GET", /^\/api\/skill$/).length;
+    await provider.commands({ id: "ses_skills", cwd });
+    assert.equal(fake.callsOf("GET", /^\/api\/skill$/).length, reads + 1);
+  }
+});
