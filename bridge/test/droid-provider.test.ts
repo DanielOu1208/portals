@@ -2382,12 +2382,57 @@ test("a call of the conversation's that Droid reports only once it has begun com
   lastCall(r.handle, { inputTokens: 40_000, cacheReadTokens: 0, outputTokens: 4 });
   lastCall(r.handle, { inputTokens: 651, cacheReadTokens: 0, outputTokens: 100 });
   lastCall(r.handle, { inputTokens: 651, cacheReadTokens: 0, outputTokens: 322 });
-  assert.equal(used(), 40_004);
+  assert.equal(used(), 38_004);
   tell(r.handle, { type: "session_compacted", summaryId: "late-summary", removedCount: 1, visibleBoundaryMessageId: null });
   await until(() => used() === 22_000);
   const marker = (await r.session.history()).findLast((message) => message.role === "compaction");
   assert.equal(marker?.role === "compaction" && marker.tokens_before, 40_004);
   assert.equal(r.sink.events.some((event) => event.type === "usage" && (event.usage.used === 751 || event.usage.used === 973)), false);
+});
+
+test("Droid's compaction that tries more than once (a shorter transcript, another model), its own or the thread's /compact, shows none of its calls, and its marker says what the conversation took before", async (t) => {
+  const r = await rig(t);
+  const used = () => r.sink.events.flatMap((event) => event.type === "usage" ? [event.usage.used] : []);
+  r.handle.breakdown = breakdown(22_000);
+  tell(r.handle, { type: "droid_working_state_changed", newState: "thinking" });
+  lastCall(r.handle, { inputTokens: 38_000, cacheReadTokens: 0, outputTokens: 4 });
+  // By itself: two tries, each a call of its own with another input, then its word.
+  tell(r.handle, { type: "droid_working_state_changed", newState: "compacting_conversation" });
+  lastCall(r.handle, { inputTokens: 651, cacheReadTokens: 0, outputTokens: 100 });
+  lastCall(r.handle, { inputTokens: 431, cacheReadTokens: 0, outputTokens: 322 });
+  tell(r.handle, { type: "session_compacted", summaryId: "tried-twice", removedCount: 1, visibleBoundaryMessageId: null });
+  await until(() => used().at(-1) === 22_000);
+  assert.deepEqual(used().slice(-2), [38_004, 22_000]);
+  // The thread's /compact, from the conversation's next call: two tries again.
+  tell(r.handle, { type: "droid_working_state_changed", newState: "thinking" });
+  lastCall(r.handle, { inputTokens: 30_000, cacheReadTokens: 0, outputTokens: 4 });
+  tell(r.handle, { type: "droid_working_state_changed", newState: "idle" });
+  const next = new Handle(r.handle.id, r.handle.cwd, r.handle.options);
+  next.breakdown = breakdown(21_000);
+  r.handle.compactScript = async () => {
+    lastCall(r.handle, { inputTokens: 650, cacheReadTokens: 0, outputTokens: 100 });
+    lastCall(r.handle, { inputTokens: 430, cacheReadTokens: 0, outputTokens: 300 });
+    return { session: next, removedCount: 1 };
+  };
+  const mark = r.sink.events.length;
+  assert.equal((await turn(r.session, r.sink, "/compact")).status, "complete");
+  assert.deepEqual(r.sink.events.slice(mark).flatMap((event) => event.type === "usage" ? [event.usage.used] : []), [21_000]);
+  assert.deepEqual((await r.session.history()).flatMap((message) => message.role === "compaction" ? [[message.trigger, message.tokens_before]] : []),
+    [["auto", 38_004], ["manual", 30_004]]);
+});
+
+test("a compaction of Droid's own that makes no call, its summary as it was, takes the conversation's call Droid reported late as what it took before", async (t) => {
+  const r = await rig(t);
+  r.handle.breakdown = breakdown(22_000);
+  tell(r.handle, { type: "droid_working_state_changed", newState: "thinking" });
+  lastCall(r.handle, { inputTokens: 31_000, cacheReadTokens: 0, outputTokens: 4 });
+  tell(r.handle, { type: "droid_working_state_changed", newState: "compacting_conversation" });
+  lastCall(r.handle, { inputTokens: 38_000, cacheReadTokens: 0, outputTokens: 4 });
+  tell(r.handle, { type: "session_compacted", summaryId: "reused", removedCount: 1, visibleBoundaryMessageId: null });
+  await r.session.close();
+  const reopened = await r.provider.resumeSession(r.options(), new Sink());
+  const marker = (await reopened.history()).findLast((message) => message.role === "compaction");
+  assert.equal(marker?.role === "compaction" && marker.tokens_before, 38_004);
 });
 
 /** A thread on a long conversation (its last call 139,221), compacted with /compact, which leaves 21,000; the compaction's own call took 141,000. */

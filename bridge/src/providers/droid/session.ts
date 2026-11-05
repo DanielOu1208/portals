@@ -201,15 +201,16 @@ export class DroidSession implements ProviderSession {
    * reports otherwise a side call's (`conversing`).
    */
   private droidAtWork = false;
-  /** Droid says it is compacting the thread's conversation by itself (`heldCall`). */
+  /** Droid says it is compacting the thread's conversation by itself (`heldMost`). */
   private droidCompacting = false;
   /**
-   * A call Droid reported while compacting, the thread's /compact or its own: the
-   * compaction's, dropped once Droid says it compacted, or the conversation's, reported late
-   * (Droid sends its figures on a timer), taken once the compaction ends without it or a
-   * call of another comes (`observeContext`).
+   * The largest call Droid reported while compacting, the thread's /compact or its own. Droid
+   * does not say whose it was: its compaction's own (one of several tries, at times), or the
+   * conversation's, reported late (Droid sends its figures on a timer). The conversation only
+   * grows until it is compacted, and a compaction's call is far smaller, so the larger of this
+   * and what the meter last read is what the conversation took before (`heldBefore`).
    */
-  private heldCall: { parts: number[]; used: number } | undefined;
+  private heldMost: number | undefined;
   /** The last call Droid reported (its three figures), taken or not: the same again is no new call (`observeContext`). */
   private lastCall: string | undefined;
   /** How long the last save took: a mid-turn save waits the longer for a long thread (`saveSoon`). */
@@ -589,7 +590,6 @@ export class DroidSession implements ProviderSession {
         const id = typeof notification.summaryId === "string" ? notification.summaryId : undefined;
         if (id && this.compactionIds.has(id)) return;
         if (id) this.compactionIds.add(id);
-        this.heldCall = undefined;
         // The word of a /compact the thread asked for, which came after Droid's answer to it: its marker is kept already.
         const asked = this.compactedAt !== undefined && this.host.now() - this.compactedAt < compactionNoticeMs;
         this.compactedAt = undefined;
@@ -597,7 +597,7 @@ export class DroidSession implements ProviderSession {
         else if (!asked) {
           // What Droid's last call took was before it: the meter reads what is left until the next (`refreshContext`).
           this.forgetCall();
-          this.recordCompaction("auto", this.state?.contextUsage?.used);
+          this.recordCompaction("auto", this.heldBefore(this.state?.contextUsage?.used));
           void this.refreshContext();
         }
       }
@@ -627,8 +627,8 @@ export class DroidSession implements ProviderSession {
    * when it says it is exact or Droid has made no call since the conversation began or was
    * compacted (`refreshContext`). Only a call of the conversation's counts (`conversing`),
    * and only a new one: Droid says its last call's figures again, unchanged, whenever the
-   * session's totals change, also the compaction's own call after it compacted. One reported
-   * while Droid compacts is held (`heldCall`): Droid reports its compaction's own call before
+   * session's totals change, also the compaction's own call after it compacted. None reported
+   * while Droid compacts is shown (`heldMost`): Droid reports its compaction's own call before
    * it says it compacted (CLI 1.3.0: 973 tokens, where the turn's call before it took 38,939),
    * and taken, the meter dropped to it and the marker of a compaction Droid did by itself
    * said it was what the conversation took before.
@@ -642,21 +642,26 @@ export class DroidSession implements ProviderSession {
     this.lastCall = call;
     if (!this.conversing()) return;
     if (this.compacting || this.droidCompacting) {
-      // Another call than the one held, not the same one's figures with more said since: the one held was the conversation's.
-      const held = this.heldCall;
-      this.heldCall = { parts, used };
-      if (held && (held.parts[0] !== parts[0] || held.parts[1] !== parts[1])) this.takeContext(held.used);
+      this.heldMost = Math.max(this.heldMost ?? 0, used);
       return;
     }
     this.takeContext(used);
   }
 
-  /** The compaction is over without Droid saying it compacted (refused, failed, stopped): the call held was the conversation's. */
+  /** What the conversation took before the compaction now over: what the meter last read, or the largest call reported meanwhile (`heldMost`). */
+  private heldBefore(known: number | undefined): number | undefined {
+    const held = this.heldMost;
+    this.heldMost = undefined;
+    return held !== undefined && (known === undefined || held > known) ? held : known;
+  }
+
+  /** The compaction is over without Droid saying it compacted (refused, failed, stopped): the meter takes what the conversation took before it. */
   private takeHeld(): void {
-    const held = this.heldCall;
-    if (!held || this.compacting || this.droidCompacting || this.closed) return;
-    this.heldCall = undefined;
-    this.takeContext(held.used);
+    if (this.heldMost === undefined || this.compacting || this.droidCompacting || this.closed) return;
+    const known = this.state?.contextUsage?.used;
+    const before = this.heldBefore(known);
+    if (before === undefined || before === known) return;
+    this.takeContext(before);
     if (this.turn) this.saveSoon(); else this.save();
   }
 
@@ -758,7 +763,7 @@ export class DroidSession implements ProviderSession {
   }
 
   private async compact(turn: Turn, handle: DroidHandle, instructions: string): Promise<void> {
-    const before = this.state?.contextUsage?.used;
+    const known = this.state?.contextUsage?.used;
     this.compacting = true;
     this.compactionHeard = false;
     turn.stream.accept({ type: "working_state_changed", state: DroidWorkingState.CompactingConversation });
@@ -787,6 +792,7 @@ export class DroidSession implements ProviderSession {
         throw new Error("Droid's compacted conversation is not available in this folder.");
       }
       const previous = this.state!;
+      const before = this.heldBefore(known);
       const marker: StoredMessage = { role: "compaction", trigger: "manual", timestamp: Date.now(),
         ...(before === undefined ? {} : { tokens_before: before }) };
       const candidate: DroidThread = { ...previous, session: next.id,
@@ -805,7 +811,6 @@ export class DroidSession implements ProviderSession {
       previous.messages.push(marker);
       candidate.messages = previous.messages;
       this.state = candidate;
-      this.heldCall = undefined;
       // Droid's last call was before it: the meter reads what is left until the next (`forgetCall`).
       this.forgetCall();
       // Also after a Stop that came too late to stop it: the SDK's session is now the
@@ -1479,7 +1484,7 @@ export class DroidSession implements ProviderSession {
     this.unlisten?.(); this.unlisten = null;
     this.lifetime = null;
     this.autonomousWorking = this.droidAtWork = this.droidCompacting = false;
-    this.heldCall = undefined;
+    this.takeHeld();
     this.work.stopped(trackingEnded);
     this.background.close();
     this.host.pool.cooled(this);
