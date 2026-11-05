@@ -2326,6 +2326,70 @@ test("Droid compacting by itself makes a call of its own for it, which is not th
   assert.deepEqual(r.sink.events.findLast((event) => event.type === "usage"), { type: "usage", usage: { used: 22_809, max: 800_000, estimated: true } });
 });
 
+test("a /compact Droid refuses, busy with a turn of its own, leaves the meter at that turn's call, which Droid reported while the bridge waited for its answer, and the next /compact's marker says so", async (t) => {
+  const r = await rig(t);
+  const usage = () => r.sink.events.findLast((event) => event.type === "usage");
+  tell(r.handle, { type: "droid_working_state_changed", newState: "thinking" });
+  lastCall(r.handle, { inputTokens: 31_000, cacheReadTokens: 0, outputTokens: 4 });
+  const entered = gate(), refuse = gate();
+  r.handle.compactScript = async () => {
+    entered.resolve();
+    await refuse.promise;
+    throw new Error("Wait for the current turn to finish before compressing.");
+  };
+  const refused = turn(r.session, r.sink, "/compact");
+  await entered.promise;
+  // Droid's own turn's last call, and its end, before Droid answers.
+  lastCall(r.handle, { inputTokens: 38_000, cacheReadTokens: 0, outputTokens: 4 });
+  tell(r.handle, { type: "agent_turn_completed", reason: "completed", turnId: "execute-completion:1" });
+  tell(r.handle, { type: "droid_working_state_changed", newState: "idle" });
+  refuse.resolve();
+  assert.equal((await refused).status, "error");
+  assert.equal(r.handle.closed, 0);
+  // Said again after the refusal: no new call, and the meter has it already.
+  lastCall(r.handle, { inputTokens: 38_000, cacheReadTokens: 0, outputTokens: 4 });
+  assert.equal((usage() as { usage?: { used?: number } } | undefined)?.usage?.used, 38_004);
+  assert.equal(r.provider.store.read("thread").contextUsage?.used, 38_004);
+  const next = new Handle(r.handle.id, r.handle.cwd, r.handle.options);
+  next.breakdown = breakdown(22_000);
+  r.handle.compactScript = async () => {
+    lastCall(r.handle, { inputTokens: 651, cacheReadTokens: 0, outputTokens: 322 });
+    return { session: next, removedCount: 1 };
+  };
+  assert.equal((await turn(r.session, r.sink, "/compact")).status, "complete");
+  await r.session.close();
+  const reopened = await r.provider.resumeSession(r.options(), new Sink());
+  const marker = (await reopened.history()).findLast((message) => message.role === "compaction");
+  assert.equal(marker?.role === "compaction" && marker.tokens_before, 38_004);
+});
+
+test("a call of the conversation's that Droid reports only once it has begun compacting by itself is not taken for the compaction's: the meter has it when Droid compacts nothing, and the marker when its own call follows (Droid sends its figures on a timer)", async (t) => {
+  const r = await rig(t);
+  const used = () => (r.sink.events.findLast((event) => event.type === "usage") as { usage?: { used?: number } } | undefined)?.usage?.used;
+  r.handle.breakdown = breakdown(22_000);
+  tell(r.handle, { type: "droid_working_state_changed", newState: "thinking" });
+  lastCall(r.handle, { inputTokens: 31_000, cacheReadTokens: 0, outputTokens: 4 });
+  // Compacting, then the turn's last call, late; Droid goes on without having compacted.
+  tell(r.handle, { type: "droid_working_state_changed", newState: "compacting_conversation" });
+  lastCall(r.handle, { inputTokens: 38_000, cacheReadTokens: 0, outputTokens: 4 });
+  tell(r.handle, { type: "droid_working_state_changed", newState: "streaming_assistant_message" });
+  lastCall(r.handle, { inputTokens: 38_000, cacheReadTokens: 0, outputTokens: 4 });
+  assert.equal(used(), 38_004);
+  assert.equal((await r.session.history()).some((message) => message.role === "compaction"), false);
+
+  // Compacting again: a later call of the turn's, late, then the compaction's own (its figures twice, the second with more said), then its word.
+  tell(r.handle, { type: "droid_working_state_changed", newState: "compacting_conversation" });
+  lastCall(r.handle, { inputTokens: 40_000, cacheReadTokens: 0, outputTokens: 4 });
+  lastCall(r.handle, { inputTokens: 651, cacheReadTokens: 0, outputTokens: 100 });
+  lastCall(r.handle, { inputTokens: 651, cacheReadTokens: 0, outputTokens: 322 });
+  assert.equal(used(), 40_004);
+  tell(r.handle, { type: "session_compacted", summaryId: "late-summary", removedCount: 1, visibleBoundaryMessageId: null });
+  await until(() => used() === 22_000);
+  const marker = (await r.session.history()).findLast((message) => message.role === "compaction");
+  assert.equal(marker?.role === "compaction" && marker.tokens_before, 40_004);
+  assert.equal(r.sink.events.some((event) => event.type === "usage" && (event.usage.used === 751 || event.usage.used === 973)), false);
+});
+
 /** A thread on a long conversation (its last call 139,221), compacted with /compact, which leaves 21,000; the compaction's own call took 141,000. */
 async function compactedThread(t: TestContext) {
   const r = await rig(t);

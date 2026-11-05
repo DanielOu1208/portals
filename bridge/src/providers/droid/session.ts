@@ -201,8 +201,15 @@ export class DroidSession implements ProviderSession {
    * reports otherwise a side call's (`conversing`).
    */
   private droidAtWork = false;
-  /** Droid says it is compacting the thread's conversation by itself: a call it reports then is the compaction's (`conversing`). */
+  /** Droid says it is compacting the thread's conversation by itself (`heldCall`). */
   private droidCompacting = false;
+  /**
+   * A call Droid reported while compacting, the thread's /compact or its own: the
+   * compaction's, dropped once Droid says it compacted, or the conversation's, reported late
+   * (Droid sends its figures on a timer), taken once the compaction ends without it or a
+   * call of another comes (`observeContext`).
+   */
+  private heldCall: { parts: number[]; used: number } | undefined;
   /** The last call Droid reported (its three figures), taken or not: the same again is no new call (`observeContext`). */
   private lastCall: string | undefined;
   /** How long the last save took: a mid-turn save waits the longer for a long thread (`saveSoon`). */
@@ -525,8 +532,12 @@ export class DroidSession implements ProviderSession {
         if (notification.type === "droid_working_state_changed") {
           this.autonomousWorking = this.droidAtWork = notification.newState !== DroidWorkingState.Idle;
           this.droidCompacting = notification.newState === DroidWorkingState.CompactingConversation;
+          this.takeHeld();
         }
-        if (notification.type === "agent_turn_completed") this.autonomousWorking = this.droidAtWork = this.droidCompacting = false;
+        if (notification.type === "agent_turn_completed") {
+          this.autonomousWorking = this.droidAtWork = this.droidCompacting = false;
+          this.takeHeld();
+        }
         if (this.autonomousWorking) this.autonomousAt = this.host.now();
       }
       // A subagent's queue is its own: only a receipt for one of this thread's own steering
@@ -578,6 +589,7 @@ export class DroidSession implements ProviderSession {
         const id = typeof notification.summaryId === "string" ? notification.summaryId : undefined;
         if (id && this.compactionIds.has(id)) return;
         if (id) this.compactionIds.add(id);
+        this.heldCall = undefined;
         // The word of a /compact the thread asked for, which came after Droid's answer to it: its marker is kept already.
         const asked = this.compactedAt !== undefined && this.host.now() - this.compactedAt < compactionNoticeMs;
         this.compactedAt = undefined;
@@ -615,7 +627,11 @@ export class DroidSession implements ProviderSession {
    * when it says it is exact or Droid has made no call since the conversation began or was
    * compacted (`refreshContext`). Only a call of the conversation's counts (`conversing`),
    * and only a new one: Droid says its last call's figures again, unchanged, whenever the
-   * session's totals change, also the compaction's own call after it compacted.
+   * session's totals change, also the compaction's own call after it compacted. One reported
+   * while Droid compacts is held (`heldCall`): Droid reports its compaction's own call before
+   * it says it compacted (CLI 1.3.0: 973 tokens, where the turn's call before it took 38,939),
+   * and taken, the meter dropped to it and the marker of a compaction Droid did by itself
+   * said it was what the conversation took before.
    */
   private observeContext(lastCall: unknown): void {
     const parts = lastCallParts(lastCall);
@@ -625,6 +641,27 @@ export class DroidSession implements ProviderSession {
     if (call === this.lastCall) return;
     this.lastCall = call;
     if (!this.conversing()) return;
+    if (this.compacting || this.droidCompacting) {
+      // Another call than the one held, not the same one's figures with more said since: the one held was the conversation's.
+      const held = this.heldCall;
+      this.heldCall = { parts, used };
+      if (held && (held.parts[0] !== parts[0] || held.parts[1] !== parts[1])) this.takeContext(held.used);
+      return;
+    }
+    this.takeContext(used);
+  }
+
+  /** The compaction is over without Droid saying it compacted (refused, failed, stopped): the call held was the conversation's. */
+  private takeHeld(): void {
+    const held = this.heldCall;
+    if (!held || this.compacting || this.droidCompacting || this.closed) return;
+    this.heldCall = undefined;
+    this.takeContext(held.used);
+    if (this.turn) this.saveSoon(); else this.save();
+  }
+
+  private takeContext(used: number): void {
+    if (!this.state) return;
     this.contextUsed = used;
     delete this.state.staleCall;
     const max = this.state.contextUsage?.max;
@@ -640,13 +677,9 @@ export class DroidSession implements ProviderSession {
    * set by its side calls (CLI 0.250: the session's naming, Droid Shield's check of a
    * command, Auto's routing), and the naming one often lands after a new thread's first
    * turn has ended (fixtures/droid/compact.jsonl: 355 tokens, where the turn's own call took
-   * 19,164); Droid reports a turn's own calls before it says the turn ended. Nor a compaction's
-   * own call, which Droid reports before it says it compacted (CLI 1.3.0: 973 tokens, where
-   * the turn's call before it took 38,939): the meter dropped to it, and the marker of a
-   * compaction Droid did by itself said it was what the conversation took before.
+   * 19,164); Droid reports a turn's own calls before it says the turn ended.
    */
   private conversing(): boolean {
-    if (this.compacting || this.droidCompacting) return false;
     const turn = this.turn;
     return this.droidAtWork || (!!turn && !turn.ended && !turn.droidDone);
   }
@@ -772,6 +805,7 @@ export class DroidSession implements ProviderSession {
       previous.messages.push(marker);
       candidate.messages = previous.messages;
       this.state = candidate;
+      this.heldCall = undefined;
       // Droid's last call was before it: the meter reads what is left until the next (`forgetCall`).
       this.forgetCall();
       // Also after a Stop that came too late to stop it: the SDK's session is now the
@@ -781,7 +815,10 @@ export class DroidSession implements ProviderSession {
       this.sink.emit({ type: "compacted", trigger: "manual", ...(before === undefined ? {} : { tokensBefore: before }) });
       // The meter too: the turn that asked for it reads it as it ends (`run`), unless a Stop ended it first.
       if (turn.ended) void this.refreshContext();
-    } finally { this.compacting = false; }
+    } finally {
+      this.compacting = false;
+      this.takeHeld();
+    }
   }
 
   private answerCommand(turn: Turn, text: string): void {
@@ -1442,6 +1479,7 @@ export class DroidSession implements ProviderSession {
     this.unlisten?.(); this.unlisten = null;
     this.lifetime = null;
     this.autonomousWorking = this.droidAtWork = this.droidCompacting = false;
+    this.heldCall = undefined;
     this.work.stopped(trackingEnded);
     this.background.close();
     this.host.pool.cooled(this);
