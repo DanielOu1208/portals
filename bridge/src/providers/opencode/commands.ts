@@ -1,10 +1,16 @@
 import type { AgentCommand, Prompt } from "../types.ts";
 import type { OpenCodeApi } from "./client.ts";
+import type { SkillInfo } from "./protocol.ts";
+
+/** How long a message that names a skill waits for OpenCode's skills at most, before it goes without. */
+export const sendSkillsDeadline = 2000;
 
 export type AdmissionKind = "prompt" | "compact" | "command";
 interface Admission {
   id: string;
   current(kind: AdmissionKind): Promise<boolean>;
+  /** Stop aborts it: a message still waiting for its skills is not sent. */
+  signal?: AbortSignal;
 }
 
 export function commandCatalog(commands: { name: string; description?: string }[], select: (argument: string) => Promise<string>): AgentCommand[] {
@@ -15,6 +21,58 @@ export function commandCatalog(commands: { name: string; description?: string }[
   ];
 }
 
+/**
+ * OpenCode's skills by the name the app sends: `/name` goes to the bridge lower cased, and is
+ * read up to the first space or second slash. So a skill named with capitals goes by its name
+ * lower cased, unless a skill already has that name; one with a space or a slash is left out,
+ * and so are skills that differ only in case, none of them named so: which is meant is not known.
+ */
+function slashNames(skills: readonly SkillInfo[]): Map<string, SkillInfo> {
+  const sendable = skills.filter((skill) => typeof skill.name === "string" && skill.name !== "" && !/[\s/]/.test(skill.name));
+  const named = new Map<string, SkillInfo>();
+  for (const name of new Set(sendable.map((skill) => skill.name.toLowerCase()))) {
+    const same = sendable.filter((skill) => skill.name.toLowerCase() === name);
+    const skill = same.find((skill) => skill.name === name) ?? (same.length === 1 ? same[0] : undefined);
+    if (skill) named.set(name, skill);
+  }
+  return named;
+}
+
+/** OpenCode's skills as the app's commands, but for a name `taken`, in any case, by a command of OpenCode's or the bridge's. */
+export function skillCommands(skills: readonly SkillInfo[], taken: readonly string[]): AgentCommand[] {
+  const named = slashNames(skills);
+  const seen = new Set(taken.map((name) => name.toLowerCase()));
+  return skills.flatMap((skill): AgentCommand[] => {
+    const name = typeof skill.name === "string" ? skill.name.toLowerCase() : "";
+    if (named.get(name) !== skill || seen.has(name)) return [];
+    return [{ name, description: skill.description || "A skill of yours", usage: "[instructions]", skill: true }];
+  });
+}
+
+/**
+ * OpenCode's command a typed name runs: one of that name, or else the one of that name in
+ * other case, as the app lower cases it. Two that differ only in case, and which is meant is
+ * not known: neither.
+ */
+export function commandNamed<T extends { name: string }>(commands: readonly T[], name: string): T | undefined {
+  const same = commands.filter((command) => command.name.toLowerCase() === name.toLowerCase());
+  return same.find((command) => command.name === name) ?? (same.length === 1 ? same[0] : undefined);
+}
+
+/** The skill a message runs ("/name …"), when its first word names one. */
+export function skillIn(text: string, skills: readonly SkillInfo[]): SkillInfo | null {
+  const name = /^\/([^\s/]+)(\s|$)/.exec(text.trim())?.[1];
+  return (name && slashNames(skills).get(name.toLowerCase())) || null;
+}
+
+/**
+ * A message whose first word is "/name": a command of OpenCode's, a skill, or words, as
+ * `submit` finds when it sends it.
+ */
+export function slashed(text: string): boolean {
+  return /^\/[^\s/]+(\s|$)/.test(text.trim());
+}
+
 /** Dedicated APIs run commands; ordinary slash-prefixed text remains a message. */
 export async function submit(api: OpenCodeApi, id: string, directory: string, prompt: Prompt, files: { uri: string; name: string }[], admission?: Admission): Promise<{ id: string } | undefined> {
   const command = /^\/([^\s/]+)(?:\s+([\s\S]*))?$/.exec(prompt.text.trim());
@@ -23,11 +81,16 @@ export async function submit(api: OpenCodeApi, id: string, directory: string, pr
     if (admission && !await admission.current("compact")) return;
     return api.compact(id, admission?.id);
   }
-  if (command && (await api.commands(directory)).some((entry) => entry.name === command[1])) {
+  const commands = command ? await api.commands(directory) : [];
+  const native = command ? commandNamed(commands, command[1]) : undefined;
+  if (command && native) {
     if (admission && !await admission.current("command")) return;
-    await api.command(id, command[1], command[2] ?? "", files);
+    await api.command(id, native.name, command[2] ?? "", files);
     return undefined;
   }
+  // A skill is a message OpenCode runs with it, attached as its own input, as its own
+  // apps send a skill picked from a menu. A name commands have in any case is not one.
+  const skill = command && !commands.some((entry) => entry.name.toLowerCase() === command[1].toLowerCase()) ? skillIn(prompt.text, (await api.skills(directory, admission?.signal, sendSkillsDeadline)).skills) : null;
   if (admission && !await admission.current("prompt")) return;
-  return api.prompt(id, prompt.text, files, admission ? { id: admission.id } : {});
+  return api.prompt(id, prompt.text, files, { ...(admission ? { id: admission.id } : {}), ...(skill ? { skills: [{ id: skill.id, name: skill.name }] } : {}) });
 }

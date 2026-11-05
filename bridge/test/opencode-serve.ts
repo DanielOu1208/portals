@@ -72,6 +72,12 @@ export class FakeOpenCode {
   agents = [{ id: "build", name: "Build", mode: "primary", hidden: false }, { id: "plan", name: "Plan", mode: "primary", hidden: false }, { id: "reviewer", name: "Reviewer", mode: "all", hidden: false }, { id: "explore", name: "Explore", mode: "subagent", hidden: false }];
   defaultAgent: string | undefined = undefined;
   commands = [{ name: "init", description: "Initialize project" }, { name: "review", description: "Review a change" }];
+  /** What `GET /api/skill` answers: a lower-case name, one the app could send, and one it could not. */
+  skills = [
+    { id: "graphify", name: "graphify", description: "Graph a codebase", path: "/skills/graphify/SKILL.md" },
+    { id: "init", name: "init", description: "A skill named like a command", path: "/skills/init/SKILL.md" },
+    { id: "open", name: "OpenCode", description: "Named with capitals", path: "/skills/open/SKILL.md" },
+  ];
   usage: UsageLimitsInfo | null = null;
   usageStatus = 200;
   instructionsStatus = 204;
@@ -287,6 +293,7 @@ export class FakeOpenCode {
     if (method === "GET" && path === "/api/agent") return json(200, { location: {}, data: this.agents });
     if (method === "GET" && path === "/api/config") return json(200, [{ type: "document", info: { ...(this.defaultAgent ? { default_agent: this.defaultAgent } : {}) } }]);
     if (method === "GET" && path === "/api/command") return json(200, { location: {}, data: this.commands });
+    if (method === "GET" && path === "/api/skill") return json(200, { location: {}, data: this.skills });
     if (method === "GET" && path === "/api/mcp") return json(200, { location: {}, data: this.mcp });
     if (method === "GET" && path === "/api/project") return json(200, this.projects);
     if (method === "GET" && path === "/api/experimental/usage/limits") return json(this.usageStatus, this.usageStatus === 200 ? { location: {}, data: this.usage } : { message: "Console unavailable" });

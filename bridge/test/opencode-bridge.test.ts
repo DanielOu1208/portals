@@ -660,3 +660,172 @@ for (const active of [true, false]) test(`${active ? "active" : "idle"} restart 
     opencode.active.delete(thread);
   }
 });
+
+/** Whether the bridge keeps `queueID` for a turn of its own, not handed to OpenCode's inbox. */
+function keptForItsTurn(thread: string, queueID: string): boolean {
+  return client.frames.some((frame) => isEvent(frame, "queue.changed", thread)
+    && frame.params.payload.queued.some((entry: Frame) => entry.id === queueID && entry.placement === "queue"));
+}
+
+test("a skill named with a picture mid-turn is a turn of its own, and what Dana sends after it does not wait on its lookup", async () => {
+  const thread = await createThread();
+  const start = await send(thread, "Keep thinking", "interrupt", { holdBefore: "session.step.failed" });
+  await client.from(start, (frame) => isEvent(frame, "reasoning.delta", thread));
+  const calls = () => opencode.callsOf("POST", new RegExp(`^/api/session/${thread}/prompt$`));
+  await client.call("image.attach_bytes", { session_id: thread, filename: "screen.png", content_base64: png.toString("base64") });
+  const first = await client.call("prompt.submit", { session_id: thread, text: "/graphify first message" });
+  const second = await client.call("prompt.submit", { session_id: thread, text: "second message" });
+  await until(() => calls().length === 2);
+  // Only the plain one goes into OpenCode's inbox; the skill one is not looked up while busy.
+  assert.equal(calls()[1].body.text, "second message");
+  assert.equal(calls()[1].body.delivery, "steer");
+  await until(() => keptForItsTurn(thread, first.queue_id));
+  opencode.sessions.get(thread)!.inbox = [];
+  opencode.emit({ id: "evt_second_delivered", type: "session.inbox.delivered", data: { sessionID: thread, inboxID: calls()[1].body.id } });
+  await client.from(start, (frame) => isEvent(frame, "queue.changed", thread) && frame.params.payload.steered === second.queue_id);
+  opencode.queueTurn(thread, "plain");
+  const end = client.frames.length;
+  await client.call("session.interrupt", { session_id: thread });
+  // Its own turn goes through the same send as an idle one, and carries the skill and the picture.
+  await client.from(end, (frame) => isEvent(frame, "message.start", thread) && frame.params.payload.queue_id === first.queue_id);
+  await until(() => calls().length === 3);
+  const own = calls()[2].body;
+  assert.equal(own.text, "/graphify first message");
+  assert.notEqual(own.delivery, "steer");
+  assert.deepEqual(own.skills, [{ id: "graphify", name: "graphify" }]);
+  assert.equal(own.files.length, 1);
+  await client.from(end, (frame) => isEvent(frame, "message.complete", thread) && frame.params.payload.status === "complete");
+});
+
+test("a skill named with a picture mid-turn reads nothing from OpenCode first, so a stuck command list cannot hold it", async () => {
+  const thread = await createThread();
+  const start = await send(thread, "Keep thinking", "interrupt", { holdBefore: "session.step.failed" });
+  await client.from(start, (frame) => isEvent(frame, "reasoning.delta", thread));
+  const original = opencode.server.listeners("request")[0] as (...args: any[]) => void;
+  const held: { req: unknown; res: { destroyed: boolean } }[] = [];
+  opencode.server.removeAllListeners("request");
+  opencode.server.on("request", (req, res) => {
+    if (req.method === "GET" && req.url?.startsWith("/api/command")) held.push({ req, res });
+    else original(req, res);
+  });
+  try {
+    await client.call("image.attach_bytes", { session_id: thread, filename: "screen.png", content_base64: png.toString("base64") });
+    const stuck = await client.call("prompt.submit", { session_id: thread, text: "/graphify blocked by commands" });
+    await until(() => keptForItsTurn(thread, stuck.queue_id) || held.length > 0);
+    assert.equal(held.length, 0, "no command list is read for a busy message");
+    // Nothing was handed over, so Dana can take it back, and the next message goes in.
+    assert.deepEqual(await client.call("prompt.queue.remove", { session_id: thread, queue_id: stuck.queue_id }), { removed: true });
+    await client.call("prompt.submit", { session_id: thread, text: "ordinary message" });
+    const calls = () => opencode.callsOf("POST", new RegExp(`^/api/session/${thread}/prompt$`));
+    await until(() => calls().length === 2);
+    assert.equal(calls()[1].body.text, "ordinary message");
+  } finally {
+    opencode.server.removeAllListeners("request");
+    opencode.server.on("request", original);
+    for (const { req, res } of held) if (!res.destroyed) original(req, res);
+  }
+  opencode.sessions.get(thread)!.inbox = [];
+  await client.call("session.interrupt", { session_id: thread });
+  await completed(thread, start);
+});
+
+test("a skill message's own turn that OpenCode fails still completes, and leaves nothing waiting", async () => {
+  const thread = await createThread();
+  const start = await send(thread, "Keep thinking", "interrupt", { holdBefore: "session.step.failed" });
+  await client.from(start, (frame) => isEvent(frame, "reasoning.delta", thread));
+  await client.call("image.attach_bytes", { session_id: thread, filename: "screen.png", content_base64: png.toString("base64") });
+  const queued = await client.call("prompt.submit", { session_id: thread, text: "/graphify this screen" });
+  await until(() => keptForItsTurn(thread, queued.queue_id));
+  opencode.queueTurn(thread, "failed-upstream");
+  const end = client.frames.length;
+  await client.call("session.interrupt", { session_id: thread });
+  const own = client.frames.indexOf(await client.from(end, (frame) => isEvent(frame, "message.start", thread) && frame.params.payload.queue_id === queued.queue_id));
+  const done = (await client.from(own, (frame) => isEvent(frame, "message.complete", thread))).params;
+  assert.equal(done.payload.status, "error");
+  await client.from(own, (frame) => isEvent(frame, "queue.changed", thread) && frame.params.payload.queued.length === 0);
+  assert.deepEqual((await client.call("session.resume", { session_id: thread })).queued ?? [], []);
+});
+
+test("a command sent from the app does not wait for OpenCode's skills, and a skill waits as a message does", async () => {
+  const thread = await createThread();
+  const original = opencode.server.listeners("request")[0] as (...args: any[]) => void;
+  const held: { destroyed: boolean; end(): void }[] = [];
+  opencode.server.removeAllListeners("request");
+  opencode.server.on("request", (req, res) => {
+    if (req.method === "GET" && req.url?.startsWith("/api/skill")) held.push(res);
+    else original(req, res);
+  });
+  try {
+    let began = Date.now();
+    assert.deepEqual(await client.call("command.dispatch", { session_id: thread, name: "init", arg: "this project" }), { type: "send", message: "/init this project" });
+    assert.ok(Date.now() - began < 1000);
+    assert.equal(held.length, 0, "OpenCode's own command needs no skills");
+    // A skill OpenCode does not list in time goes as typed, after the 2 s a message waits.
+    began = Date.now();
+    assert.deepEqual(await client.call("command.dispatch", { session_id: thread, name: "graphify", arg: "the port" }), { type: "send", message: "/graphify the port" });
+    assert.ok(Date.now() - began < 3000);
+    assert.ok(held.length > 0);
+  } finally {
+    opencode.server.removeAllListeners("request");
+    opencode.server.on("request", original);
+    for (const res of held) if (!res.destroyed) res.end();
+  }
+  // Listed in time, a name that is neither is still no command.
+  await assert.rejects(client.call("command.dispatch", { session_id: thread, name: "nosuch" }), (error: any) => error.code === -32602);
+});
+
+test("a command named with capitals keeps its name from a skill that differs only in case, and runs by its own", async () => {
+  const thread = await createThread();
+  const [commands, skills] = [opencode.commands, opencode.skills];
+  opencode.commands = [...commands, { name: "Deploy", description: "Deploy Dana's site" }];
+  opencode.skills = [...skills, { id: "deploy-notes", name: "DEPLOY", description: "Other instructions", path: "/skills/deploy/SKILL.md" }];
+  try {
+    const catalog = await client.call("commands.catalog", { session_id: thread, profile: "opencode" });
+    assert.equal(Object.hasOwn(catalog.skills, "/deploy"), false);
+    // The app sends what is typed after the slash lower cased.
+    const dispatched = await client.call("command.dispatch", { session_id: thread, name: "deploy", arg: "now" });
+    assert.deepEqual(dispatched, { type: "send", message: "/deploy now" });
+    opencode.queueTurn(thread, "plain");
+    const start = client.frames.length;
+    await client.call("prompt.submit", { session_id: thread, text: dispatched.message, profile: "opencode" });
+    await completed(thread, start);
+    const ran = opencode.callsOf("POST", new RegExp(`^/api/session/${thread}/command$`));
+    assert.deepEqual(ran.map((call) => [call.body.name, call.body.text]), [["Deploy", "now"]]);
+    assert.equal(opencode.callsOf("POST", new RegExp(`^/api/session/${thread}/prompt$`)).length, 0);
+  } finally {
+    opencode.commands = commands;
+    opencode.skills = skills;
+  }
+});
+
+test("commands that differ only in case, none named in lower case, run only by their exact names", async () => {
+  const thread = await createThread();
+  const [commands, skills] = [opencode.commands, opencode.skills];
+  const first = { name: "Deploy", description: "Deploy Dana's site" };
+  const second = { name: "DEPLOY", description: "Deploy everything" };
+  opencode.skills = [...skills, { id: "deploy-notes", name: "deploy", description: "Other instructions", path: "/skills/deploy/SKILL.md" }];
+  try {
+    // Whichever order OpenCode lists them in, /deploy is neither, nor the skill they keep the name from.
+    for (const listed of [[first, second], [second, first]]) {
+      opencode.commands = [...commands, ...listed];
+      await assert.rejects(client.call("command.dispatch", { session_id: thread, name: "deploy", arg: "now" }), (error: any) => error.code === -32602);
+    }
+    await client.call("image.attach_bytes", { session_id: thread, filename: "screen.png", content_base64: png.toString("base64") });
+    opencode.queueTurn(thread, "plain");
+    let start = client.frames.length;
+    await client.call("prompt.submit", { session_id: thread, text: "/deploy now", profile: "opencode" });
+    await completed(thread, start);
+    const prompt = opencode.callsOf("POST", new RegExp(`^/api/session/${thread}/prompt$`)).at(-1)!.body;
+    assert.equal(prompt.text, "/deploy now");
+    assert.equal(prompt.skills, undefined);
+    // Its exact name still runs each.
+    opencode.queueTurn(thread, "plain");
+    start = client.frames.length;
+    await client.call("prompt.submit", { session_id: thread, text: "/DEPLOY now", profile: "opencode" });
+    await completed(thread, start);
+    assert.deepEqual(opencode.callsOf("POST", new RegExp(`^/api/session/${thread}/command$`)).map((call) => call.body.name), ["DEPLOY"]);
+  } finally {
+    opencode.commands = commands;
+    opencode.skills = skills;
+  }
+});

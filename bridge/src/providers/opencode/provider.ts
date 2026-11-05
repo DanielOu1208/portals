@@ -7,7 +7,7 @@ import { Unknowns } from "../unknowns.ts";
 import { mcpCommand, mcpFolderGone, mcpStatusText, type McpServer } from "../mcpStatus.ts";
 import { knownLevels, type AdoptMode, type AgentCommand, type AgentProfile, type DeskAdoption, type DeskSession, type ModelCatalog, type Provider, type ProviderSession, type SessionOptions, type SessionSettings, type SessionSink, type UsageReport } from "../types.ts";
 import { agentModes, agentSettings } from "./agents.ts";
-import { commandCatalog } from "./commands.ts";
+import { commandCatalog, commandNamed, sendSkillsDeadline, skillCommands } from "./commands.ts";
 import { usageReport } from "./usage.ts";
 import { adopt, deskSessions } from "./desk.ts";
 import { OpenCodeConnection, type OpenCodeApi } from "./client.ts";
@@ -191,12 +191,37 @@ export class OpenCodeProvider implements Provider {
     const mcp = mcpCommand(() => this.mcpStatus(thread));
     if (name === "mcp") return [mcp];
     const api = await this.api();
-    const commands = commandCatalog(await api.commands(thread?.cwd ?? this.options.settings.folder), async (argument) => {
+    const folder = thread?.cwd ?? this.options.settings.folder;
+    const commands = commandCatalog(await api.commands(folder), async (argument) => {
       const session = thread && this.sessions.get(thread.id);
       if (!session) throw new Error("Open this OpenCode thread before selecting its agent.");
       return session.selectAgent(argument);
     });
-    return [mcp, ...commands.filter((command) => command.name !== "mcp")];
+    const own = [mcp, ...commands.filter((command) => command.name !== "mcp")];
+    if (name !== undefined) {
+      // One name, as the app sends `/name …` (lower cased): a command is not held up by the
+      // skills, and a skill waits for them as a message does. One OpenCode did not list in
+      // time goes as it was typed, as a message sent without its skills.
+      const command = commandNamed(own, name);
+      if (command) return [{ ...command, name }];
+      // Commands that differ only in case hold the name from skills too, and none of them is meant.
+      if (own.some((entry) => entry.name.toLowerCase() === name)) return [];
+      try {
+        const { skills, complete } = await api.skills(folder, undefined, sendSkillsDeadline);
+        const skill = skillCommands(skills, own.map((command) => command.name)).filter((command) => command.name === name);
+        if (skill.length > 0 || complete) return skill;
+      } catch (error) {
+        log.debug("OpenCode did not list its skills", { error: (error as Error).message });
+      }
+      return [{ name, description: "", usage: "", skill: true }];
+    }
+    // Skills come from OpenCode's own list; a menu that cannot have them is still a menu.
+    try {
+      return [...own, ...skillCommands((await api.skills(folder)).skills, own.map((command) => command.name))];
+    } catch (error) {
+      log.debug("OpenCode did not list its skills", { error: (error as Error).message });
+      return own;
+    }
   }
 
   private async mcpStatus(thread?: { cwd: string }): Promise<string> {

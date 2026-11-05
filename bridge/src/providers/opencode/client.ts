@@ -1,7 +1,8 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import { log } from "../../log.ts";
 import type { AgentInfo, CommandInfo, FormInfo, SessionInboxInfo, UsageLimitsInfo, McpServer, Project } from "@opencode/client";
 import type { Endpoint } from "./server.ts";
-import type { Message, ModelInfo, ModelRef, OpenCodeEvent, PermissionDecision, PermissionRequest, SessionInfo } from "./protocol.ts";
+import type { Message, ModelInfo, ModelRef, OpenCodeEvent, PermissionDecision, PermissionRequest, SessionInfo, SkillInfo } from "./protocol.ts";
 
 // The bridge's one way to OpenCode: its own client (`@opencode/client`, an optional
 // peer dependency loaded when OpenCode is first used), with every call the provider
@@ -31,9 +32,16 @@ function data<T>(value: unknown): T {
 /** How many pages of a long conversation are read, at most. */
 const maxPages = 100;
 
+/** How long a folder's skills are asked for at least, the first time, while OpenCode may still be reading them. */
+const skillsSettle = 1000;
+/** How long a menu waits for a folder's skills at most: a freshly started OpenCode can take seconds to answer. */
+const skillsDeadline = 10_000;
+
 /** The calls the bridge makes, each in the shape the provider reads. */
 export class OpenCodeApi {
   private readonly client: Client;
+  /** The folders whose skills OpenCode has finished reading. */
+  private readonly skillsRead = new Set<string>();
 
   constructor(client: Client) {
     this.client = client;
@@ -91,6 +99,45 @@ export class OpenCodeApi {
 
   async commands(directory: string): Promise<CommandInfo[]> {
     return data(await this.client.command.list({ location: { directory } })) ?? [];
+  }
+
+  /**
+   * The skills OpenCode would use in a folder: its own, the user's, and a plugin's. Not
+   * `complete` when OpenCode did not finish listing them in `wait`.
+   */
+  async skills(directory: string, signal?: AbortSignal, wait = skillsDeadline): Promise<{ skills: SkillInfo[]; complete: boolean }> {
+    // OpenCode reads a folder's skills in the background, so the first answers after it
+    // starts are empty or partial (0 → 2 → 153 over ~400 ms on 2.2.5, measured), and it
+    // says nothing when it is done. So the first time a folder is asked, keep asking for
+    // `skillsSettle`, then until two answers name the same skills; later, one answer will do.
+    // No more than `wait` in all: then the list is the last answer, or none, and the
+    // folder is asked again on the next request for it. (The app keeps the menu it got
+    // until the host reconnects, so one read past `wait` leaves that menu without them.)
+    const deadline = AbortSignal.timeout(wait);
+    const options = { signal: signal ? AbortSignal.any([signal, deadline]) : deadline };
+    let skills: SkillInfo[] = [];
+    try {
+      if (this.skillsRead.has(directory)) return { skills: await this.skillList(directory, options), complete: true };
+      const started = Date.now();
+      let previous: string | undefined;
+      for (;;) {
+        skills = await this.skillList(directory, options);
+        const names = skills.map((skill) => `${skill.id}:${skill.name}`).sort().join("\n");
+        if (Date.now() - started >= skillsSettle && names === previous) break;
+        previous = names;
+        await sleep(100, undefined, options);
+      }
+    } catch (error) {
+      if (signal?.aborted || !deadline.aborted) throw error;
+      log.debug("OpenCode did not list its skills in time", { directory });
+      return { skills, complete: false };
+    }
+    this.skillsRead.add(directory);
+    return { skills, complete: true };
+  }
+
+  private async skillList(directory: string, options: { signal: AbortSignal }): Promise<SkillInfo[]> {
+    return data(await this.client.skill.list({ location: { directory } }, options)) ?? [];
   }
 
   async command(id: string, name: string, text: string, files: { uri: string; name: string }[]): Promise<void> {
@@ -160,7 +207,7 @@ export class OpenCodeApi {
   }
 
   /** Hands OpenCode a message; it runs it as soon as the session is free. Resolves with the message's id. */
-  async prompt(id: string, text: string, files: { uri: string; name: string }[], options: { id?: string; delivery?: "steer" | "queue" } = {}): Promise<{ id: string }> {
+  async prompt(id: string, text: string, files: { uri: string; name: string }[], options: { id?: string; delivery?: "steer" | "queue"; skills?: { id: string; name: string }[] } = {}): Promise<{ id: string }> {
     return data(await this.client.session.prompt({ sessionID: id, text, ...(files.length > 0 ? { files } : {}), ...options }));
   }
 
