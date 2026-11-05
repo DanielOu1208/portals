@@ -16,8 +16,8 @@ enum AgentSheetMetrics {
     static let corner: CGFloat = 12
     /// A row's height.
     static let row: CGFloat = 44
-    static let headerOrb: CGFloat = 72
-    static let rowOrb: CGFloat = 32
+    static let headerIcon: CGFloat = 72
+    static let rowIcon: CGFloat = 32
     /// An update's bar on a sheet, and on a row.
     static let updateBar: CGFloat = 240
     static let rowUpdateBar: CGFloat = 64
@@ -150,7 +150,7 @@ struct AgentProgramDetail: View {
 
     private var header: some View {
         VStack(spacing: Metrics.inner) {
-            ProgramIcon(programID: programID, style: style, size: Metrics.headerOrb)
+            ProgramIcon(programID: programID, style: style, size: Metrics.headerIcon)
             VStack(spacing: Metrics.line) {
                 Text(name)
                     .font(.app.title2.weight(.semibold))
@@ -345,7 +345,7 @@ struct AgentProgramDetail: View {
             ForEach(agents) { agent in
                 Button { changingLook = agent } label: {
                     HStack(spacing: Metrics.inner) {
-                        if isHermes { AgentIcon(style: fleet.style(for: agent.id), size: Metrics.rowOrb) }
+                        if isHermes { AgentIcon(style: fleet.style(for: agent.id), size: Metrics.rowIcon) }
                         Text(isHermes ? agent.displayName : "Appearance")
                             .font(.app.body)
                             .foregroundStyle(isHermes ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))

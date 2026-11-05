@@ -257,9 +257,9 @@ private struct AgentRowContent<Rings: View, End: View>: View {
     var body: some View {
         HStack(spacing: AgentSheetMetrics.inner) {
             if let programID {
-                ProgramIcon(programID: programID, style: style, size: AgentSheetMetrics.rowOrb)
+                ProgramIcon(programID: programID, style: style, size: AgentSheetMetrics.rowIcon)
             } else {
-                AgentIcon(style: style, size: AgentSheetMetrics.rowOrb)
+                AgentIcon(style: style, size: AgentSheetMetrics.rowIcon)
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(name)
