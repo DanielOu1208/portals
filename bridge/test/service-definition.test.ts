@@ -68,6 +68,26 @@ test("atomic replacement keeps a backup until commit, preserves permissions, and
   assert.deepEqual(fs.readdirSync(folder), ["service"]);
 });
 
+/** nobody's UUID, which `ls -e` prints in place of its name when that cannot be looked up in time, as on a busy machine. */
+const nobodyUUID = "FFFFEEEE-DDDD-CCCC-BBBB-AAAAFFFFFFFE";
+
+/** What a line of `ls -e` means: its place, who it is for, whether it allows or denies, and what. */
+function aclEntry(line: string): { place: number; who: string; rule: string; rights: string } {
+  const match = /^\s*(\d+):\s+(\S+)\s+(allow|deny)\s+(.+?)\s*$/.exec(line);
+  assert.ok(match, `not an ACL entry: ${line}`);
+  const [, place, who, rule, rights] = match;
+  return { place: Number(place), who: who === nobodyUUID ? "user:nobody" : who, rule, rights };
+}
+
+test("an ACL entry means the same whether ls printed nobody's name or its UUID, and only that", () => {
+  const named = aclEntry(" 0: user:nobody deny read");
+  assert.deepEqual(aclEntry(` 0: ${nobodyUUID} deny read`), named);
+  assert.notDeepEqual(aclEntry(" 0: AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE deny read"), named);
+  assert.notDeepEqual(aclEntry(` 0: ${nobodyUUID} allow read`), named);
+  assert.notDeepEqual(aclEntry(` 0: ${nobodyUUID} deny write`), named);
+  assert.notDeepEqual(aclEntry(` 1: ${nobodyUUID} deny read`), named);
+});
+
 for (const rollback of [false, true]) {
   test(`${rollback ? "rollback" : "replacement"} preserves ACL restrictions on a service definition`, { skip: process.platform !== "darwin" }, async (t) => {
     const folder = fs.mkdtempSync(join(tmpdir(), "portals-definition-"));
@@ -80,10 +100,10 @@ for (const rollback of [false, true]) {
     const restrictions = (path = file) => {
       const listing = spawnSync("/bin/ls", ["-lde", path], { encoding: "utf8" });
       assert.equal(listing.status, 0, listing.stderr);
-      return listing.stdout.split("\n").filter((line) => /^\s*\d+:/.test(line));
+      return listing.stdout.split("\n").filter((line) => /^\s*\d+:/.test(line)).map(aclEntry);
     };
     const before = restrictions();
-    assert.ok(before.some((line) => line.includes("user:nobody deny read")));
+    assert.deepEqual(before, [{ place: 0, who: "user:nobody", rule: "deny", rights: "read" }]);
     const inode = fs.statSync(file).ino;
     const update = await replaceDefinition(file, "FAKE_SECRET=after");
     const backupFolder = fs.readdirSync(folder).find((name) => name.startsWith(".portals-service-update-"))!;
