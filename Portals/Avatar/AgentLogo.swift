@@ -140,42 +140,16 @@ struct AgentLogoTile: View {
     }
 }
 
-/// A logo in a glass orb of `size` across, for a page of plain colour. Glass with nothing behind
-/// it to bend reads as a flat disc, so this one has light of its own on it: brighter at its top
-/// and along its edge. Still shapes: nothing moves or runs per orb.
-struct GlassOrb<Logo: View>: View {
-    var size: CGFloat
-    @ViewBuilder var logo: Logo
-
-    @Environment(\.colorScheme) private var colorScheme
-
-    var body: some View {
-        let isDark = colorScheme == .dark
-        logo
-            .frame(width: size, height: size)
-            .glassEffect(.regular, in: .circle)
-            .overlay {
-                Circle()
-                    .fill(LinearGradient(colors: [.white.opacity(isDark ? 0.22 : 0.65), .clear], startPoint: .top, endPoint: .center))
-                    .allowsHitTesting(false)
-            }
-            .overlay {
-                Circle()
-                    .strokeBorder(
-                        LinearGradient(colors: [.white.opacity(isDark ? 0.55 : 1), (isDark ? Color.white : .black).opacity(0.08)], startPoint: .top, endPoint: .bottom),
-                        lineWidth: max(size * 0.02, 0.75)
-                    )
-                    .allowsHitTesting(false)
-            }
-            .shadow(color: .black.opacity(isDark ? 0.5 : 0.14), radius: size * 0.08, y: size * 0.04)
-            .accessibilityHidden(true)
-    }
-}
-
-/// An agent's icon at rest, `size` across: its maker's logo in a glass orb, or its avatar, by itself.
+/// An agent's icon at rest, `size` across, for Settings' Agents: its maker's logo or its avatar,
+/// by itself, with nothing round it (2026-11-05: "there should be nothing around the
+/// icons/avatars just leave the raw image").
 struct AgentIcon: View {
     var style: AgentAvatarStyle
     var size: CGFloat
+
+    /// How much of its room a maker's logo takes: nearly all of it, with a little air
+    /// round it, about the size an avatar's body comes out at.
+    private static let logoShare = 0.84
 
     /// A program with no agent here: its maker's logo, as its agent would wear it.
     static func style(ofProgram id: String) -> AgentAvatarStyle {
@@ -189,17 +163,24 @@ struct AgentIcon: View {
 
     var body: some View {
         if let logo = style.logo, style.showsLogo {
-            GlassOrb(size: size) {
-                logo.image
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: size * AgentLogoArt.logoInTile, height: size * AgentLogoArt.logoInTile)
-            }
+            logo.image
+                .resizable()
+                .scaledToFit()
+                .frame(width: size * Self.logoShare, height: size * Self.logoShare)
+                .frame(width: size, height: size)
+                .accessibilityHidden(true)
         } else {
             // An avatar's square keeps room round its body, so it is drawn larger than its room (`RowAvatar`).
-            AgentAvatarView(state: .idle, frozenAt: 1, size: size * 1.36, style: style)
+            AgentAvatarView(state: .idle, frozenAt: 1, size: size * 1.36, style: avatarStyle)
                 .frame(width: size, height: size)
         }
+    }
+
+    /// The avatar without its maker's logo badge: the row already names its program.
+    private var avatarStyle: AgentAvatarStyle {
+        var style = style
+        style.logo = nil
+        return style
     }
 }
 
@@ -209,17 +190,18 @@ struct ProgramIcon: View {
     var style: AgentAvatarStyle
     var size: CGFloat
 
-    /// How much of the orb her drawing takes: closer to it than a maker's mark, a face at this size.
-    private static let hermesInOrb = 0.76
+    /// How much of its room her drawing takes. It fills its square to the edges, so a
+    /// little less than a maker's mark reads as the same size.
+    private static let hermesShare = 0.8
 
     var body: some View {
         if programID == "hermes" {
-            GlassOrb(size: size) {
-                Image(.hermesLogo)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: size * Self.hermesInOrb, height: size * Self.hermesInOrb)
-            }
+            Image(.hermesLogo)
+                .resizable()
+                .scaledToFit()
+                .frame(width: size * Self.hermesShare, height: size * Self.hermesShare)
+                .frame(width: size, height: size)
+                .accessibilityHidden(true)
         } else {
             AgentIcon(style: style, size: size)
         }
