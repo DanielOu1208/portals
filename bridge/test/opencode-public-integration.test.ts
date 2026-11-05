@@ -208,3 +208,64 @@ test("skills OpenCode is still reading are waited for, the first time a folder i
     assert.equal(fake.callsOf("GET", /^\/api\/skill$/).length, reads + 1);
   }
 });
+
+/** Holds every `GET /api/skill` unanswered, as a stuck OpenCode would. */
+function holdSkills(t: { after(fn: () => void): void }, fake: FakeOpenCode) {
+  const held: { destroyed: boolean; end(): void }[] = [];
+  const original = fake.server.listeners("request")[0] as (...args: any[]) => void;
+  fake.server.removeAllListeners("request");
+  fake.server.on("request", (req, res) => {
+    if (req.method === "GET" && req.url?.startsWith("/api/skill")) {
+      fake.calls.push({ method: "GET", path: "/api/skill", query: new URLSearchParams(), body: undefined });
+      held.push(res);
+    } else original(req, res);
+  });
+  t.after(() => { for (const res of held) if (!res.destroyed) res.end(); });
+  return held;
+}
+
+test("a skill list OpenCode does not answer holds neither the menu nor a message naming one", async (t) => {
+  const { folder, fake, provider } = await rig(t);
+  const held = holdSkills(t, fake);
+  const id = await provider.newThread({ cwd: folder, settings });
+  let offered: Awaited<ReturnType<typeof provider.commands>> | undefined;
+  void provider.commands({ id, cwd: folder }).then((commands) => { offered = commands; });
+  await until(() => offered !== undefined);
+  assert.ok(offered!.some((command) => command.name === "init"));
+  assert.equal(offered!.some((command) => command.skill), false);
+  assert.ok(held.length > 0);
+  await until(() => held.every((res) => res.destroyed)); // Given up, not left open.
+
+  // The message goes as it would without skills.
+  const events: ProviderEvent[] = [];
+  const session = await provider.startSession({ id, cwd: folder, settings }, { emit: (event) => events.push(event), ask: async () => ({ kind: "withdrawn", reason: "unused" }) });
+  t.after(() => session.close());
+  session.attached?.();
+  fake.queueTurn(id, "plain");
+  session.startTurn({ text: "/graphify the port", images: [] });
+  await until(() => events.some((event) => event.type === "turn.end"));
+  const prompt = fake.callsOf("POST", new RegExp(`/session/${id}/prompt$`))[0];
+  assert.equal(prompt.body.text, "/graphify the port");
+  assert.equal(prompt.body.skills, undefined);
+});
+
+test("Stop ends a message still waiting for OpenCode's skills, and sends nothing", async (t) => {
+  const { folder, fake, provider } = await rig(t);
+  const held = holdSkills(t, fake);
+  const id = await provider.newThread({ cwd: folder, settings });
+  const events: ProviderEvent[] = [];
+  const session = await provider.startSession({ id, cwd: folder, settings }, { emit: (event) => events.push(event), ask: async () => ({ kind: "withdrawn", reason: "unused" }) });
+  t.after(() => session.close());
+  session.attached?.();
+  fake.queueTurn(id, "plain");
+  session.startTurn({ text: "/graphify the port", images: [] });
+  await until(() => held.length === 1);
+  const stopped = Date.now();
+  assert.equal(await session.interrupt(), true);
+  await until(() => events.some((event) => event.type === "turn.end"));
+  // Well before the skills' own deadline.
+  assert.ok(Date.now() - stopped < 1000);
+  assert.deepEqual(events.filter((event) => event.type === "turn.end"), [{ type: "turn.end", status: "interrupted" }]);
+  await until(() => held[0].destroyed);
+  assert.equal(fake.callsOf("POST", new RegExp(`/session/${id}/prompt$`)).length, 0);
+});

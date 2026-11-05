@@ -16,6 +16,8 @@ interface Turn {
   operation?: AdmissionKind;
   sent?: boolean;
   baseline: Set<string>;
+  /** Stop ends what admission still waits for before it sends. */
+  stopping: AbortController;
 }
 
 /** One owner for asynchronous admission, Stop, attachment and snapshot generations. */
@@ -50,7 +52,7 @@ export class OpenCodeTurn {
 
   begin(id: string | null = null): void {
     ++this.generation;
-    this.current = { id, open: true, stopped: false, admitting: false, immediate: false, baseline: new Set() };
+    this.current = { id, open: true, stopped: false, admitting: false, immediate: false, baseline: new Set(), stopping: new AbortController() };
     this.covered.clear();
   }
 
@@ -62,6 +64,7 @@ export class OpenCodeTurn {
   stop(): void {
     if (this.current) {
       this.current.stopped = true;
+      this.current.stopping.abort();
       if (this.current.id) this.cancelled.add(this.current.id);
     }
     ++this.generation; // Invalidates snapshots already in flight, not the admission's cleanup.
@@ -182,7 +185,7 @@ export class OpenCodeTurn {
   /** A close before send prevents admission; Stop after send always retains its cleanup. */
   async admit(
     connect: () => Promise<OpenCodeApi>,
-    send: (api: OpenCodeApi, id: string, current: (kind: AdmissionKind) => Promise<boolean>) => Promise<{ id: string } | undefined>,
+    send: (api: OpenCodeApi, id: string, current: (kind: AdmissionKind) => Promise<boolean>, signal: AbortSignal) => Promise<{ id: string } | undefined>,
     failed: (error: unknown) => void,
     immediate: () => void,
     stopped: () => void,
@@ -207,7 +210,7 @@ export class OpenCodeTurn {
         turn.sent = true;
         if (kind === "prompt" || kind === "compact") turn.id = id;
         return true;
-      });
+      }, turn.stopping.signal);
       if (admitted) turn.id = admitted.id;
     } catch (error) {
       failure = { error };

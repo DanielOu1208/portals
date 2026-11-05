@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import { log } from "../../log.ts";
 import type { AgentInfo, CommandInfo, FormInfo, SessionInboxInfo, UsageLimitsInfo, McpServer, Project } from "@opencode/client";
 import type { Endpoint } from "./server.ts";
@@ -101,30 +102,37 @@ export class OpenCodeApi {
   }
 
   /** The skills OpenCode would use in a folder: its own, the user's, and a plugin's. */
-  async skills(directory: string): Promise<SkillInfo[]> {
+  async skills(directory: string, signal?: AbortSignal): Promise<SkillInfo[]> {
     // OpenCode reads a folder's skills in the background, so the first answers after it
     // starts are empty or partial (0 → 2 → 153 over ~400 ms on 2.2.5, measured), and it
     // says nothing when it is done. So the first time a folder is asked, keep asking for
     // `skillsSettle`, then until two answers name the same skills; later, one answer will do.
-    // A list still changing at `skillsDeadline` is taken as it is.
-    if (this.skillsRead.has(directory)) return this.skillList(directory);
-    const started = Date.now();
+    // No more than `skillsDeadline` in all: then the list is the last answer, or none.
+    const deadline = AbortSignal.timeout(skillsDeadline);
+    const options = { signal: signal ? AbortSignal.any([signal, deadline]) : deadline };
     let skills: SkillInfo[] = [];
-    let previous: string | undefined;
-    for (;;) {
-      skills = await this.skillList(directory);
-      const names = skills.map((skill) => `${skill.id}:${skill.name}`).sort().join("\n");
-      if (Date.now() - started >= skillsSettle && names === previous) break;
-      if (Date.now() - started >= skillsDeadline) return skills;
-      previous = names;
-      await new Promise((resolve) => setTimeout(resolve, 100));
+    try {
+      if (this.skillsRead.has(directory)) return await this.skillList(directory, options);
+      const started = Date.now();
+      let previous: string | undefined;
+      for (;;) {
+        skills = await this.skillList(directory, options);
+        const names = skills.map((skill) => `${skill.id}:${skill.name}`).sort().join("\n");
+        if (Date.now() - started >= skillsSettle && names === previous) break;
+        previous = names;
+        await sleep(100, undefined, options);
+      }
+    } catch (error) {
+      if (signal?.aborted || !deadline.aborted) throw error;
+      log.debug("OpenCode did not list its skills in time", { directory });
+      return skills;
     }
     this.skillsRead.add(directory);
     return skills;
   }
 
-  private async skillList(directory: string): Promise<SkillInfo[]> {
-    return data(await this.client.skill.list({ location: { directory } })) ?? [];
+  private async skillList(directory: string, options: { signal: AbortSignal }): Promise<SkillInfo[]> {
+    return data(await this.client.skill.list({ location: { directory } }, options)) ?? [];
   }
 
   async command(id: string, name: string, text: string, files: { uri: string; name: string }[]): Promise<void> {

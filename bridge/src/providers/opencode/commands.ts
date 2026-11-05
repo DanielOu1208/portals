@@ -6,6 +6,8 @@ export type AdmissionKind = "prompt" | "compact" | "command";
 interface Admission {
   id: string;
   current(kind: AdmissionKind): Promise<boolean>;
+  /** Stop aborts it: a message still waiting for its skills is not sent. */
+  signal?: AbortSignal;
 }
 
 export function commandCatalog(commands: { name: string; description?: string }[], select: (argument: string) => Promise<string>): AgentCommand[] {
@@ -52,7 +54,7 @@ export async function submit(api: OpenCodeApi, id: string, directory: string, pr
   }
   // A skill is a message OpenCode runs with it, attached as its own input, as its own
   // apps send a skill picked from a menu.
-  const skill = command ? skillIn(prompt.text, await api.skills(directory)) : null;
+  const skill = command ? skillIn(prompt.text, await api.skills(directory, admission?.signal)) : null;
   if (admission && !await admission.current("prompt")) return;
   return api.prompt(id, prompt.text, files, { ...(admission ? { id: admission.id } : {}), ...(skill ? { skills: [{ id: skill.id, name: skill.name }] } : {}) });
 }

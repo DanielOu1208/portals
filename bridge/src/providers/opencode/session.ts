@@ -280,7 +280,7 @@ export class OpenCodeSession implements ProviderSession {
     this.openTurn();
     void this.turn.admit(
       () => this.host.api(),
-      (api, id, current) => submit(api, this.id, this.cwd, prompt, imageFiles(prompt), { id, current }),
+      (api, id, current, signal) => submit(api, this.id, this.cwd, prompt, imageFiles(prompt), { id, current, signal }),
       (error) => {
         this.endTurn({ type: "turn.end", status: "error", error: `OpenCode did not take the message: ${(error as Error).message}`, retryable: true });
       },
