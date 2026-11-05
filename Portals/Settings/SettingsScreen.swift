@@ -10,6 +10,8 @@ enum SettingsSheet {
     case editHost(HostID)
     case addPortal
     case look(Agent)
+    /// A program's page in Agents, by its id.
+    case agentProgram(HostID, AgentProgram.ID)
     case acknowledgements
 }
 

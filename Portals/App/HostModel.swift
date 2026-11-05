@@ -174,6 +174,8 @@ final class HostModel: Identifiable {
     /// not a Portals bridge, as it said on the last connection; false before it has said,
     /// and for a development switch's scripted host.
     private(set) var runsHermesAlone = false
+    /// It says which agents' programs it has, and updates them (`AgentProgramsProviding`).
+    private(set) var listsPrograms = false
     /// What the host last said its threads are doing (a bridge's `activity`), for the
     /// list: a turn started at the desk, or an approval waiting, in a thread not open here.
     private(set) var reportedActivity: [ThreadRef.ID: ThreadActivity] = [:]
@@ -635,6 +637,7 @@ final class HostModel: Identifiable {
     /// what a poll said since (Codex's review, 2026-10-29).
     private func learnUpdate() async {
         guard let gateway = backend as? HermesBackend, let ready = await gateway.gatewayReady, !isRetired else { return }
+        listsPrograms = ready.bridge?.features.contains(BridgeWire.Feature.agentPrograms) == true
         bridgeVersion = ready.bridge?.version
         saysUpdates = ready.bridge?.features.contains(BridgeWire.Feature.updateNotice) == true
         updateIs(ready.bridge?.latest)
@@ -1279,6 +1282,21 @@ final class HostModel: Identifiable {
     /// without it.
     var panelProvider: (any ThreadPanelProviding)? {
         backend as? any ThreadPanelProviding
+    }
+
+    /// The host's side of Settings > Agents (`AgentProgramsProviding`): nil from a host without it.
+    var programsProvider: (any AgentProgramsProviding)? {
+        backend as? any AgentProgramsProviding
+    }
+
+    /// The threads of these agents running or waiting for an answer now, as a confirmation
+    /// names them.
+    func threadsAtWork(of agents: Set<String>) -> [ThreadRecord] {
+        threadsMaybeAtWork.compactMap { id in
+            guard activity(of: id) != .idle, let record = record(for: id), agents.contains(record.ref.agent.name) else { return nil }
+            return record
+        }
+        .sorted { $0.displayTitle < $1.displayTitle }
     }
 
     /// The thread with this id in `threads`, found by its place (`threadPlaces`) rather

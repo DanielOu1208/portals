@@ -36,9 +36,10 @@ import Testing
         let ended = Flag()
         let started = ContinuousClock.now
         await #expect(throws: Deadline.Passed.self) {
-            try await Deadline.run(within: .milliseconds(100)) { await Self.deaf(for: 2, ended: ended) }
+            try await Deadline.run(within: .milliseconds(100)) { await Self.deaf(for: 20, ended: ended) }
         }
-        #expect(ContinuousClock.now - started < .seconds(1.5))
+        // Long before the deaf work ends, however busy the machine.
+        #expect(ContinuousClock.now - started < .seconds(10))
         #expect(!ended.isSet)
     }
 
@@ -61,12 +62,12 @@ import Testing
         let ended = Flag()
         let started = ContinuousClock.now
         let wait = Task {
-            try await Deadline.run(within: .seconds(30)) { await Self.deaf(for: 2, ended: ended) }
+            try await Deadline.run(within: .seconds(30)) { await Self.deaf(for: 20, ended: ended) }
         }
         try? await Task.sleep(for: .milliseconds(100))
         wait.cancel()
         let result = await wait.result
         #expect(throws: CancellationError.self) { try result.get() }
-        #expect(ContinuousClock.now - started < .seconds(1.5))
+        #expect(ContinuousClock.now - started < .seconds(10))
     }
 }

@@ -26,6 +26,7 @@ import * as commands from "./commands.ts";
 import { ErrorCode, invalidParams, RpcError } from "./errors.ts";
 import type { PollNow, PollNowPeer } from "./pollNow.ts";
 import { McpAuthSettling, type McpAuthAction } from "../providers/mcpAuth.ts";
+import { ProgramRefused, type AgentPrograms, type ProgramReport } from "../providers/programs.ts";
 import { SettingRefused } from "../providers/types.ts";
 import { diskFields, type DiskReading } from "../disk.ts";
 
@@ -74,6 +75,8 @@ export interface GatewayContext {
   readonly disk?: { readonly now: DiskReading | undefined };
   /** The apps a thread's folder opens in on this computer (feature open_on_host); this computer's own when absent. */
   readonly openers?: Openers;
+  /** The agents' programs on this computer, and updating them (feature agent_programs). */
+  readonly programs: AgentPrograms;
 }
 
 /** The connection a call came on. */
@@ -184,16 +187,57 @@ export function usageTitle(kind: string, agentName: string, plan: string | undef
 
 /** How long an agent's answer to `usage.read` serves every device: Claude Code may be started only to ask. */
 const usageMaxAgeMs = 60_000;
-const usageAsked = new WeakMap<Provider, { at: number; report: Promise<UsageReport> }>();
+const usageAsked = new WeakMap<Provider, Map<string, { at: number; report: Promise<UsageReport> }>>();
 
 /** The agent's usage as of the last minute, or that it could not say, asked once for every device that asks meanwhile. */
-function recentUsage(agent: Provider, thread: string): Promise<UsageReport> {
-  const kept = usageAsked.get(agent);
+function recentUsage(agent: Provider, thread: string | undefined): Promise<UsageReport> {
+  const scope = agent.usageScope?.(thread) ?? "";
+  let asked = usageAsked.get(agent);
+  if (!asked) usageAsked.set(agent, (asked = new Map()));
+  const kept = asked.get(scope);
   if (kept && Date.now() - kept.at < usageMaxAgeMs) return kept.report;
-  const report = agent.usage!(thread);
+  const report = agent.usage!(thread, { recent: true });
   // One that failed stands too: an expired sign-in or a 429 is not asked again sooner.
-  usageAsked.set(agent, { at: Date.now(), report });
+  asked.set(scope, { at: Date.now(), report });
   return report;
+}
+
+/** A program as a device reads it (feature agent_programs). */
+function programFields(program: ProgramReport): Record<string, unknown> {
+  const { update } = program;
+  return {
+    id: program.id,
+    name: program.name,
+    installed: program.installed,
+    version: program.version,
+    standing: program.standing,
+    tested: program.tested,
+    ...(program.minimum ? { minimum: program.minimum } : {}),
+    how: program.how,
+    can_update: program.canUpdate,
+    ...(program.command ? { command: program.command } : {}),
+    ...(program.latest ? { latest: program.latest } : {}),
+    ...(program.updateAvailable !== undefined ? { update_available: program.updateAvailable } : {}),
+    agents: program.agents,
+    takes_effect: program.takesEffect,
+    ...(program.runningVersion ? { running_version: program.runningVersion } : {}),
+    ...(update
+      ? {
+          update: {
+            state: update.state,
+            started_at: update.startedAt,
+            ...(update.endedAt !== undefined ? { ended_at: update.endedAt } : {}),
+            ...(update.from !== undefined ? { from: update.from } : {}),
+            ...(update.to !== undefined ? { to: update.to } : {}),
+            ...(update.timedOut ? { timed_out: true } : {}),
+            ...(update.line ? { line: update.line } : {}),
+            ...(update.tail ? { tail: update.tail } : {}),
+            ...(update.unattended ? { unattended: true } : {}),
+            ...(update.cannotTellFile ? { cannot_tell_file: update.cannotTellFile } : {}),
+          },
+        }
+      : {}),
+  };
 }
 
 export { readOnlyText };
@@ -575,16 +619,16 @@ export const methods: Record<string, MethodSpec> = {
 
   "usage.read": {
     summary:
-      "How much of the user's plan the thread's agent has used, as the agent tells it (feature usage_read), what /usage says: available false for an agent that cannot say; else its plan, the plan as people name it (title: \"Claude Max\", \"Codex Pro 100\"), each window (name, percent used, resets_at in Unix seconds, reached, window_seconds, how long it is, where known, and heard_at, in milliseconds since 1970, for a window kept from an earlier answer because this one did not say it, or that a turn has reported since this answer), heard_at for limits not asked of it just now, as last heard, and a note. An agent is asked at most once a minute, whoever asks, and an answer it could not give stands for that minute as a good one does. Claude Code with none running is started to ask at most every ten minutes while it reads the limits (its last answer stands between, with heard_at, and what a turn has reported since is over it); after an answer without them, a minute later, then after 2, 4, 8 and 10.",
-    params: { session_id: "string", profile: "string" },
-    required: ["session_id"],
+      "How much of the user's plan an agent has used, as the agent tells it (feature usage_read), what /usage says: the thread's agent for session_id, or, with feature agent_programs, the agent named by agent, for a page that has no thread. Available false for an agent that cannot say; else its plan, the plan as people name it (title: \"Claude Max\", \"Codex Pro 100\"), each window (name, percent used, resets_at in Unix seconds, reached, window_seconds, how long it is, where known, and heard_at, in milliseconds since 1970, for a window kept from an earlier answer because this one did not say it, or that a turn has reported since this answer), heard_at for limits not asked of it just now, as last heard, and a note. An agent is asked at most once a minute, whoever asks, and an answer it could not give stands for that minute as a good one does. Claude Code with none running is started to ask at most every ten minutes while it reads the limits (its last answer stands between, with heard_at, and what a turn has reported since is over it); after an answer without them, a minute later, then after 2, 4, 8 and 10.",
+    params: { session_id: "string", agent: "string", profile: "string" },
     async handle(params, { gateway }) {
-      const record = gateway.sessions.record(params.session_id as string);
-      if (!record) throw new RpcError(ErrorCode.notFound, `This thread is not on this ${machineWord()}.`);
-      const agent = gateway.providers.get(record.agent);
+      if (typeof params.session_id !== "string" && typeof params.agent !== "string") throw invalidParams("session_id or agent is missing.");
+      const record = typeof params.session_id === "string" ? gateway.sessions.record(params.session_id) : undefined;
+      if (typeof params.session_id === "string" && !record) throw new RpcError(ErrorCode.notFound, `This thread is not on this ${machineWord()}.`);
+      const agent = gateway.providers.get(record ? record.agent : (params.agent as string));
       if (!agent?.usage) return { available: false };
       try {
-        const report = await recentUsage(agent, record.id);
+        const report = await recentUsage(agent, record?.id);
         return {
           available: true,
           ...(report.plan ? { plan: report.plan } : {}),
@@ -602,6 +646,30 @@ export const methods: Record<string, MethodSpec> = {
         };
       } catch (error) {
         throw new RpcError(ErrorCode.internal, `${agent.profile.displayName} did not say how much is used: ${(error as Error).message}`);
+      }
+    },
+  },
+
+  "programs.list": {
+    summary:
+      "The programs of the agents on this computer (feature agent_programs): for each that is installed or has an agent here, its id, name, installed, version (null when it did not say), standing (tested, newer, untested, too old, missing), tested, minimum, how it was installed (own, npm, homebrew, app, other, null when it is not), can_update, command (what updates it, or what to run on this computer where the host cannot), latest and update_available where that can be found, agents (the agents it runs), takes_effect (when threads at work move to a new release: next_start, service_restart, gateway_restart), running_version (what a service that stays up runs, where that is not version), and update, the last update known, one under way or that ended while the host was down taken up from its record: state running, done or failed, started_at, ended_at, from, to, timed_out, line (the last thing it printed, while it runs), tail (the end of what it printed, once it has failed), unattended (running with nothing to hold it to its time, its own process having gone), cannot_tell_file (its record cannot be read, or it is past its time with nothing to prove what is left is its own: the file a person may remove, sure it is not running). A version is read at most once a minute, Hermes's at most once an hour, the host's own read at its start included, and with updates.check false only after an update someone asked for, and the latest releases are asked for at most every eight hours and only as this is asked.",
+    params: { profile: "string" },
+    async handle(_params, { gateway }) {
+      return { programs: (await gateway.programs.list()).map(programFields) };
+    },
+  },
+
+  "program.update": {
+    summary:
+      "Starts updating one of the programs of programs.list with its own update command (feature agent_programs), the host's choice by how it was installed: the program's id is all it takes. Answers at once with the program as programs.list says it; programs.list follows the update from there. One at a time per program, through a restart of the host too: asked again while one runs, it answers with that one. It runs in a process of its own without the host's or the agents' sign-ins, and is over only once what it started has gone where it failed or ran out of time. Refused with why (-32602) for a program it cannot update. Stops and restarts nothing, but for Hermes, whose own update restarts its gateways.",
+    params: { program: "string", profile: "string" },
+    required: ["program"],
+    async handle(params, { gateway }) {
+      try {
+        return { program: programFields(await gateway.programs.update(params.program as string)) };
+      } catch (error) {
+        if (error instanceof ProgramRefused) throw invalidParams(error.message);
+        throw error;
       }
     },
   },

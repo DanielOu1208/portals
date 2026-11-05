@@ -35,6 +35,13 @@ public final class ThreadPanelMemory {
     /// Why an agent could not be asked last time, until it next answers: its numbers stay,
     /// and this goes beside them (a sign-in that has expired, a service that has changed).
     public private(set) var usageFailures: [Agent.ID: String] = [:]
+    /// By agent, what it says with no thread to ask through (Settings > Agents), for this launch.
+    /// Apart from `usage`, which a thread's agent decides: a Hermes thread can run on another
+    /// model provider than its bot's default, and its panel must not go by the bot's.
+    public private(set) var agentUsage: [Agent.ID: UsageLimits?] = [:]
+    public private(set) var agentUsageFailures: [Agent.ID: String] = [:]
+    @ObservationIgnored private var agentUsageHeard: [Agent.ID: Date] = [:]
+    @ObservationIgnored private var agentUsageAnswered: [Agent.ID: Date] = [:]
     /// The agents whose numbers were heard on their host's present connection.
     private var usageCurrent: Set<Agent.ID> = []
     /// When each agent's numbers were heard, kept with them.
@@ -91,6 +98,47 @@ public final class ThreadPanelMemory {
         saveSoon()
     }
 
+    /// With no thread to ask through, for a page of agents (Settings > Agents): kept apart from
+    /// what a thread says, as `agentUsage` says.
+    public func askUsage(of agent: Agent.ID, from provider: any AgentProgramsProviding) async throws {
+        if let answered = agentUsageAnswered[agent], Date.now.timeIntervalSince(answered) < Self.usageStands { return }
+        let times = forgotten[agent.host]
+        let connection = connections[agent.host]
+        var isOver: Bool { forgotten[agent.host] != times || connections[agent.host] != connection }
+        let answer: UsageLimits?
+        do {
+            answer = try await provider.usage(ofAgent: agent.name)
+        } catch {
+            if isOver { return }
+            agentUsageFailures[agent] = error.localizedDescription
+            throw error
+        }
+        if isOver { return }
+        agentUsageAnswered[agent] = .now
+        agentUsageHeard[agent] = .now
+        if agentUsageFailures[agent] != nil { agentUsageFailures[agent] = nil }
+        if agentUsage[agent] != .some(answer) { agentUsage.updateValue(answer, forKey: agent) }
+    }
+
+    /// What a page of agents says of one: its own word, else what its chats have heard, from a
+    /// host that cannot be asked with no thread, or until it has answered.
+    public func pageUsage(of agent: Agent.ID) -> UsageLimits? {
+        if let said = agentUsage[agent] { return said }
+        return usage[agent] ?? nil
+    }
+
+    public func pageUsageFailure(of agent: Agent.ID) -> String? {
+        agentUsageFailures[agent] ?? usageFailures[agent]
+    }
+
+    /// `usageAsOf`, of what `pageUsage` says.
+    public func pageUsageAsOf(of agent: Agent.ID, isConnected: Bool) -> Date? {
+        guard let said = agentUsage[agent] else { return usageAsOf(of: agent, isConnected: isConnected) }
+        guard let limits = said else { return nil }
+        if let heard = limits.heardAt { return heard }
+        return isConnected && agentUsageFailures[agent] == nil ? nil : agentUsageHeard[agent]
+    }
+
     /// When the numbers known of an agent were true, where that is not just now: as its
     /// host last heard them, or as heard here if no answer on this connection has followed
     /// them or the last ask failed. nil for numbers as good as new.
@@ -108,6 +156,8 @@ public final class ThreadPanelMemory {
         usageCurrent = usageCurrent.filter { $0.host != host }
         usageFailures = usageFailures.filter { $0.key.host != host }
         usageAnswered = usageAnswered.filter { $0.key.host != host }
+        agentUsageFailures = agentUsageFailures.filter { $0.key.host != host }
+        agentUsageAnswered = agentUsageAnswered.filter { $0.key.host != host }
     }
 
     /// One it could not ask keeps what it had.
@@ -139,6 +189,10 @@ public final class ThreadPanelMemory {
         usageAnswered[agent] = nil
         usageFailures[agent] = nil
         usageCurrent.remove(agent)
+        agentUsage.removeValue(forKey: agent)
+        agentUsageFailures[agent] = nil
+        agentUsageHeard[agent] = nil
+        agentUsageAnswered[agent] = nil
         guard usage.removeValue(forKey: agent) != nil else { return }
         saveSoon()
     }
@@ -161,6 +215,10 @@ public final class ThreadPanelMemory {
         usageAnswered = usageAnswered.filter { $0.key.host != host }
         usageFailures = usageFailures.filter { $0.key.host != host }
         usageCurrent = usageCurrent.filter { $0.host != host }
+        agentUsage = agentUsage.filter { $0.key.host != host }
+        agentUsageFailures = agentUsageFailures.filter { $0.key.host != host }
+        agentUsageHeard = agentUsageHeard.filter { $0.key.host != host }
+        agentUsageAnswered = agentUsageAnswered.filter { $0.key.host != host }
         apps[host] = nil
         appsHeard[host] = nil
         git = git.filter { $0.key.host != host }

@@ -99,6 +99,8 @@ export function makeProviders(config: Config, paths: Paths): Map<string, Provide
       const hermes = new HermesHost({
         settings: { path, start: config.hermes.start, folder: expandHome(config.generalFolder), logPath: paths.hermesLog },
         cachePath: paths.hermesProfiles,
+        // Its `--version` looks for updates of its own, which `updates.check` false rules out.
+        checkVersion: config.updates.check,
       });
       // One agent per Hermes profile, after the others, whose names it leaves them.
       hermes.addTo(providers);

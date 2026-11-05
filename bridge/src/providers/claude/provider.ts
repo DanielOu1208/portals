@@ -559,14 +559,14 @@ export class ClaudeProvider implements Provider, ClaudeHost {
    * it, or as the turns last reported it where no answer read limits, with the plan it said.
    * `fresh`, for a person typing `/usage`, starts one whatever the last answer was.
    */
-  async usage(thread: string, options: { fresh?: boolean } = {}): Promise<UsageReport> {
+  async usage(thread: string | undefined, options: { fresh?: boolean } = {}): Promise<UsageReport> {
     const report = await this.planUsage(thread, options.fresh === true);
     // A plan named as Claude Code names it to the person ("Ultra"), where it says.
     const named = report.plan ? await planDisplayName(this.env) : null;
     return named ? { ...report, plan: named } : report;
   }
 
-  private async planUsage(thread: string, fresh: boolean): Promise<UsageReport> {
+  private async planUsage(thread: string | undefined, fresh: boolean): Promise<UsageReport> {
     const asked = await this.askUsage(thread, fresh).catch((error: Error) => {
       log.warn("could not ask Claude Code how much is used", { error: error.message });
       return undefined;
@@ -600,7 +600,7 @@ export class ClaudeProvider implements Provider, ClaudeHost {
    * bring one up a minute. After an answer that read none (it failed, or the limits could
    * not be read just now) the next start is sooner, a minute on, then 2, 4, 8 and 10.
    */
-  private async askUsage(thread: string, fresh: boolean): Promise<AskedUsage> {
+  private async askUsage(thread: string | undefined, fresh: boolean): Promise<AskedUsage> {
     const running = [...this.sessions]
       .sort((one, other) => Number(other.id === thread) - Number(one.id === thread))
       .map((session) => session.liveQuery)

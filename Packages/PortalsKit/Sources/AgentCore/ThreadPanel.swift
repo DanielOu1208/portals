@@ -43,6 +43,20 @@ public struct UsageLimits: Hashable, Codable, Sendable {
             isUsedUp ? 0 : percent.map { min(max(100 - $0, 0), 100) }
         }
 
+        /// Its name in a letter or two, for a ring too small to hold more, where that says what
+        /// it means: "5h" for "5-hour", "W" for "weekly". nil for one it would not ("O" for
+        /// "weekly Opus", "I" for "included"), which goes by its full name where there is room.
+        public var shortName: String? {
+            let parts = name.lowercased().split(separator: "-")
+            if parts.count == 2, Int(parts[0]) != nil, let unit = parts[1].first, ["hour", "day"].contains(parts[1]) { return "\(parts[0])\(unit)" }
+            switch name.lowercased() {
+            case "daily": return "D"
+            case "weekly": return "W"
+            case "monthly": return "Mo"
+            default: return nil
+            }
+        }
+
         /// The time it counts has ended, so nothing said of it holds any more, used up or not.
         public func hasReset(at now: Date = .now) -> Bool {
             resetsAt.map { $0 <= now } ?? false

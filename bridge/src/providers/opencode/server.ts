@@ -1,4 +1,4 @@
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { closeSync, lstatSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -8,7 +8,7 @@ import { counters } from "../../counters.ts";
 import { log } from "../../log.ts";
 import { threadVariables } from "../../portals/access.ts";
 import { writeJSON } from "../../store/jsonFile.ts";
-import { endGroup } from "../child.ts";
+import { endGroup, processOf, type ProcessIdentity as Identity } from "../child.ts";
 import { programVersion } from "../program.ts";
 import { minimumOpenCodeVersion, supportedOpenCodeVersion as supportedVersion } from "./options.ts";
 import { settleOwned, type OwnedStopResult } from "./shutdown.ts";
@@ -63,7 +63,6 @@ export async function serviceModule(): Promise<ServiceModule> {
   }
 }
 
-interface Identity { pid: number; start: string; group: number }
 interface Owner extends Identity { token: string }
 interface OwnRecord {
   format: 1;
@@ -518,20 +517,3 @@ async function processForStop(pid: number): Promise<Identity | null> {
   }
 }
 
-function processOf(pid: number, timeout = 5000): Identity | null {
-  try {
-    if (process.platform === "linux") {
-      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-      const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
-      if (fields[0] === "Z") return null;
-      const boot = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
-      return { pid, group: Number(fields[2]), start: `proc:${boot}:${fields[19]}` };
-    }
-    if (counters.on) counters.spawned("ps");
-    const output = execFileSync("/bin/ps", ["-o", "stat=,pgid=,lstart=", "-p", String(pid)], {
-      encoding: "utf8", timeout, stdio: ["ignore", "pipe", "ignore"], env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
-    });
-    const match = /^\s*(\S+)\s+(\d+)\s+(.+?)\s*$/.exec(output);
-    return match && !match[1].startsWith("Z") ? { pid, group: Number(match[2]), start: `ps-utc:${match[3]}` } : null;
-  } catch { return null; }
-}

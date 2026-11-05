@@ -275,7 +275,10 @@ final class Fleet {
         if let index = hosts.firstIndex(where: { $0.id == config.id }) {
             let old = hosts[index]
             // Another Mac may answer at the new address, with other plans and other apps.
-            if old.host.url != config.url { ThreadPanelMemory.shared.forget(host: config.id) }
+            if old.host.url != config.url {
+                ThreadPanelMemory.shared.forget(host: config.id)
+                AgentProgramsMemory.shared.forget(host: config.id)
+            }
             let shown = chat.flatMap { $0.agent.id.host == config.id ? $0 : nil }
             // The thread being read to be put on screen: its read stops with the old model,
             // which drops what it reads, or with the thread on screen closed here, and it is
@@ -346,6 +349,7 @@ final class Fleet {
         }
         store.forgetHost(id)
         ThreadPanelMemory.shared.forget(host: id)
+        AgentProgramsMemory.shared.forget(host: id)
         foldedProjects = foldedProjects.filter { $0.host != id }
         foldersByLastUse.remove(id)
         if shownSpace == id { shownSpace = nil }

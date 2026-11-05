@@ -481,7 +481,7 @@ private struct PartRule: View {
 /// people name it ("Claude Max"), then for each window how much is left and when it
 /// resets, a bar of what is left with a mark where an even pace would be, and the pace:
 /// how much is in reserve or over, and whether it lasts until the reset.
-private struct UsagePart: View {
+struct UsagePart: View {
     let agent: String
     let limits: UsageLimits
     /// Why they could not be asked again: what is known stays, not the whole truth by itself.
@@ -554,7 +554,7 @@ private struct LateReveal: ViewModifier {
     }
 }
 
-private struct UsageWindowView: View {
+struct UsageWindowView: View {
     let window: UsageLimits.Window
     let now: Date
     /// When what is known of the plan was true, where that is not just now.

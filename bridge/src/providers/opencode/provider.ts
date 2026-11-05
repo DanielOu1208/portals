@@ -235,10 +235,10 @@ export class OpenCodeProvider implements Provider {
     return this.folders.map((folder) => ({ ...folder }));
   }
 
-  async usage(thread: string): Promise<UsageReport> {
+  async usage(thread: string | undefined): Promise<UsageReport> {
     const api = await this.api();
-    const info = await api.session(thread);
-    return usageReport(await api.usage(info.location?.directory ?? this.options.settings.folder));
+    const info = thread === undefined ? undefined : await api.session(thread);
+    return usageReport(await api.usage(info?.location?.directory ?? this.options.settings.folder));
   }
 
   // MARK: Models
