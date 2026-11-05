@@ -263,6 +263,68 @@ import Testing
         #expect(program.stateLine == "Not found on this host")
     }
 
+    /// Its sheet's line says its version and how it stands; what its update control shows is left to that.
+    @Test func theSheetsLineLeavesUpdatingToTheControl() {
+        var program = AgentProgram(id: "codex", name: "Codex", version: "0.166.0", latest: "0.170.2", updateAvailable: true)
+        #expect(program.versionLine == "0.166.0 → 0.170.2")
+        #expect(program.spokenVersionLine == "0.166.0, update available: 0.170.2")
+        program.update = .init(state: .running, startedAt: .now)
+        #expect(program.versionLine == "0.166.0")
+        program.update = .init(state: .failed, startedAt: .now)
+        #expect(program.versionLine == "0.166.0")
+        program.update = nil
+        program.updateAvailable = false
+        #expect(program.versionLine == "0.166.0 · Up to date")
+    }
+
+    /// The host says the latest releases at the ask after the first: the page asks again soon, while one is missing.
+    @Test func thePageWaitsForALatestReleaseOnlyWhereOneCanCome() async throws {
+        let memory = AgentProgramsMemory()
+        let host = Host()
+        #expect(memory.isWaitingForLatest(on: hostID))
+        let first = Task { await memory.ask(on: hostID, from: host) }
+        try await waitUntil { await host.calls == 1 }
+        await host.answer(0, with: .success([AgentProgram(id: "cursor", name: "Cursor", canUpdate: true), AgentProgram(id: "opencode", name: "OpenCode")]))
+        await first.value
+        #expect(memory.isWaitingForLatest(on: hostID))
+        let second = Task { await memory.ask(on: hostID, from: host) }
+        try await waitUntil { await host.calls == 2 }
+        await host.answer(1, with: .success([AgentProgram(id: "cursor", name: "Cursor", canUpdate: true, latest: "2026.11.05"), AgentProgram(id: "opencode", name: "OpenCode")]))
+        await second.value
+        #expect(!memory.isWaitingForLatest(on: hostID))
+    }
+
+    /// A bar follows a percentage only where the updater's line says how far along it is: most
+    /// say none, and a line can hold a number, even with a percent sign, that is no progress.
+    @Test func aPercentageIsReadOnlyWhereItIsProgress() {
+        func fraction(_ line: String) -> Double? { AgentProgram.Update(state: .running, startedAt: .now, line: line).fraction }
+        // Saying how far along it is.
+        #expect(fraction("Downloading agent-cli-package.tar.gz  45%") == 0.45)
+        #expect(fraction("Receiving objects:  45% (450/1000)") == 0.45)
+        #expect(fraction("[=====>    ] 12.5%") == 0.125)
+        #expect(fraction("######## 80%") == 0.8)
+        #expect(fraction("━━━━━━ 33 %") == 0.33)
+        #expect(fraction("45%") == 0.45)
+        #expect(fraction("100% done") == 1)
+        #expect(fraction("Installing 0%") == 0)
+        // Numbers that are no progress.
+        #expect(fraction("added 3 packages in 4s") == nil)
+        #expect(fraction("node v22.18.0") == nil)
+        #expect(fraction("2026.11.05") == nil)
+        #expect(fraction("Updated 3 of 5") == nil)
+        #expect(fraction("npm warn deprecated 2 packages") == nil)
+        // A percent sign that is no progress.
+        #expect(fraction("Disk 90% full") == nil)
+        #expect(fraction("50% off your next plan") == nil)
+        #expect(fraction("coverage 80%") == nil)
+        #expect(fraction("CPU 10% MEM 20%") == nil)
+        #expect(fraction("Installing: 5% faster startup") == nil)
+        #expect(fraction("Downloading 150%") == nil)
+        #expect(fraction("Downloading 12.5.1%") == nil)
+        #expect(fraction("") == nil)
+        #expect(AgentProgram.Update(state: .running, startedAt: .now).fraction == nil)
+    }
+
     /// A later release known with no version to set beside it says so in words.
     @Test func aLaterReleaseWithNoKnownVersionIsWords() {
         let program = AgentProgram(id: "hermes", name: "Hermes", latest: "0.22.7", updateAvailable: true)

@@ -479,6 +479,8 @@ private struct TrailingIconLabelStyle: LabelStyle {
 struct CommandBox: View {
     let command: String
     let copyIdentifier: String
+    /// How many lines it may take, for a long path.
+    var lines = 1
     @State private var copied = false
 
     var body: some View {
@@ -501,7 +503,7 @@ struct CommandBox: View {
             Text(command)
                 .font(.app.callout.monospaced())
                 .foregroundStyle(.primary)
-                .lineLimit(1)
+                .lineLimit(lines)
                 .minimumScaleFactor(wordy ? 1 : 0.8)
             Spacer(minLength: Theme.grid)
             Button {
