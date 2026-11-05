@@ -7,8 +7,8 @@ import { OpenCodeProvider } from "../src/providers/opencode/provider.ts";
 import type { ProviderEvent } from "../src/providers/types.ts";
 import { FakeOpenCode } from "./opencode-serve.ts";
 
-async function until(check: () => boolean | Promise<boolean>) {
-  const deadline = Date.now() + 3000;
+async function until(check: () => boolean | Promise<boolean>, timeoutMs = 3000) {
+  const deadline = Date.now() + timeoutMs;
   while (!await check()) {
     if (Date.now() > deadline) throw new Error("timed out");
     await new Promise((resolve) => setTimeout(resolve, 5));
@@ -230,13 +230,15 @@ test("a skill list OpenCode does not answer holds neither the menu nor a message
   const id = await provider.newThread({ cwd: folder, settings });
   let offered: Awaited<ReturnType<typeof provider.commands>> | undefined;
   void provider.commands({ id, cwd: folder }).then((commands) => { offered = commands; });
-  await until(() => offered !== undefined);
+  // A menu waits up to 10 s, for an OpenCode only just started.
+  await until(() => offered !== undefined, 11_000);
   assert.ok(offered!.some((command) => command.name === "init"));
   assert.equal(offered!.some((command) => command.skill), false);
   assert.ok(held.length > 0);
   await until(() => held.every((res) => res.destroyed)); // Given up, not left open.
+  const asked = held.length;
 
-  // The message goes as it would without skills.
+  // A message waits 2 s at most, then goes as it would without skills.
   const events: ProviderEvent[] = [];
   const session = await provider.startSession({ id, cwd: folder, settings }, { emit: (event) => events.push(event), ask: async () => ({ kind: "withdrawn", reason: "unused" }) });
   t.after(() => session.close());
@@ -247,6 +249,7 @@ test("a skill list OpenCode does not answer holds neither the menu nor a message
   const prompt = fake.callsOf("POST", new RegExp(`/session/${id}/prompt$`))[0];
   assert.equal(prompt.body.text, "/graphify the port");
   assert.equal(prompt.body.skills, undefined);
+  assert.ok(held.length > asked, "a folder never settled is asked again, not taken as empty");
 });
 
 test("Stop ends a message still waiting for OpenCode's skills, and sends nothing", async (t) => {
@@ -292,4 +295,21 @@ test("a message naming a skill waits for a turn of its own when OpenCode is busy
   assert.equal(prompts().at(-1)!.body.id, "msg_portals-dana-plain");
   await session.interrupt();
   await until(() => events.some((event) => event.type === "turn.end"));
+});
+
+test("a freshly started OpenCode slow to answer its first skill read still fills the menu", async (t) => {
+  const { folder, fake, provider } = await rig(t);
+  const original = fake.server.listeners("request")[0] as (...args: any[]) => void;
+  fake.server.removeAllListeners("request");
+  let first = true;
+  fake.server.on("request", (req, res) => {
+    // OpenCode answers once it has read the folder's skills: 3 s, here.
+    if (first && req.method === "GET" && req.url?.startsWith("/api/skill")) {
+      first = false;
+      const timer = setTimeout(() => original(req, res), 3000);
+      t.after(() => clearTimeout(timer));
+    } else original(req, res);
+  });
+  const offered = await provider.commands({ id: "ses_cold", cwd: folder });
+  assert.deepEqual(offered.filter((command) => command.skill).map((command) => command.name), ["graphify"]);
 });

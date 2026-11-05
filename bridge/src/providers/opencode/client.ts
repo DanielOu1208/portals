@@ -34,8 +34,8 @@ const maxPages = 100;
 
 /** How long a folder's skills are asked for at least, the first time, while OpenCode may still be reading them. */
 const skillsSettle = 1000;
-/** How long a catalog, or a message that names a skill, waits for the skills at most. */
-const skillsDeadline = 2000;
+/** How long a menu waits for a folder's skills at most: a freshly started OpenCode can take seconds to answer. */
+const skillsDeadline = 10_000;
 
 /** The calls the bridge makes, each in the shape the provider reads. */
 export class OpenCodeApi {
@@ -102,13 +102,14 @@ export class OpenCodeApi {
   }
 
   /** The skills OpenCode would use in a folder: its own, the user's, and a plugin's. */
-  async skills(directory: string, signal?: AbortSignal): Promise<SkillInfo[]> {
+  async skills(directory: string, signal?: AbortSignal, wait = skillsDeadline): Promise<SkillInfo[]> {
     // OpenCode reads a folder's skills in the background, so the first answers after it
     // starts are empty or partial (0 → 2 → 153 over ~400 ms on 2.2.5, measured), and it
     // says nothing when it is done. So the first time a folder is asked, keep asking for
     // `skillsSettle`, then until two answers name the same skills; later, one answer will do.
-    // No more than `skillsDeadline` in all: then the list is the last answer, or none.
-    const deadline = AbortSignal.timeout(skillsDeadline);
+    // No more than `wait` in all: then the list is the last answer, or none, and the
+    // folder is asked again next time.
+    const deadline = AbortSignal.timeout(wait);
     const options = { signal: signal ? AbortSignal.any([signal, deadline]) : deadline };
     let skills: SkillInfo[] = [];
     try {

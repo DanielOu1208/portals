@@ -2,6 +2,9 @@ import type { AgentCommand, Prompt } from "../types.ts";
 import type { OpenCodeApi } from "./client.ts";
 import type { SkillInfo } from "./protocol.ts";
 
+/** How long a message that names a skill waits for OpenCode's skills at most, before it goes without. */
+const sendSkillsDeadline = 2000;
+
 export type AdmissionKind = "prompt" | "compact" | "command";
 interface Admission {
   id: string;
@@ -62,7 +65,7 @@ export async function submit(api: OpenCodeApi, id: string, directory: string, pr
   }
   // A skill is a message OpenCode runs with it, attached as its own input, as its own
   // apps send a skill picked from a menu.
-  const skill = command ? skillIn(prompt.text, await api.skills(directory, admission?.signal)) : null;
+  const skill = command ? skillIn(prompt.text, await api.skills(directory, admission?.signal, sendSkillsDeadline)) : null;
   if (admission && !await admission.current("prompt")) return;
   return api.prompt(id, prompt.text, files, { ...(admission ? { id: admission.id } : {}), ...(skill ? { skills: [{ id: skill.id, name: skill.name }] } : {}) });
 }
