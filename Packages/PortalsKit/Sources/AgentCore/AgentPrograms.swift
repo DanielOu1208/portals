@@ -52,6 +52,30 @@ public struct AgentProgram: Hashable, Sendable, Identifiable {
         /// What goes before that file, wherever it is shown.
         public static let cannotTellWords = "Portals cannot tell whether this update is still running. If you are sure it is not, remove this file on the host:"
 
+        /// How far along it is, 0 to 1, where the last thing it printed says so; nil where it
+        /// says nothing of it, as most updaters do. Never worked out from the time gone.
+        public var fraction: Double? {
+            line.flatMap(Self.fraction(in:))
+        }
+
+        private static let percent = try! NSRegularExpression(pattern: #"(?<![\d.])(\d{1,3}(?:\.\d+)?)\s?%"#)
+        private static let bar = try! NSRegularExpression(pattern: #"[=#█━▓▒░]{2,}"#)
+        private static let work = try! NSRegularExpression(pattern: #"\b(download|fetch|install|extract|unpack|updat|upgrad|receiv|resolv|progress|copy|copying|writ|build|compil|pull)"#, options: .caseInsensitive)
+        private static let notWork = try! NSRegularExpression(pattern: #"\b(faster|slower|smaller|larger|less|more|off|coverage|cpu|mem|memory|disk|battery|used|free|full)\b"#, options: .caseInsensitive)
+
+        /// One percentage on the line, up to 100, on a line that is nothing else, or that draws a
+        /// bar, or that says it is at work and nothing that makes the number something else.
+        private static func fraction(in line: String) -> Double? {
+            let whole = NSRange(line.startIndex..., in: line)
+            let found = percent.matches(in: line, range: whole)
+            guard found.count == 1, let number = Range(found[0].range(at: 1), in: line), let value = Double(line[number]), value <= 100 else { return nil }
+            func has(_ pattern: NSRegularExpression) -> Bool { pattern.firstMatch(in: line, range: whole) != nil }
+            guard !has(notWork) else { return nil }
+            let rest = Range(found[0].range, in: line).map { line.replacingCharacters(in: $0, with: "") } ?? line
+            let isBare = ["", "done", "complete", "completed"].contains(rest.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters)).lowercased())
+            return isBare || has(bar) || has(work) ? value / 100 : nil
+        }
+
         public init(state: State, startedAt: Date, endedAt: Date? = nil, from: String? = nil, to: String? = nil, timedOut: Bool = false, line: String? = nil, tail: String? = nil, isUnattended: Bool = false, cannotTellFile: String? = nil) {
             self.state = state
             self.startedAt = startedAt
@@ -165,6 +189,23 @@ public struct AgentProgram: Hashable, Sendable, Identifiable {
         return [isInstalled ? version : nil, stateWords].compactMap(\.self).joined(separator: ", ").nilIfEmpty
     }
 
+    /// The line under its name on its sheet: as on its row, but what its update control says
+    /// (updating, failed) is left to that.
+    public var versionLine: String? {
+        switch state {
+        case .updating, .updateFailed: version
+        default: stateLine
+        }
+    }
+
+    /// `versionLine` as VoiceOver says it.
+    public var spokenVersionLine: String? {
+        switch state {
+        case .updating, .updateFailed: version
+        default: spokenStateLine
+        }
+    }
+
     /// Whether updating it is on offer: the host can, and no later release is known to be missing.
     public var offersUpdate: Bool {
         canUpdate && !isUpdating && updateAvailable != false
@@ -260,6 +301,12 @@ public final class AgentProgramsMemory {
 
     public func isUpdating(on host: HostID) -> Bool {
         programs[host]?.contains(where: \.isUpdating) ?? false
+    }
+
+    /// A host looks for the latest releases as it is first asked, and says them when it is next
+    /// asked. Whether a program it can update has no word of one yet, or nothing is known at all.
+    public func isWaitingForLatest(on host: HostID) -> Bool {
+        programs[host]?.contains { $0.canUpdate && $0.latest == nil } ?? true
     }
 
     /// One it could not ask keeps what it had, and says why.

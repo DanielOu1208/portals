@@ -295,7 +295,7 @@ POSSIBILITY OF SUCH DAMAGE.
 
 The coding agents' badges (`Portals/Assets.xcassets/ClaudeLogo.imageset`,
 `OpenAILogo.imageset`, `PiLogo.imageset`, `CursorLogo.imageset`, `FactoryLogo.imageset`,
-`OpenCodeLogo.imageset`) are their makers' own marks, used only to say whose agent a
+`OpenCodeLogo.imageset`, `HermesLogo.imageset`) are their makers' own marks, used only to say whose agent a
 sidebar entry is. Claude's and OpenAI's were downloaded on 2026-10-07, Pi's and
 Cursor's on 2026-10-12, OpenCode's on 2026-11-03. Claude's and OpenAI's are
 trademarks of Anthropic and OpenAI; Pi's logo is that of Earendil Inc. and Pi's
@@ -348,6 +348,11 @@ Portals is not affiliated with or endorsed by any of them.
   wide and wrap the mark in a mask and clip path the size of the file, which draw
   nothing; the bundled ones keep the mark's two paths and colours, unchanged, in a
   square viewBox centred on the mark.
+
+- Hermes: the Nous Girl mark of Hermes Agent by Nous Research, the files
+  `assets/nous-girl-black.svg` and, for dark mode, `assets/nous-girl-white.svg` of
+  https://github.com/NousResearch/hermes-agent, a repository under the MIT License, bundled
+  unchanged. Portals is not affiliated with or endorsed by Nous Research.
 
 ## Codex's protocol types
 

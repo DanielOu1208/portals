@@ -140,6 +140,92 @@ struct AgentLogoTile: View {
     }
 }
 
+/// A logo in a glass orb of `size` across, for a page of plain colour. Glass with nothing behind
+/// it to bend reads as a flat disc, so this one has light of its own on it: brighter at its top
+/// and along its edge. Still shapes: nothing moves or runs per orb.
+struct GlassOrb<Logo: View>: View {
+    var size: CGFloat
+    @ViewBuilder var logo: Logo
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        let isDark = colorScheme == .dark
+        logo
+            .frame(width: size, height: size)
+            .glassEffect(.regular, in: .circle)
+            .overlay {
+                Circle()
+                    .fill(LinearGradient(colors: [.white.opacity(isDark ? 0.22 : 0.65), .clear], startPoint: .top, endPoint: .center))
+                    .allowsHitTesting(false)
+            }
+            .overlay {
+                Circle()
+                    .strokeBorder(
+                        LinearGradient(colors: [.white.opacity(isDark ? 0.55 : 1), (isDark ? Color.white : .black).opacity(0.08)], startPoint: .top, endPoint: .bottom),
+                        lineWidth: max(size * 0.02, 0.75)
+                    )
+                    .allowsHitTesting(false)
+            }
+            .shadow(color: .black.opacity(isDark ? 0.5 : 0.14), radius: size * 0.08, y: size * 0.04)
+            .accessibilityHidden(true)
+    }
+}
+
+/// An agent's icon at rest, `size` across: its maker's logo in a glass orb, or its avatar, by itself.
+struct AgentIcon: View {
+    var style: AgentAvatarStyle
+    var size: CGFloat
+
+    /// A program with no agent here: its maker's logo, as its agent would wear it.
+    static func style(ofProgram id: String) -> AgentAvatarStyle {
+        var style = AgentAvatarStyle.standard
+        if let logo = CodingAgentLogo(rawValue: id) {
+            style.logo = logo
+            style.showsLogo = true
+        }
+        return style
+    }
+
+    var body: some View {
+        if let logo = style.logo, style.showsLogo {
+            GlassOrb(size: size) {
+                logo.image
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: size * AgentLogoArt.logoInTile, height: size * AgentLogoArt.logoInTile)
+            }
+        } else {
+            // An avatar's square keeps room round its body, so it is drawn larger than its room (`RowAvatar`).
+            AgentAvatarView(state: .idle, frozenAt: 1, size: size * 1.36, style: style)
+                .frame(width: size, height: size)
+        }
+    }
+}
+
+/// A program's icon: Hermes's own logo, which none of its bots wear, or that of its agent.
+struct ProgramIcon: View {
+    var programID: String
+    var style: AgentAvatarStyle
+    var size: CGFloat
+
+    /// How much of the orb her drawing takes: closer to it than a maker's mark, a face at this size.
+    private static let hermesInOrb = 0.76
+
+    var body: some View {
+        if programID == "hermes" {
+            GlassOrb(size: size) {
+                Image(.hermesLogo)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: size * Self.hermesInOrb, height: size * Self.hermesInOrb)
+            }
+        } else {
+            AgentIcon(style: style, size: size)
+        }
+    }
+}
+
 /// The waiting dot, on the circle's upper-right edge, in a gap of its own.
 private struct WaitingDot: ViewModifier {
     var isOn: Bool

@@ -1,10 +1,38 @@
 import AgentCore
 import SwiftUI
 
-/// A program on a host: its version, updating it, how much of
-/// its plan is left and when that resets, and how its agents look. The host's word on it is
-/// asked for by the page beneath (`AgentSettings`), which stays on screen under this sheet.
+/// The measures of the agents' page and its sheets, on every device: one small set, so that
+/// the room round everything is the same.
+enum AgentSheetMetrics {
+    /// From the sheet's edges to what is in it.
+    static let edge: CGFloat = 20
+    /// Between the sheet's parts, either side of a rule.
+    static let part: CGFloat = 16
+    /// Between the things of a part.
+    static let inner: CGFloat = 12
+    /// Between the lines of one thing.
+    static let line: CGFloat = 4
+    /// Every box's corners.
+    static let corner: CGFloat = 12
+    /// A row's height.
+    static let row: CGFloat = 44
+    static let headerOrb: CGFloat = 72
+    static let rowOrb: CGFloat = 32
+    /// An update's bar on a sheet, and on a row.
+    static let updateBar: CGFloat = 240
+    static let rowUpdateBar: CGFloat = 64
+    /// A Mac's sheet: its width, and how tall it may get before it scrolls.
+    static let macWidth: CGFloat = 440
+    static let macHeight: CGFloat = 640
+}
+
+/// A program on a host, its one sheet: who it is and its version, updating it, how much of its
+/// plan is left, and how its agents look. All on one colour, with what matters before updating
+/// said in the confirmation and only there. The host's word on it is asked for by the page
+/// beneath (`AgentSettings`), which stays on screen under this sheet.
 struct AgentProgramDetail: View {
+    private typealias Metrics = AgentSheetMetrics
+
     let fleet: Fleet
     let hostID: HostID
     let programID: AgentProgram.ID
@@ -16,8 +44,8 @@ struct AgentProgramDetail: View {
     @State private var refusal: String?
     /// An agent's look being changed: over this sheet, which is still here after.
     @State private var changingLook: Agent?
-    /// Moves the times on while this is up.
-    @State private var now = Date.now
+    /// How tall what it holds is, for a Mac's sheet to ask for.
+    @State private var partsHeight: CGFloat = 0
 
     private struct Confirmation: Identifiable {
         let title: String
@@ -28,33 +56,16 @@ struct AgentProgramDetail: View {
     private var host: HostModel? { fleet.model(for: hostID) }
     private var program: AgentProgram? { AgentProgramsMemory.shared.program(programID, on: hostID) }
     private var agents: [Agent] { fleet.arrangedAgents(on: hostID).filter { $0.kind == programID } }
-    private var name: String { program?.name ?? (programID == "hermes" ? "Hermes" : agents.first?.displayName ?? programID) }
+    private var isHermes: Bool { programID == "hermes" }
+    private var name: String { program?.name ?? (isHermes ? "Hermes" : agents.first?.displayName ?? programID) }
+    private var style: AgentAvatarStyle { agents.first.map { fleet.style(for: $0.id) } ?? AgentIcon.style(ofProgram: programID) }
 
     var body: some View {
-        PanelChrome(title: name, onDone: onDone) {
-            Form {
-                if let program {
-                    versionSection(program)
-                    updateSection(program)
-                } else if let failure = AgentProgramsMemory.shared.failures[hostID] {
-                    Section {
-                        Text(failure).foregroundStyle(.secondary)
-                    }
-                    .settingsRows()
-                } else if host?.isConnected == true {
-                    Section {
-                        ProgressView()
-                            .frame(maxWidth: .infinity)
-                    }
-                    .settingsRows()
-                }
-                limitsSections
-                looksSection
-            }
-            .formStyle(.grouped)
-            .modifier(SettingsSurface())
+        chrome {
+            scrolling.background(SettingsScreen.background)
         }
-        .sheetOnMac(width: 560, height: 640)
+        .presentationBackground(SettingsScreen.background)
+        .sizedOnMac(height: partsHeight)
         .confirmationDialog(confirming?.title ?? "", isPresented: Binding(get: { confirming != nil }, set: { if !$0 { confirming = nil } }), titleVisibility: .visible, presenting: confirming) { _ in
             Button("Update") { startUpdate() }
                 .accessibilityIdentifier("confirm-update-program")
@@ -72,197 +83,211 @@ struct AgentProgramDetail: View {
                 fleet.setLook(look, for: agent.id)
             }
         }
-        .task {
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(60))
-                now = .now
-            }
-        }
     }
 
-    // MARK: Version
-
-    private func versionSection(_ program: AgentProgram) -> some View {
-        Section {
-            value("Installed", program.isInstalled ? program.version ?? "Unknown" : "Not found on this host")
-            if let latest = program.latest {
-                value("Latest", latest)
-            }
-            if program.standing == .tooOld, let minimum = program.minimum {
-                value("Portals needs", "\(minimum) or newer")
-            }
-            if let running = program.runningVersion {
-                value("Its threads run", running)
-            }
-            if let how = program.how {
-                value("Installed with", Self.words(for: how))
-            }
-        } header: {
-            Text(host?.host.name ?? "").formHeader()
-        } footer: {
-            if agents.isEmpty, program.isInstalled {
-                Text("Portals does not run \(program.name) on this host: it is turned off in the host's settings.")
-                    .formFooter()
-            }
+    /// Done over the sheet's one colour, with no bar or title: the header says whose it is.
+    @ViewBuilder
+    private func chrome(@ViewBuilder content: () -> some View) -> some View {
+        #if targetEnvironment(macCatalyst)
+        ZStack(alignment: .topTrailing) {
+            content()
+            done.buttonStyle(.borderedCapsule).padding(Metrics.inner)
         }
-        .settingsRows()
+        #else
+        NavigationStack {
+            content()
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) { done }
+                }
+                .toolbarBackground(.hidden, for: .navigationBar)
+                .navigationBarTitleDisplayMode(.inline)
+        }
+        #endif
     }
 
-    private func value(_ title: String, _ text: String) -> some View {
-        LabeledContent(title) {
-            Text(text)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.trailing)
-                .textSelection(.enabled)
-        }
-        .listRowOnMac()
+    private var done: some View {
+        Button("Done", action: onDone)
+            .keyboardShortcut(.cancelAction)
+            .accessibilityIdentifier("panel-done")
     }
 
-    private static func words(for how: AgentProgram.InstallMethod) -> String {
-        switch how {
-        case .own: "Its own installer"
-        case .npm: "npm"
-        case .homebrew: "Homebrew"
-        case .app: "An app"
-        case .other: "Another way"
+    /// What it holds, scrolling where that does not fit: a scroll view alone would ask a Mac's
+    /// sheet for no height at all.
+    @ViewBuilder
+    private var scrolling: some View {
+        #if targetEnvironment(macCatalyst)
+        ViewThatFits(in: .vertical) {
+            parts
+            ScrollView { parts }
+        }
+        #else
+        ScrollView { parts }
+            .scrollBounceBehavior(.basedOnSize)
+        #endif
+    }
+
+    private var parts: some View {
+        VStack(spacing: Metrics.part) {
+            header
+            ForEach(limitGroups, id: \.agent.id) { group in
+                Divider()
+                limits(group)
+            }
+            if let note = blockingNote {
+                Divider()
+                Text(note).font(.app.footnote).foregroundStyle(.orange)
+            }
+            if !agents.isEmpty {
+                Divider()
+                foot
+            }
+        }
+        .padding(Metrics.edge)
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { partsHeight = $0 }
+    }
+
+    // MARK: Header
+
+    private var header: some View {
+        VStack(spacing: Metrics.inner) {
+            ProgramIcon(programID: programID, style: style, size: Metrics.headerOrb)
+            VStack(spacing: Metrics.line) {
+                Text(name)
+                    .font(.app.title2.weight(.semibold))
+                    .lineLimit(1)
+                    .accessibilityAddTraits(.isHeader)
+                if let program, let line = program.versionLine {
+                    Text(line)
+                        .font(.app.subheadline)
+                        .monospacedDigit()
+                        .foregroundStyle(isLoud(program) ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                        .multilineTextAlignment(.center)
+                        .accessibilityLabel(program.spokenVersionLine ?? line)
+                }
+                Text(host?.host.name ?? "")
+                    .font(.app.caption)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+            if let program {
+                updateControl(program)
+            } else if let failure = AgentProgramsMemory.shared.failures[hostID] {
+                Text(failure).font(.app.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            } else if host?.isConnected == true {
+                ProgressView().controlSize(.small)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func isLoud(_ program: AgentProgram) -> Bool {
+        switch program.state {
+        case .tooOld, .notFound: true
+        default: false
         }
     }
 
     // MARK: Updating
 
+    /// Under the version: the button, or in its place what it has come to.
     @ViewBuilder
-    private func updateSection(_ program: AgentProgram) -> some View {
-        Section {
-            if let file = program.update?.cannotTellFile {
-                VStack(alignment: .leading, spacing: Theme.grid * 0.5) {
-                    Text(AgentProgram.Update.cannotTellWords)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text(file)
-                        .font(.app.caption.monospaced())
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .listRowOnMac()
-                .accessibilityIdentifier("program-update-cannot-tell")
-            } else if program.isUpdating {
-                HStack(spacing: Theme.grid) {
-                    ProgressView().controlSize(.small)
-                    Text(program.stateWords ?? "Updating…")
-                }
-                .listRowOnMac()
-                .accessibilityIdentifier("program-updating")
-                if let line = program.update?.line {
-                    Text(line)
-                        .font(.app.caption.monospaced())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .listRowOnMac()
-                }
+    private func updateControl(_ program: AgentProgram) -> some View {
+        if let file = program.update?.cannotTellFile {
+            VStack(spacing: Metrics.line * 2) {
+                Text(AgentProgram.Update.cannotTellWords)
+                    .font(.app.footnote)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                CommandBox(command: file, copyIdentifier: "program-update-copy", lines: 3)
+                    .accessibilityIdentifier("program-update-cannot-tell")
             }
+        } else if program.update?.isUnattended == true {
+            Text(program.stateWords ?? "")
+                .font(.app.subheadline.weight(.medium))
+                .frame(minHeight: UpdateButtonStyle.height)
+                .accessibilityIdentifier("program-updating")
+        } else if program.isUpdating {
+            // Where the button was, with the updater's latest line under it.
+            VStack(spacing: Metrics.line * 2) {
+                UpdateBar(fraction: program.update?.fraction, tint: isHermes ? nil : style.tint)
+                    .frame(maxWidth: Metrics.updateBar)
+                Text(program.update?.line ?? "Updating…")
+                    .font(.app.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .frame(minHeight: UpdateButtonStyle.height)
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("program-updating")
+        } else {
             if let update = program.update, update.state == .failed {
-                VStack(alignment: .leading, spacing: Theme.grid * 0.5) {
-                    Text(update.timedOut ? "The update took too long and was stopped." : "The update failed.")
-                        .foregroundStyle(.orange)
-                    if let tail = update.tail {
-                        Text(tail)
-                            .font(.app.caption.monospaced())
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                failure(update)
+            }
+            if program.offersUpdate, host?.isConnected == true {
+                Button(program.update?.state == .failed ? "Try Again" : "Update") { confirming = confirmation(for: program) }
+                    .buttonStyle(UpdateButtonStyle(tint: isHermes ? nil : style.tint))
+                    .accessibilityIdentifier("update-program")
+            } else if !program.canUpdate, program.isInstalled {
+                if let command = program.command {
+                    CommandBox(command: command, copyIdentifier: "program-update-copy")
+                        .accessibilityIdentifier("program-update-command")
+                } else {
+                    Text("Updates with its app").font(.app.footnote).foregroundStyle(.secondary)
                 }
-                .listRowOnMac()
-                .accessibilityIdentifier("program-update-failed")
             }
             if let update = program.update, update.state == .done {
                 Text(doneWords(update, program))
-                    .listRowOnMac()
+                    .font(.app.footnote)
+                    .foregroundStyle(.secondary)
                     .accessibilityIdentifier("program-update-done")
             }
-            if program.offersUpdate, host?.isConnected == true {
-                Button(updateTitle(program)) { confirming = confirmation(for: program) }
-                    .listRowOnMac()
-                    .accessibilityIdentifier("update-program")
-            } else if !program.canUpdate, program.isInstalled {
-                howToUpdate(program)
-            } else if program.state == .upToDate, program.update == nil {
-                Text("Up to date")
-                    .foregroundStyle(.secondary)
-                    .listRowOnMac()
-            }
-        } footer: {
-            if let word = afterwards(program) {
-                Text(word).formFooter()
-            }
         }
-        .settingsRows()
     }
 
-    private func updateTitle(_ program: AgentProgram) -> String {
-        if program.update?.state == .failed { return "Try Again" }
-        guard program.updateAvailable == true, let latest = program.latest else { return "Update" }
-        return "Update to \(latest)"
+    /// Why it failed, in the end of what it printed, in a box of its own.
+    private func failure(_ update: AgentProgram.Update) -> some View {
+        VStack(alignment: .leading, spacing: Metrics.line) {
+            Text(update.timedOut ? "Took too long and was stopped" : "Update failed")
+                .font(.app.footnote.weight(.medium))
+                .foregroundStyle(.orange)
+            if let tail = update.tail {
+                Text(tail.split(separator: "\n").suffix(4).joined(separator: "\n"))
+                    .font(.app.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(Metrics.inner)
+        .background(Theme.insetFill, in: .rect(cornerRadius: Metrics.corner, style: .continuous))
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("program-update-failed")
     }
 
     private func doneWords(_ update: AgentProgram.Update, _ program: AgentProgram) -> String {
-        if let from = update.from, let to = update.to, from != to { return "Updated from \(from) to \(to)." }
-        return "Updated. It is still \(update.to ?? program.version ?? "the same version"): its updater had nothing newer."
+        if let from = update.from, let to = update.to, from != to { return "Updated from \(from) to \(to)" }
+        return "Nothing newer to install"
     }
 
-    /// An installation the host cannot update: what to run there.
-    @ViewBuilder
-    private func howToUpdate(_ program: AgentProgram) -> some View {
-        if let command = program.command {
-            VStack(alignment: .leading, spacing: Theme.grid * 0.5) {
-                Text("Portals cannot update this installation. To update it, run this on \(host?.host.name ?? "the host"):")
-                    .foregroundStyle(.secondary)
-                Text(command)
-                    .font(.app.body.monospaced())
-                    .textSelection(.enabled)
-            }
-            .listRowOnMac()
-            .accessibilityIdentifier("program-update-command")
-        } else {
-            Text("It updates with the app it came in.")
-                .foregroundStyle(.secondary)
-                .listRowOnMac()
-        }
-    }
-
-    /// Under the section: when threads move to a new version, once one has been installed or may be.
-    private func afterwards(_ program: AgentProgram) -> String? {
-        guard program.isInstalled else { return nil }
-        switch program.takesEffect {
-        case .nextStart: return nil
-        case .serviceRestart: return Self.serviceWords(program)
-        case .botsRestart: return "Updating Hermes restarts it, and its bots with it."
-        }
-    }
-
-    /// Codex's threads run on a service every Codex on the host shares, which Portals never restarts.
-    private static func serviceWords(_ program: AgentProgram) -> String {
-        "\(program.name) threads run on a background service it shares across this host. It keeps its version until it restarts, and only then do its threads move to a new version. Portals does not restart it."
-    }
-
+    /// What matters before updating, in one short sentence, and only here.
     private func confirmation(for program: AgentProgram) -> Confirmation {
         let threads = host?.threadsAtWork(of: Set(agents.map(\.id.name))) ?? []
-        var words: [String] = []
+        let message: String
         switch program.takesEffect {
         case .nextStart:
-            words.append(threads.isEmpty
-                ? "Threads at work are not stopped, and keep their version until their process next starts."
-                : "\(Self.named(threads)) \(threads.count == 1 ? "is" : "are") at work: not stopped, keeping \(threads.count == 1 ? "its" : "their") version until \(threads.count == 1 ? "its" : "their") process next starts.")
+            message = threads.isEmpty
+                ? "Threads at work keep their version until they next start."
+                : "\(Self.named(threads)) \(threads.count == 1 ? "keeps its" : "keep their") version until \(threads.count == 1 ? "it next starts" : "they next start")."
         case .serviceRestart:
-            if !threads.isEmpty { words.append("\(Self.named(threads)) \(threads.count == 1 ? "is" : "are") at work, and not stopped.") }
-            words.append(Self.serviceWords(program))
+            message = "\(program.name) threads move to the new version when its background service restarts."
         case .botsRestart:
             let bots = agents.map(\.displayName).formatted(.list(type: .and))
-            words.append(bots.isEmpty ? "Hermes restarts its bots as it updates." : "Hermes restarts its bots as it updates: \(bots).")
-            if !threads.isEmpty { words.append("\(Self.named(threads)) \(threads.count == 1 ? "is" : "are") at work now.") }
+            message = bots.isEmpty ? "Hermes restarts its bots." : "Hermes restarts its bots: \(bots)."
         }
         let to = program.updateAvailable == true ? program.latest.map { " to \($0)" } ?? "" : ""
-        return Confirmation(title: "Update \(program.name)\(to) on \(host?.host.name ?? "this host")?", message: words.joined(separator: " "))
+        return Confirmation(title: "Update \(program.name)\(to) on \(host?.host.name ?? "this host")?", message: message)
     }
 
     /// "“Fix the login” and “Tidy up”", and how many more past three.
@@ -285,39 +310,24 @@ struct AgentProgramDetail: View {
 
     // MARK: Limits
 
-    /// One part for each thing said of a plan: a host's bots mostly say the same.
-    @ViewBuilder
-    private var limitsSections: some View {
-        ForEach(limitGroups, id: \.agent.id) { group in
-            Section {
-                ForEach(group.limits.windows) { window in
-                    UsageWindowRow(window: window, now: now, tint: fleet.style(for: group.agent.id).tint)
-                }
-                if let note = group.limits.note {
-                    Text(note).font(.app.caption).foregroundStyle(.secondary).listRowOnMac()
-                }
-                if let failure = ThreadPanelMemory.shared.pageUsageFailure(of: group.agent.id) {
-                    Text(failure).font(.app.caption).foregroundStyle(.orange).listRowOnMac()
-                }
-            } header: {
-                Text(group.limits.title ?? (limitGroups.count > 1 ? group.agent.displayName : "Limits"))
-                    .formHeader()
-            } footer: {
-                if let asOf = ThreadPanelMemory.shared.pageUsageAsOf(of: group.agent.id, isConnected: host?.isConnected == true) {
-                    Text(UsagePart.asOf(asOf)).formFooter()
-                }
-            }
-            .settingsRows()
-        }
-        // A limit that turns work away, where the host has no window to draw for it.
-        if limitGroups.isEmpty, let note = agents.lazy.compactMap({ ThreadPanelMemory.shared.pageUsage(of: $0.id)?.blockingNote }).first {
-            Section {
-                Text(note).foregroundStyle(.orange).listRowOnMac()
-            }
-            .settingsRows()
-        }
+    /// How much is left of a plan, just as the panel over a chat shows it.
+    private func limits(_ group: (agent: Agent, limits: UsageLimits)) -> some View {
+        UsagePart(
+            agent: group.agent.displayName, limits: group.limits,
+            failure: ThreadPanelMemory.shared.pageUsageFailure(of: group.agent.id),
+            asOf: ThreadPanelMemory.shared.pageUsageAsOf(of: group.agent.id, isConnected: host?.isConnected == true),
+            tint: fleet.style(for: group.agent.id).tint
+        )
+        .font(.app.subheadline)
     }
 
+    /// A limit that turns work away, where the host has no window to draw for it.
+    private var blockingNote: String? {
+        guard limitGroups.isEmpty else { return nil }
+        return agents.lazy.compactMap { ThreadPanelMemory.shared.pageUsage(of: $0.id)?.blockingNote }.first
+    }
+
+    /// One for each thing said of a plan: a host's bots mostly say the same.
     private var limitGroups: [(agent: Agent, limits: UsageLimits)] {
         var groups: [(agent: Agent, limits: UsageLimits)] = []
         for agent in agents {
@@ -327,81 +337,88 @@ struct AgentProgramDetail: View {
         return groups
     }
 
-    // MARK: Looks
+    // MARK: Foot
 
-    /// How it shows: one row for an agent, a row for each Hermes bot, each with its own look.
-    @ViewBuilder
-    private var looksSection: some View {
-        if !agents.isEmpty {
-            Section {
-                ForEach(agents) { agent in
-                    Button { changingLook = agent } label: {
-                        HStack(spacing: Theme.grid * 1.5) {
-                            AgentAvatarView(state: .idle, frozenAt: 1, size: 30, style: fleet.style(for: agent.id))
-                                .frame(width: 30, height: 30)
-                            Text(programID == "hermes" ? agent.displayName : "Appearance")
-                                .font(.app.body)
-                                .lineLimit(1)
-                            Spacer(minLength: Theme.grid)
-                            Text("Change Look")
-                                .font(.app.footnote)
-                                .foregroundStyle(.secondary)
-                            Image(systemName: "chevron.forward")
-                                .font(.app.caption.weight(.semibold))
-                                .foregroundStyle(.tertiary)
-                        }
-                        .listRowOnMac()
-                        .contentShape(.rect)
+    /// How it shows: a quiet row for an agent, a row with its avatar for each Hermes bot, each with its own look.
+    private var foot: some View {
+        VStack(spacing: 0) {
+            ForEach(agents) { agent in
+                Button { changingLook = agent } label: {
+                    HStack(spacing: Metrics.inner) {
+                        if isHermes { AgentIcon(style: fleet.style(for: agent.id), size: Metrics.rowOrb) }
+                        Text(isHermes ? agent.displayName : "Appearance")
+                            .font(.app.body)
+                            .foregroundStyle(isHermes ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                            .lineLimit(1)
+                        Spacer(minLength: Metrics.inner)
+                        Image(systemName: "chevron.forward")
+                            .font(.app.caption.weight(.semibold))
+                            .foregroundStyle(.tertiary)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("change-look-\(agent.id.name)")
+                    .frame(height: Metrics.row)
+                    .contentShape(.rect)
                 }
-            } header: {
-                if programID == "hermes" {
-                    Text("Bots").formHeader()
-                }
-            } footer: {
-                Text("An agent's look is how it shows in the sidebar, its chats and its notifications, on every device.")
-                    .formFooter()
+                .buttonStyle(.plain)
+                .accessibilityLabel(isHermes ? "\(agent.displayName), change look" : "Appearance")
+                .accessibilityIdentifier("change-look-\(agent.id.name)")
             }
-            .settingsRows()
         }
     }
 }
 
-/// One window of a plan: its ring larger, what it is, how much is left and when it resets.
-private struct UsageWindowRow: View {
-    let window: UsageLimits.Window
-    let now: Date
+/// The program's update button: a capsule in the agent's colour, or the app's ink where it has
+/// none, the same on every device.
+private extension View {
+    /// A Mac's sheet: one width, and as tall as what it holds, up to a point.
+    @ViewBuilder
+    func sizedOnMac(height: CGFloat) -> some View {
+        #if targetEnvironment(macCatalyst)
+        frame(minWidth: AgentSheetMetrics.macWidth, idealWidth: AgentSheetMetrics.macWidth, maxHeight: AgentSheetMetrics.macHeight, alignment: .top)
+            .presentationSizing(.fitted)
+            .background(SheetHeight(height: min(height, AgentSheetMetrics.macHeight)))
+        #else
+        self
+        #endif
+    }
+}
+
+#if targetEnvironment(macCatalyst)
+/// A Mac's sheet stays the size it first asks for, and limits can come after it has opened, or
+/// an update's failure with what it said: so it asks again whenever what it holds changes.
+private struct SheetHeight: UIViewRepresentable {
+    let height: CGFloat
+
+    func makeUIView(context: Context) -> UIView { UIView() }
+
+    func updateUIView(_ view: UIView, context: Context) {
+        guard height > 0 else { return }
+        Task { @MainActor in
+            var sheet: UIViewController?
+            var next = view.next
+            while let responder = next {
+                if let controller = responder as? UIViewController { sheet = controller }
+                next = responder.next
+            }
+            guard let sheet, sheet.preferredContentSize.height != height else { return }
+            sheet.preferredContentSize = CGSize(width: AgentSheetMetrics.macWidth, height: height)
+        }
+    }
+}
+#endif
+
+private struct UpdateButtonStyle: ButtonStyle {
+    static let height: CGFloat = 36
+
     let tint: Color?
 
-    var body: some View {
-        let hasReset = window.hasReset(at: now)
-        HStack(spacing: Theme.grid * 1.5) {
-            if !hasReset, window.left != nil {
-                UsageRing(window: window, now: now, tint: tint, size: 44, lineWidth: 4.5, label: window.left.map { "\(Int($0.rounded()))" })
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(heading(hasReset: hasReset))
-                    .font(.app.body)
-                if !hasReset, let resets = window.resetsAt, resets > now {
-                    Text("Resets in \(UsageWindowView.duration(resets.timeIntervalSince(now)))")
-                        .font(.app.footnote)
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                }
-            }
-            Spacer(minLength: 0)
-        }
-        .listRowOnMac()
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(UsageRing.words(for: window, now: now))
-    }
-
-    private func heading(hasReset: Bool) -> String {
-        let name = window.name.prefix(1).uppercased() + window.name.dropFirst()
-        if hasReset { return "\(name) has reset" }
-        if window.isUsedUp { return "\(name) used up" }
-        return window.left.map { "\(name): \(Int($0.rounded()))% left" } ?? name
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.app.subheadline.weight(.semibold))
+            .foregroundStyle(tint == nil ? Theme.plainBackground : .white)
+            .padding(.horizontal, AgentSheetMetrics.edge * 1.5)
+            .frame(minHeight: Self.height)
+            .background(tint ?? Theme.ink, in: .capsule)
+            .opacity(configuration.isPressed ? 0.7 : 1)
+            .contentShape(.capsule)
     }
 }

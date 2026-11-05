@@ -39,16 +39,13 @@ struct AgentSettings: View {
                 }
                 .settingsRows()
             }
-            Section {
-                if fleet.hosts.isEmpty {
+            if fleet.hosts.isEmpty {
+                Section {
                     Text("Add a host in Net to see its agents.")
                         .foregroundStyle(.secondary)
                 }
-            } footer: {
-                Text("Tap an agent for its version, its limits and how it looks. Which model and mode a thread runs on is chosen in the thread.")
-                    .formFooter()
+                .settingsRows()
             }
-            .settingsRows()
         }
         // Asked only while this page is on screen and can be seen.
         .task(id: Asking(hosts: Set(fleet.hosts.filter { $0.isConnected && $0.listsPrograms }.map(\.id)), isSeen: isSeen)) {
@@ -75,6 +72,10 @@ struct AgentSettings: View {
 
     private static let clockEvery = 30
 
+    /// How long after the page opens it asks again soon for the latest releases, which a host
+    /// finds as it is first asked and says when it is next asked.
+    private static let latestComesWithin: Duration = .seconds(20)
+
     private struct Asking: Hashable {
         let hosts: Set<HostID>
         let isSeen: Bool
@@ -84,6 +85,7 @@ struct AgentSettings: View {
     /// seconds, for its programs alone, while it updates one.
     private func keepAsking(_ host: HostModel) async {
         guard let provider = host.programsProvider else { return }
+        let opened = ContinuousClock.now
         var asked: ContinuousClock.Instant?
         while !Task.isCancelled {
             let isDue = asked.map { $0.duration(to: .now) >= .seconds(60) } ?? true
@@ -94,7 +96,8 @@ struct AgentSettings: View {
                     Task { try? await ThreadPanelMemory.shared.askUsage(of: agent.id, from: provider) }
                 }
             }
-            if isDue || AgentProgramsMemory.shared.isUpdating(on: host.id) {
+            let waitsForLatest = opened.duration(to: .now) < Self.latestComesWithin && AgentProgramsMemory.shared.isWaitingForLatest(on: host.id)
+            if isDue || waitsForLatest || AgentProgramsMemory.shared.isUpdating(on: host.id) {
                 await AgentProgramsMemory.shared.ask(on: host.id, from: provider)
             }
             try? await Task.sleep(for: .seconds(2))
@@ -108,7 +111,7 @@ struct AgentSettings: View {
             Button { showSheet(.agentProgram(host.id, id)) } label: {
                 AgentProgramRow(
                     program: program, id: id, agents: row.agents, isConnected: host.isConnected, now: now,
-                    style: row.agents.first.map { fleet.style(for: $0.id) } ?? AgentProgramRow.style(ofProgram: id),
+                    style: row.agents.first.map { fleet.style(for: $0.id) } ?? AgentIcon.style(ofProgram: id),
                     tint: { fleet.style(for: $0.id).tint }
                 )
             }
@@ -152,16 +155,6 @@ private struct AgentProgramRow: View {
     let style: AgentAvatarStyle
     let tint: (Agent) -> Color?
 
-    /// A program with no agent here: its maker's logo, as its agent would wear it.
-    static func style(ofProgram id: String) -> AgentAvatarStyle {
-        var style = AgentAvatarStyle.standard
-        if let logo = CodingAgentLogo(rawValue: id) {
-            style.logo = logo
-            style.showsLogo = true
-        }
-        return style
-    }
-
     /// What it says of its plan: the first of its agents with something to say, as a host's
     /// bots mostly share one.
     private var limits: (limits: UsageLimits, agent: Agent)? {
@@ -176,7 +169,7 @@ private struct AgentProgramRow: View {
     }
 
     var body: some View {
-        AgentRowContent(style: style, name: name, line: line, spokenLine: spokenLine, lineIsLoud: lineIsLoud) {
+        AgentRowContent(programID: id, style: style, name: name, line: line, spokenLine: spokenLine, lineIsLoud: lineIsLoud, updating: updating) {
             if let limits {
                 UsageRings(limits: limits.limits, now: now, tint: tint(limits.agent))
             }
@@ -185,14 +178,24 @@ private struct AgentProgramRow: View {
         }
     }
 
+    /// An update at work, shown as a small bar beside its version: not one nothing looks after, or one it cannot tell of.
+    private var updating: AgentRowUpdating? {
+        guard isConnected, let program, program.isUpdating, let update = program.update, !update.isUnattended, update.cannotTellFile == nil else { return nil }
+        return .init(fraction: update.fraction, tint: id == "hermes" ? nil : style.tint)
+    }
+
     /// Its bots, for Hermes; its version and how it stands, in the row's one line.
     private var line: String? {
         guard let program else { return bots }
-        return [bots, isConnected ? program.stateLine : program.version].compactMap(\.self).joined(separator: " · ")
+        return [bots, isConnected && updating == nil ? program.stateLine : program.version].compactMap(\.self).joined(separator: " · ")
     }
 
     private var spokenLine: String? {
         guard let program else { return bots }
+        if let updating {
+            let percent = updating.fraction.map { ", \(Int(($0 * 100).rounded())) percent" } ?? ""
+            return [bots, program.version, "updating\(percent)"].compactMap(\.self).joined(separator: ", ")
+        }
         return [bots, isConnected ? program.spokenStateLine : program.version].compactMap(\.self).joined(separator: ", ")
     }
 
@@ -233,31 +236,50 @@ private struct AgentSettingsRow: View {
 }
 
 /// What every row of Agents is made of.
+/// An update at work on a row: how far along, if it says, in the agent's colour.
+private struct AgentRowUpdating {
+    var fraction: Double?
+    var tint: Color?
+}
+
 private struct AgentRowContent<Rings: View, End: View>: View {
+    /// A program's row; nil for an agent's.
+    var programID: String?
     let style: AgentAvatarStyle
     let name: String
     let line: String?
     let spokenLine: String?
     let lineIsLoud: Bool
+    var updating: AgentRowUpdating?
     @ViewBuilder let rings: Rings
     @ViewBuilder let end: End
 
     var body: some View {
-        HStack(spacing: Theme.grid * 1.5) {
-            AgentAvatarView(state: .idle, frozenAt: 1, size: Self.avatar, style: style)
-                .frame(width: Self.avatar, height: Self.avatar)
+        HStack(spacing: AgentSheetMetrics.inner) {
+            if let programID {
+                ProgramIcon(programID: programID, style: style, size: AgentSheetMetrics.rowOrb)
+            } else {
+                AgentIcon(style: style, size: AgentSheetMetrics.rowOrb)
+            }
             VStack(alignment: .leading, spacing: 2) {
                 Text(name)
                     .font(.app.body.weight(.medium))
                     .lineLimit(1)
                 if let line, !line.isEmpty {
-                    Text(line)
-                        .font(.app.footnote)
-                        .foregroundStyle(lineIsLoud ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
-                        // A later release is one line, however tight: it shrinks a little rather than breaks.
-                        .lineLimit(line.contains("→") ? 1 : 2)
-                        .minimumScaleFactor(line.contains("→") ? 0.8 : 1)
-                        .accessibilityLabel(spokenLine ?? line)
+                    HStack(spacing: AgentSheetMetrics.line * 2) {
+                        Text(line)
+                            .font(.app.footnote)
+                            .foregroundStyle(lineIsLoud ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                            // One line, every row the same height: it shrinks a little rather than breaks.
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                            .accessibilityLabel(spokenLine ?? line)
+                        if let updating {
+                            UpdateBar(fraction: updating.fraction, tint: updating.tint, height: 4)
+                                .frame(width: AgentSheetMetrics.rowUpdateBar)
+                                .accessibilityHidden(true)
+                        }
+                    }
                 }
             }
             Spacer(minLength: Theme.grid)
@@ -267,11 +289,9 @@ private struct AgentRowContent<Rings: View, End: View>: View {
                 .font(.app.caption.weight(.semibold))
                 .foregroundStyle(.tertiary)
         }
-        .listRowOnMac()
+        .frame(minHeight: AgentSheetMetrics.row)
         .contentShape(.rect)
     }
-
-    private static var avatar: CGFloat { Platform.isMac ? 30 : 36 }
 }
 
 // MARK: Rings
@@ -307,10 +327,9 @@ struct UsageRing: View {
     let window: UsageLimits.Window
     let now: Date
     let tint: Color?
-    var size: CGFloat = 24
-    var lineWidth: CGFloat = 2.5
-    /// In the middle: its short name where it has one that reads clearly, or at a larger size, how much is left.
-    var label: String?
+
+    private static let size: CGFloat = 24
+    private static let lineWidth: CGFloat = 2.5
 
     private var left: Double { window.left ?? 0 }
 
@@ -318,25 +337,26 @@ struct UsageRing: View {
         ZStack {
             // Inset by half its width: inside its frame, to line up with what is beside it.
             Circle()
-                .inset(by: lineWidth / 2)
-                .stroke(.primary.opacity(0.12), lineWidth: lineWidth)
+                .inset(by: Self.lineWidth / 2)
+                .stroke(.primary.opacity(0.12), lineWidth: Self.lineWidth)
             if left > 0 {
                 Circle()
-                    .inset(by: lineWidth / 2)
+                    .inset(by: Self.lineWidth / 2)
                     .trim(from: 0, to: left / 100)
-                    .stroke((left <= 10 ? Color.red : tint ?? .accentColor).opacity(0.8), style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                    .stroke((left <= 10 ? Color.red : tint ?? .accentColor).opacity(0.8), style: StrokeStyle(lineWidth: Self.lineWidth, lineCap: .round))
                     .rotationEffect(.degrees(-90))
             }
-            if let text = label ?? window.shortName {
+            // Only a name that reads clearly at this size.
+            if let text = window.shortName {
                 Text(text)
-                    .font(.system(size: size * 0.36, weight: .semibold, design: .rounded))
+                    .font(.system(size: Self.size * 0.36, weight: .semibold, design: .rounded))
                     .foregroundStyle(.secondary)
                     .minimumScaleFactor(0.7)
                     .lineLimit(1)
-                    .padding(.horizontal, lineWidth + 1)
+                    .padding(.horizontal, Self.lineWidth + 1)
             }
         }
-        .frame(width: size, height: size)
+        .frame(width: Self.size, height: Self.size)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Self.words(for: window, now: now))
     }
