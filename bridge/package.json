@@ -43,7 +43,7 @@
   "scripts": {
     "start": "node src/main.ts",
     "setup": "node src/cli.ts setup",
-    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && cp src/usage/prices.json dist/usage/prices.json",
     "prepack": "npm run build",
     "test": "node --import ./test/environment.ts --test test/*.test.ts",
     "test:bench": "BENCH_TESTS=1 node --import ./test/environment.ts --test test/bench.test.ts",
