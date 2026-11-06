@@ -85,9 +85,10 @@ export const goneKept = 30 * 24 * 60 * 60_000;
 const pieceBytes = 256 * 1024;
 /**
  * Lines longer than this are passed over: the longest usage line of a year of one Mac's
- * history was 2 MB, and a line many times that, parsed, could cost the worker its memory.
+ * history was 2 MB, and a line many times that, parsed, could cost the worker its memory
+ * (its heap is 48 MB: book.ts).
  */
-export const longestLine = 16 * 1024 * 1024;
+export const longestLine = 8 * 1024 * 1024;
 /** The largest total file read (Droid's settings are a few KB). */
 const largestTotal = 4 * 1024 * 1024;
 /** How deep under a source's folder files are looked for. */

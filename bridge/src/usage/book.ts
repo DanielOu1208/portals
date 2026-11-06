@@ -159,8 +159,11 @@ export function startUsageBook(options: UsageBookOptions): RunningUsageBook {
       const started = new Worker(options.worker ?? workerUrl, {
         workerData: { home: options.home, env: sourceEnv, cursors: store.cursors(), avoid },
         execArgv: [],
-        // Its own heap, small: a worker that needs more ends, and the host does not.
-        resourceLimits: { maxOldGenerationSizeMb: 64, maxYoungGenerationSizeMb: 8 },
+        // Its own heap, small, so a first read of a year of history stays near 300 MB for
+        // the whole process (the largest compressed Codex file is most of the rest: zstd
+        // keeps a whole single-segment frame while it reads it). A worker that needs more
+        // ends, and the host does not; the file it was reading is left until it changes.
+        resourceLimits: { maxOldGenerationSizeMb: 48, maxYoungGenerationSizeMb: 4 },
       });
       started.unref();
       started.on("message", (message: ScanMessage) => {
@@ -234,7 +237,15 @@ export function startUsageBook(options: UsageBookOptions): RunningUsageBook {
       .then(() => {
         running = false;
         if (stopped) return;
-        if (worker || options.inProcess) {
+        const finished = worker !== undefined || options.inProcess;
+        // The worker goes once its scan is done, and its memory with it: a scan is ten
+        // minutes apart, and a new worker starts in a few milliseconds.
+        if (worker) {
+          const ending = worker;
+          worker = undefined;
+          void ending.terminate().catch(() => undefined);
+        }
+        if (finished) {
           store.scannedAt = clock();
           store.dirty = true;
           first = false;

@@ -25,8 +25,12 @@ import { count, digest, emptyCounts, field, hasTokens, text, time, type FilePars
 // - Reasoning (`output_tokens_details.thinking_tokens`) is inside the output tokens:
 //   kept apart, never added to them.
 
-/** How many of a file's latest requests are kept to raise from a later line of theirs. */
-const tailKept = 16;
+/**
+ * How many of a file's latest requests are kept to raise from a later line of theirs: a
+ * response's lines are written one after another, so a few are enough, and the cursor of
+ * every file keeps them.
+ */
+const tailKept = 4;
 
 /** A counted request a later line may raise: its key, counts and where it went. */
 type Tail = [key: string, input: number, output: number, cacheRead: number, cacheWrite: number, cacheWrite1h: number, reasoning: number, split: 0 | 1, at: number, model: string, folder: string, session: string, subagent: 0 | 1];
