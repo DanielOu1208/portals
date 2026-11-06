@@ -13,7 +13,7 @@ import { pathsFor } from "../src/config.ts";
 import { computerName } from "../src/platform.ts";
 import { verifyPassword } from "../src/http/auth.ts";
 import { droidProgram, findClaude, findCursor, findDroid, findPi, piFolders } from "../src/setup/agents.ts";
-import { pair, relayReset, setup, status, uninstall, update, type Context, type SetupOptions } from "../src/setup/commands.ts";
+import { pair, relayReset, setup, status, telemetry, uninstall, update, type Context, type SetupOptions } from "../src/setup/commands.ts";
 import { appManifest, installApp } from "../src/setup/install.ts";
 import { oldLabel, plist } from "../src/setup/launchAgent.ts";
 import { moveOldInstall } from "../src/setup/migrate.ts";
@@ -571,6 +571,9 @@ test("setup on a new Mac: password, Claude through an API key, a tailnet address
   assert.equal(read.get("password"), password);
   assert.equal(read.get("name"), "Test Mac");
   assert.match(ui.text, /Codex 0\.162\.0 .*signed in/);
+  // The one line on the anonymous totals: on, and how to turn them off. Nothing written for it.
+  assert.ok(ui.lines.includes("It sends anonymous daily totals (turns, devices, tokens; never prompts, paths or names). To turn them off: npx portals-host telemetry off"), ui.text);
+  assert.equal(config.telemetry, undefined);
 
   // Again: nothing new is made, the mapping is the one setup made, and the code is the same.
   const again = new ScriptedUi();
@@ -1593,6 +1596,65 @@ test("without an API key and without questions, Claude Code is off and setup say
   assert.ok(!system.calls.some((call) => call.program === "/fake/launchctl"));
   assert.ok(!system.calls.some((call) => call.program === "/fake/tailscale"));
   assert.equal(readSetupState(pathsFor(bridgeHome).setup)!.address, "https://mac.example.ts.net:443");
+});
+
+test("setup run with DO_NOT_TRACK turns the anonymous totals off in config.json, which the host's service goes by, and says so", async () => {
+  const system = new FakeSystem();
+  const ui = new ScriptedUi();
+  const bridgeHome = join(root, "do-not-track");
+  assert.equal(await setup({ service: false, tailscale: false, port: 39122, address: "https://mac.example.ts.net:443" }, context(system, ui, { PORTALS_BRIDGE_HOME: bridgeHome, DO_NOT_TRACK: "1" })), 0, ui.text);
+  const config = JSON.parse(readFileSync(pathsFor(bridgeHome).config, "utf8"));
+  assert.equal(config.telemetry, false);
+  assert.ok(ui.lines.includes("It sends no anonymous daily totals (DO_NOT_TRACK is set). To turn them on: npx portals-host telemetry on"), ui.text);
+});
+
+test("portals-host telemetry: off and on write config.json with its other keys kept; status says what is sent, where, whether it is on and why", async () => {
+  const system = new FakeSystem();
+  const bridgeHome = join(root, "telemetry-command");
+  rmSync(bridgeHome, { recursive: true, force: true });
+  const paths = pathsFor(bridgeHome);
+  const env = { PORTALS_BRIDGE_HOME: bridgeHome };
+
+  // Not set up: there is no switch to write, and nothing is made.
+  const early = new ScriptedUi();
+  assert.equal(await telemetry("off", context(system, early, env)), 1);
+  assert.match(early.text, /isn't set up/);
+  assert.equal(existsSync(paths.config), false);
+
+  mkdirSync(bridgeHome, { recursive: true });
+  writeFileSync(paths.config, JSON.stringify({ port: 39123, generalFolder: "~/Portals" }));
+  const shown = new ScriptedUi();
+  assert.equal(await telemetry("status", context(system, shown, env)), 0);
+  assert.ok(shown.lines.includes("Status:   on (the default)."), shown.text);
+  assert.ok(shown.lines.includes("Sent to:  https://portals-stats.danielou1208.workers.dev/v1/day"), shown.text);
+  for (const key of ["install", "owner", "day", "version", "os", "turns", "portals", "usage"]) assert.ok(shown.lines.some((line) => line.startsWith(`  ${key}: `)), key);
+  assert.ok(shown.lines.includes("Last:     nothing sent yet."), shown.text);
+  assert.match(shown.text, /DO_NOT_TRACK=1/);
+
+  const off = new ScriptedUi();
+  assert.equal(await telemetry("off", context(system, off, env)), 0, off.text);
+  assert.deepEqual(JSON.parse(readFileSync(paths.config, "utf8")), { port: 39123, generalFolder: "~/Portals", telemetry: false });
+  const offShown = new ScriptedUi();
+  await telemetry("status", context(system, offShown, { ...env, PORTALS_STATS_URL: "http://127.0.0.1:9/v1/day" }));
+  assert.ok(offShown.lines.includes(`Status:   off ("telemetry": false in ${paths.config}).`), offShown.text);
+  assert.ok(offShown.lines.includes("Sent to:  http://127.0.0.1:9/v1/day"), offShown.text);
+
+  const on = new ScriptedUi();
+  assert.equal(await telemetry("on", context(system, on, { ...env, DO_NOT_TRACK: "1" })), 0, on.text);
+  assert.equal(JSON.parse(readFileSync(paths.config, "utf8")).telemetry, true);
+  assert.match(on.text, /DO_NOT_TRACK is set in this shell/);
+  const locked = new ScriptedUi();
+  await telemetry("status", context(system, locked, { ...env, DO_NOT_TRACK: "1" }));
+  assert.ok(locked.lines.includes("Status:   off in this shell, as DO_NOT_TRACK is set. config.json says on, which is what a Portals host started by its LaunchAgent goes by."), locked.text);
+
+  // What was sent last is shown as it was sent.
+  const body = { v: 1, install: "6f1c2b9e-4a7d-4d55-9c1e-2f0b7a8e3d41", owner: "6f1c2b9e-4a7d-4d55-9c1e-2f0b7a8e3d41", day: "2026-11-05", version: "0.3.3", os: "darwin", turns: 2, portals: { iphone: 1, ipad: 0, mac: 0, other: 0 }, usage: [] };
+  mkdirSync(join(paths.state, "usage"), { recursive: true });
+  writeFileSync(join(paths.state, "usage", "telemetry.json"), JSON.stringify({ v: 1, lastSentDay: "2026-11-05", sent: { "2026-11-05": 204 }, days: {}, last: { day: "2026-11-05", status: 204, at: 1, body } }));
+  const last = new ScriptedUi();
+  await telemetry("status", context(system, last, env));
+  assert.ok(last.lines.includes("Last:     2026-11-05, answered 204. What was sent:"), last.text);
+  assert.ok(last.lines.includes(JSON.stringify(body, null, 2)), last.text);
 });
 
 test("own Claude login is a choice, with a note on how to use an API key instead", async () => {

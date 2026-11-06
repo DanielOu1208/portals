@@ -12,6 +12,9 @@ export const realHome = homedir();
 for (const key of Object.keys(process.env)) {
   if (/^(?:FACTORY_|DROID_|CLAUDE_|CODEX_|PI_|CURSOR_|HERMES_|XDG_|PORTALS_|AERIPORTAL_)/.test(key)) delete process.env[key];
 }
+// A bridge a test starts never sends the anonymous totals to the real server (usage/telemetry.ts);
+// a test of them gives its own environment.
+process.env.PORTALS_TELEMETRY = "0";
 process.env.HOME = testHome;
 process.env.USERPROFILE = testHome;
 

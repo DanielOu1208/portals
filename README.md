@@ -88,12 +88,50 @@ The app doesn't run agents. A small host, `portals-host`, runs beside them on ea
 
 ## Privacy
 
-- **No account, no analytics, no tracking.**
+- **No account, no tracking.** Each host sends anonymous daily totals, which you can turn off ([below](#anonymous-usage-totals)).
 - **Your work stays on your computers,** and goes only to the AI providers you use.
 - **Your device keeps** the computers you've added and your settings, with passwords in the Keychain.
 - **The relay can't read what it passes.** It's encrypted end to end, and no notifications are kept.
 
 [Privacy policy](https://portals.build/privacy) · [Report a security issue](SECURITY.md)
+
+## Anonymous usage totals
+
+So we can see how much Portals is used, each host sends a few numbers a day: how many
+turns ran through Portals, how many devices connected, and how many tokens went through
+it. They're on by default and easy to turn off. Nothing is sent about what you work on.
+
+**What's sent.** Once a day, the host sends each finished day it was used on (a Portals
+turn started, or a device connected) that it hasn't sent yet, at most the last 7. A day
+it can't send is tried again later. Each day is one `POST` to
+`https://portals-stats.danielou1208.workers.dev/v1/day` with these fields, and no others:
+
+| Field | What it holds |
+|---|---|
+| `v` | The format's version, `1` |
+| `install` | A random id the host made for itself once (`state/usage/install.json`), not taken from the hardware |
+| `owner` | The first 32 hex digits of a SHA-256 of your net's id, the same on every computer in your net, so we count people and not computers. The net's id itself isn't sent. A host in no net sends its `install` id here |
+| `day` | The date the numbers are for, on the host's clock |
+| `version` | The version of `portals-host` |
+| `os` | `darwin` or `linux` |
+| `turns` | How many Portals turns started that day |
+| `portals` | How many devices connected that day, by kind: `iphone`, `ipad`, `mac` and `other` (a device that doesn't say) |
+| `usage` | For each agent and model, only what went through Portals: `agent`, `model`, `requests`, `input`, `output`, `cache_read`, `cache_write` and `reasoning` tokens, and `usd`, what they'd cost at API prices. A model the host's price table doesn't know is sent as `other` |
+
+**What's never sent:** prompts, replies, thread titles, file paths, folder names, device
+or computer names, account details, or any model name outside the price table. The
+server uses your IP address only to limit how often one address can send, never keeps
+it, and keeps no logs. Only the maintainer can read the days.
+
+**Turning it off.** Any one of these stops it, and the host lets go of anything it
+counted and hadn't sent:
+
+- In the app: Settings → Usage → Share anonymous totals, for that host
+- On the host's computer: `npx portals-host telemetry off` (`npx portals-host telemetry status` shows whether it's on, and the last day it sent)
+- In the host's `config.json`: `"telemetry": false`
+- In the host's environment: `DO_NOT_TRACK=1` or `PORTALS_TELEMETRY=0`, which keep it off whatever `config.json` says. The host's service doesn't see your shell's variables, so running setup with `DO_NOT_TRACK` set also writes `"telemetry": false`
+
+`PORTALS_STATS_URL` sends the days to another address instead, for your own server.
 
 ## Build from source
 

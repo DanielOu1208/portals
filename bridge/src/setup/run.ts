@@ -1,6 +1,6 @@
 import { parseArgs } from "node:util";
 import { readManifest } from "./install.ts";
-import { pair, relayReset, setup, status, uninstall, update, type ClaudeMode, type Context } from "./commands.ts";
+import { pair, relayReset, setup, status, telemetry, uninstall, update, type ClaudeMode, type Context } from "./commands.ts";
 import { realSystem } from "./system.ts";
 import { Cancelled, ClackUi, TerminalUi } from "./ui.ts";
 
@@ -79,6 +79,14 @@ async function runCommand(positionals: string[], values: Record<string, string |
           return 2;
         }
         return await relayReset(context);
+      case "telemetry": {
+        const action = positionals[1] ?? "status";
+        if (action !== "on" && action !== "off" && action !== "status") {
+          console.error(`portals-host telemetry takes on, off or status.\n\n${usage}`);
+          return 2;
+        }
+        return await telemetry(action, context);
+      }
       case "uninstall":
         return await uninstall(context);
       default:

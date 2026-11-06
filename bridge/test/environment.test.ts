@@ -25,6 +25,7 @@ test("inherited provider homes cannot escape the test's scratch home", (t) => {
     import { isAbsolute, relative } from "node:path";
     const { testHome } = await import(${JSON.stringify(environment)});
     for (const key of ${JSON.stringify(keys)}) assert.equal(process.env[key], undefined, key);
+    assert.equal(process.env.PORTALS_TELEMETRY, "0");
     const { bridgeHome } = await import(${JSON.stringify(config)});
     const { DroidProvider } = await import(${JSON.stringify(droid)});
     const { agentFolder, movedSessions } = await import(${JSON.stringify(pi)});

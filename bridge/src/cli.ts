@@ -8,6 +8,7 @@
 //   npx portals-host status        whether it runs, and where
 //   npx portals-host update        install this version and restart it
 //   npx portals-host relay reset   give a copied host a relay id of its own
+//   npx portals-host telemetry     turn the anonymous daily totals on or off, or show what they send
 //   npx portals-host uninstall     stop it and remove it
 //
 // The bridge itself is main.ts, which the LaunchAgent (on Linux, the systemd user service)
@@ -25,6 +26,7 @@ Commands:
   status      Show whether Portals host is running, and where
   update      Install this version of Portals host and restart it
   relay reset Give Portals host a new relay id (for a copy of another host's folder)
+  telemetry   Turn the anonymous usage totals on or off, or show what they send: on, off or status
   uninstall   Stop Portals host and remove it
 
 Options for setup:

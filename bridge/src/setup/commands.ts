@@ -24,6 +24,7 @@ import type { System } from "./system.ts";
 import { freeServePort, mappingTo, refusedToUser, Tailscale, tailscaleConnect, tailscaleDownload, type TailscaleStatus } from "./tailscale.ts";
 import type { Ui } from "./ui.ts";
 import { isNewer, lastHeard } from "../updates.ts";
+import { envLock, readSent, readSwitch, sentFields, statsAddress, writeSwitch } from "../usage/telemetry.ts";
 
 // The `portals-host` commands: setup, pair, status, update, relay reset and uninstall. Each
 // returns its exit code. Wording is for someone who has never seen the bridge: what a
@@ -282,8 +283,15 @@ export async function setup(options: SetupOptions, context: Context): Promise<nu
     ui.warn(`The settings can't be used: ${(error as Error).message}`);
     return 1;
   }
+  // Setup run with DO_NOT_TRACK keeps it so for the host too, which its service starts
+  // without this shell's environment.
+  const lock = envLock(env);
+  if (lock) raw.telemetry = false;
   writeJSON(paths.config, raw);
   ui.ok(`Its settings are in ${paths.config}.`);
+  // The one line on the anonymous totals (src/usage/telemetry.ts), on by default.
+  if (readSwitch(paths.config, {}).enabled) ui.say("It sends anonymous daily totals (turns, devices, tokens; never prompts, paths or names). To turn them off: npx portals-host telemetry off");
+  else ui.say(`It sends no anonymous daily totals${lock ? ` (${lock} is set)` : ""}. To turn them on: npx portals-host telemetry on`);
   const state: SetupState = {
     label: names.label,
     log: names.log,
@@ -861,6 +869,64 @@ export async function status(context: Context): Promise<number> {
   if (isThisMacOnly(state)) ui.say(needsTailscale);
   ui.end(up ? "It's running." : "It isn't answering. Its log says why.");
   return up ? 0 : 1;
+}
+
+/** The ways the anonymous totals are turned off, as every place that tells of them says. */
+const telemetryOff = "npx portals-host telemetry off, \"telemetry\": false in config.json, DO_NOT_TRACK=1 or PORTALS_TELEMETRY=0 where Portals host runs, or Share anonymous totals in the app's Settings, Usage";
+
+/**
+ * `portals-host telemetry on|off|status`: the switch for the anonymous daily totals
+ * (src/usage/telemetry.ts), kept in config.json, which a running host reads again within
+ * a minute; and what is sent, where, when, and whether it is on and why.
+ */
+export async function telemetry(action: "on" | "off" | "status", context: Context): Promise<number> {
+  const { ui, env } = context;
+  const os = context.os ?? hostOS;
+  const paths = pathsFor(bridgeHome(env, os));
+  ui.begin("Anonymous usage totals");
+  const lock = envLock(env);
+  if (action !== "status") {
+    if (!existsSync(paths.config)) {
+      ui.warn(`Portals host isn't set up on this ${machineWord(os)}, so there is no switch to turn ${action} yet. Run: npx portals-host setup`);
+      return 1;
+    }
+    try {
+      writeSwitch(paths.config, action === "on");
+    } catch (error) {
+      ui.warn((error as Error).message);
+      return 1;
+    }
+    if (action === "on") {
+      ui.ok(`On: Portals host sends its anonymous daily totals ("telemetry": true in ${paths.config}).`);
+      if (lock) ui.warn(`${lock} is set in this shell, so a Portals host started from it still sends nothing.`);
+    } else {
+      ui.ok(`Off: Portals host sends nothing more ("telemetry": false in ${paths.config}), and lets go of what it counted for days not sent yet.`);
+    }
+    ui.end("A running Portals host takes it within a minute.");
+    return 0;
+  }
+  const setting = readSwitch(paths.config, {});
+  const now = setting.enabled ? "on" : "off";
+  if (lock) {
+    // The LaunchAgent (the systemd unit on Linux) runs the host without this shell's environment.
+    ui.say(`Status:   off in this shell, as ${lock} is set. config.json says ${now}, which is what a Portals host started by its ${serviceKind(os)} goes by.`);
+  } else {
+    ui.say(`Status:   ${now}${setting.why === "default" ? " (the default)" : ` ("telemetry": ${setting.enabled} in ${paths.config})`}.`);
+  }
+  ui.say(`Sent to:  ${statsAddress(env)}`);
+  ui.say("When:     once a day, each finished day Portals host was used (a Portals turn started, or a device connected), at most the last 7.");
+  ui.say("What:     only what went through Portals:");
+  for (const [key, what] of sentFields) ui.say(`  ${key}: ${what}`);
+  ui.say("Never:    prompts, replies, titles, file paths, folder names, device names, account details, or a model name the price table doesn't know.");
+  const sent = readSent(paths.state);
+  if (sent.last) {
+    ui.say(`Last:     ${sent.last.day}, answered ${sent.last.status}. What was sent:`);
+    ui.raw(JSON.stringify(sent.last.body, null, 2));
+  } else {
+    ui.say("Last:     nothing sent yet.");
+  }
+  ui.end(`To turn it off: ${telemetryOff}.`);
+  return 0;
 }
 
 export async function update(context: Context): Promise<number> {

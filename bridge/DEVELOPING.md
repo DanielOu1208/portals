@@ -394,6 +394,7 @@ Everything is in `~/Library/Application Support/portals-bridge/`, on Linux in
 | `state/images/` | Images from the phone while Codex reads them; each is deleted when its turn ends |
 | `state/cursor/` | Cursor's models and commands as it last listed them (`agent.json`), each Cursor thread's conversation as the app shows it (`threads/`), and the Cursor processes that run now (`processes.json`). What Cursor itself keeps is under `~/.cursor`: see [Cursor](#cursor) |
 | `state/droid/` | Droid session identities and the display conversations for Portals threads. Droid keeps its own execution context separately; see [Droid](#droid) |
+| `state/usage/install.json`, `state/usage/telemetry.json` | The anonymous totals' random install id, and the turns and devices counted for each of the last 14 days, the days sent with the status the server answered, and the last body sent, which `npx portals-host telemetry status` prints ([Settings](#settings), `telemetry`) |
 | `state/update.json` | When npm's registry was last asked for the newest `portals-host`, and what it said (`src/updates.ts`); `npx portals-host status` reads it to say a newer version is out |
 | `opencode-serve.log` | What an `opencode serve` of the bridge's own printed ([OpenCode](#opencode)) |
 | `counters.log` | A line of counts a minute, while the [counters](#counters) are on; `counters.log.1` is the file before it. Mode 0600 |
@@ -441,14 +442,16 @@ and by the bridge as the app shows it (`state/cursor/`, above).
   "relay": { "enabled": true, "url": "https://portals-relay.danielou1208.workers.dev" },
   "visuals": { "tellAgents": true },
   "counters": { "enabled": false },
-  "updates": { "check": true }
+  "updates": { "check": true },
+  "telemetry": true
 }
 ```
 
 Restart the bridge after editing it (`npx portals-host update`, or
 `launchctl kickstart -k gui/$(id -u)/com.danielou.portals.bridge`; on Linux
 `systemctl --user restart portals-host`). Only `counters` can
-be changed while it runs, on a bridge that was started with them on ([Counters](#counters)).
+be changed while it runs, on a bridge that was started with them on ([Counters](#counters)),
+and `telemetry`, which the bridge reads again within a minute.
 
 | Key | Meaning |
 |---|---|
@@ -503,6 +506,7 @@ be changed while it runs, on a bridge that was started with them on ([Counters](
 | `visuals.tellAgents` | Tell Claude Code, Codex, Pi, Cursor and Droid threads that the app draws visuals (the default), in a line that sends them to `portals guide visuals`. With `false` they are not told, and a visual an agent writes anyway is still drawn. See [Visuals in replies](#visuals-in-replies). |
 | `counters.enabled` | Write a line of counts a minute to `counters.log`: what the bridge costs. Off unless `true`. See [Counters](#counters). |
 | `updates.check` | Ask npm's registry for the newest version of `portals-host` when the bridge starts and about once a day after, never more often, reading only the version number; when a newer one is out, the app shows "Update available" in the sidebar and on the host's row in Settings → Hosts, with the command to run (README, [Updating](README.md#updating)). Nothing when offline. On unless `false`. |
+| `telemetry` | Send the anonymous daily totals (`src/usage/telemetry.ts`): once a day, each finished day the bridge was used on (a Portals turn started, or a device connected) that it has not sent, at most the last 7, to the stats Worker (`stats/`, `PORTALS_STATS_URL` names another). On unless set; any value but `true` is off, and so is a bridge whose environment has `DO_NOT_TRACK` (anything but `""` or `0`) or `PORTALS_TELEMETRY=0`, whatever this says (`usage.telemetry` answers `locked: "env"`). `npx portals-host telemetry on|off|status` and the app's switch write it. Off, nothing is counted for it and what was counted is let go of. Tests run with `PORTALS_TELEMETRY=0` (`test/environment.ts`). |
 
 ## Notifications
 

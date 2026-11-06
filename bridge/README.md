@@ -190,6 +190,7 @@ in `claude.apiKey` is used instead when both are set.
 | `npx portals-host status` | Whether the host runs, its address, its agents, its General folder and its log, and whether a newer version is out |
 | `npx portals-host@latest update` | Installs the newest host and restarts it ([Updating](#updating)) |
 | `npx portals-host relay reset` | Only when the app says this host has another host's relay id, which happens when its folder was copied from another computer: gives it a new one, and restarts it |
+| `npx portals-host telemetry off` | Stops the anonymous daily totals the host sends; `on` starts them again, and `status` shows what they hold, where they go and whether they're on ([Anonymous usage totals](#anonymous-usage-totals)) |
 | `npx portals-host uninstall` | Stops the host and removes it ([Uninstalling](#uninstalling)) |
 
 To restart the host without updating it (after changing its settings, say):
@@ -223,6 +224,16 @@ and reads only the version number. When a newer one is out, the app says so: a s
 Hosts, which gives the command to run (the host's own page there has a Copy button for
 it). With no network, the check does nothing. To turn it off, set
 `"updates": { "check": false }` in `config.json`; it is on unless you do.
+
+### Anonymous usage totals
+
+Once a day the host sends a few anonymous numbers for each day it was used on: how many
+Portals turns started, how many devices connected, and the tokens and API-equivalent
+dollars that went through Portals, by agent and model. No prompts, replies, titles, paths,
+folder names or account details. They're on by default. `npx portals-host telemetry
+status` lists every field and shows the last day sent; `npx portals-host telemetry off`,
+`"telemetry": false` in `config.json`, or `DO_NOT_TRACK=1` turns them off. The Portals
+README lists every field: [Anonymous usage totals](https://github.com/DanielOu1208/portals#anonymous-usage-totals).
 
 ## What the agents can do
 
@@ -645,6 +656,7 @@ it, and keeps what you change when it runs again. Restart the host after editing
 | `fleet.tellStarters` | Tells the thread that started a thread when that one finishes a turn, fails or waits for an answer (on unless `false`) |
 | `visuals.tellAgents` | Tells the agents that the app draws visuals (on unless `false`). A visual an agent writes anyway is still drawn |
 | `updates.check` | Asks npm's registry, about once a day, whether a newer host is out ([Updating](#updating)). On unless `false` |
+| `telemetry` | Sends the anonymous daily totals ([Anonymous usage totals](#anonymous-usage-totals)). On unless `false`; the host reads it again within a minute, no restart needed |
 
 Every key, with what each does, is listed in `bridge/DEVELOPING.md` in the Portals
 source repository.
