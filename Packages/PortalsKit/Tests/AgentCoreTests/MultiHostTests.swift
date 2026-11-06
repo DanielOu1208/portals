@@ -486,6 +486,22 @@ private func agent(_ name: String, on host: HostID, isDefault: Bool = false) -> 
         #expect(SidebarSections.search("  ", in: threads).isEmpty)
         #expect(SidebarSections.search("nothing", in: threads).isEmpty)
     }
+
+    @Test func theSearchMatchesAsLocalizedStandardContainsDoes() {
+        let texts = [
+            "Fix the tests", "café au lait", "CAFE", "Straße", "STRASSE", "İstanbul", "istanbul", "ıi",
+            "naïve résumé", "日本語のテキスト", "emoji 👩‍💻 here", "ﬁle", "file", "", "Ⅻ", "Ａｂｃ", "abc",
+            "Ünïcödé", "e\u{301}", "é", "ç", "C", "\u{0}null",
+        ]
+        let needles = ["fix", "CAFÉ", "cafe", "ss", "ß", "i", "I", "ı", "İ", "resume", "テキスト", "👩‍💻", "fi", "abc", "é", "e", "c", "x"]
+        for needle in needles {
+            let holds = StandardContains(needle)
+            for text in texts {
+                #expect(holds.isIn(text) == text.localizedStandardContains(needle), "\(needle) in \(text)")
+            }
+        }
+        #expect(!StandardContains("").isIn("anything"))
+    }
 }
 
 // MARK: - Notifications

@@ -557,11 +557,14 @@ struct ChatScreen: View {
             // answer, and the chat glided to keep its end in view each time (2026-10-28: "it should not cause the chat to move as it is an overlay"). Hung
             // over the bar's top from inside it, it could not be touched.
             .overlay(alignment: .bottom) {
-                composerMenu
-                    .padding(.horizontal, composerMargin)
-                    .padding(.bottom, Theme.grid)
-                    .chatColumn()
-                    .animation(.easeInOut(duration: 0.15), value: composerMenuShown)
+                let margin = composerMargin
+                DraftReader {
+                    composerMenu
+                        .padding(.horizontal, margin)
+                        .padding(.bottom, Theme.grid)
+                        .chatColumn()
+                        .animation(.easeInOut(duration: 0.15), value: composerMenuShown)
+                }
             }
             .safeAreaBar(edge: .bottom) {
                 VStack(spacing: Theme.grid) {
@@ -601,7 +604,7 @@ struct ChatScreen: View {
                             }
                             .transition(.opacity)
                         }
-                        composer
+                        DraftReader { composer }
                             .disabled(chat.isSendingMessageEdit || chat.isPreparingMessageEdit || isWorkingOnMessage)
                     }
                 }
@@ -637,6 +640,9 @@ struct ChatScreen: View {
             }
             .onDebugLaunch(DebugLaunch.draft != nil) {
                 if chat.composer.text.isEmpty { chat.composer.text = DebugLaunch.draft ?? "" }
+            }
+            .onDebugLaunch(DebugLaunch.typeBenchPath != nil, after: .seconds(10)) {
+                await typeBench()
             }
             .onDebugLaunch(DebugLaunch.focusesComposer, after: .seconds(1)) {
                 isComposing = true
@@ -2092,6 +2098,57 @@ private struct TintlessBlur: UIViewRepresentable {
     func updateUIView(_ view: TintlessBlurView, context: Context) {}
 }
 
+extension ChatScreen {
+    /// Once, in the chat on screen (`PORTALS_DEBUG_TYPE_BENCH`).
+    @MainActor private static var typeBenchRan = false
+
+    func typeBench() async {
+        #if DEBUG && (targetEnvironment(simulator) || targetEnvironment(macCatalyst))
+        guard isShown, !Self.typeBenchRan, let path = DebugLaunch.typeBenchPath else { return }
+        Self.typeBenchRan = true
+        if DebugLaunch.typeBenchField != "search" { isComposing = true }
+        try? await Task.sleep(for: .seconds(1))
+        let note = { (word: String) in
+            let line = "\(word) \(ProcessInfo.processInfo.systemUptime)\n"
+            if let handle = FileHandle(forWritingAtPath: path) {
+                handle.seekToEndOfFile(); handle.write(Data(line.utf8)); try? handle.close()
+            } else {
+                FileManager.default.createFile(atPath: path, contents: Data(line.utf8))
+            }
+        }
+        // Through the field's own input, as the keyboard puts a key in (`insertText`): the
+        // composer's, or with `PORTALS_DEBUG_TYPE_BENCH_FIELD=search` the sidebar's search
+        // field, where a word is typed and taken out again.
+        let inSearch = DebugLaunch.typeBenchField == "search"
+        func field(in view: UIView) -> (UIView & UIKeyInput)? {
+            if inSearch, let field = view as? UITextField, field.placeholder == "Search threads" { return field }
+            if !inSearch, let text = view as? UITextView, text.isEditable, text.isFirstResponder { return text }
+            for sub in view.subviews { if let found = field(in: sub) { return found } }
+            return nil
+        }
+        let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
+        guard let target = windows.lazy.compactMap({ field(in: $0) }).first else { note("no-field"); return }
+        if inSearch {
+            _ = target.becomeFirstResponder()
+            try? await Task.sleep(for: .seconds(1))
+        }
+        note("typing")
+        let letters = Array(inSearch ? "budget" : "the quick brown fox jumps over the lazy dog ")
+        for index in 0..<300 {
+            if inSearch, index % 12 >= 6 {
+                target.deleteBackward()
+            } else {
+                target.insertText(String(letters[index % (inSearch ? 12 : letters.count)]))
+            }
+            // The chat closed under it: the rest would go in unspaced, so the run says it
+            // stopped rather than that it typed all 300 keys.
+            do { try await Task.sleep(for: .milliseconds(80)) } catch { note("aborted"); return }
+        }
+        note("typed")
+        #endif
+    }
+}
+
 final class TintlessBlurView: UIVisualEffectView {
     override func layoutSubviews() {
         super.layoutSubviews()
@@ -2119,4 +2176,16 @@ final class TintlessBlurView: UIVisualEffectView {
         super.traitCollectionDidChange(previous)
         setNeedsLayout()
     }
+}
+
+/// Where a chat's draft is read: what reads it (the composer, and the menu over it of what
+/// is typed) is worked out in this view's body, not in the chat screen's, so that a key
+/// typed works out those again and not the whole chat screen with its transcript and bars
+/// (2026-11-06: "look around generally for what things are slow and can be sped up
+/// cheaply"; scripts/type-bench.sh). Made again with the chat screen, so nothing it shows
+/// is older than the screen.
+private struct DraftReader<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View { content() }
 }
