@@ -8,12 +8,15 @@ import SwiftUI
 // SwiftUI Button acts on the mouse-up, and so does a SwiftUI Menu drawn as a plain chip,
 // so every one of these dropdowns started a whole click late (the time the button is
 // held: 60-120 ms for a person, of 140 ms to a menu and 350 ms to a settled popover).
-// On a Mac they open on the press now, and look as they did.
+// On a Mac they open on the press now, and look as they did. On an iPhone and iPad the
+// popovers open as the finger touches down; the menus are SwiftUI's, as they were.
 
-/// A chip's button that opens its popover when it is pressed, on a Mac, as a Mac's own
-/// pop-up buttons open on the mouse-down: its action (a click let go of, the keyboard,
-/// VoiceOver) still opens it too. `open` only opens: one that toggled would close on the
-/// release what the press opened. Pressed, the chip dims as a plain button's does.
+/// A chip's button that opens its popover when it is pressed: on a Mac as a Mac's own
+/// pop-up buttons open on the mouse-down, on an iPhone and iPad as the finger touches
+/// down, where a plain button acts as it lifts. Its action (a click or tap let go of, the
+/// keyboard, VoiceOver) still opens it too. `open` only opens: one that toggled would
+/// close on the release what the press opened. Pressed, the chip dims as a plain
+/// button's does.
 private struct OpensOnPressStyle: ButtonStyle {
     let open: () -> Void
 
@@ -27,21 +30,20 @@ private struct OpensOnPressStyle: ButtonStyle {
 }
 
 enum DropdownChip {
-    /// How a pressed chip dims, as SwiftUI's plain button dims its label on a Mac (and a
-    /// plain menu's label while its menu is open): measured from its pixels.
+    /// How a pressed chip dims, as SwiftUI's plain button dims its label (and, on a Mac, a
+    /// plain menu's label while its menu is open): measured from its pixels, on a Mac and
+    /// on the iPhone simulator alike.
     static let pressedOpacity: Double = 0.75
 }
 
 extension View {
-    /// A chip's button style: on a Mac it opens its popover on the press
-    /// (`OpensOnPressStyle`), elsewhere it is plain, as it was. `open` must only open.
-    @ViewBuilder
+    /// A chip's button style: it opens its popover on the press (`OpensOnPressStyle`).
+    /// Measured on the iPhone simulator (2026-11-06), a plain chip's popover showed about
+    /// 100 ms after the finger lifted, so a tap's whole hold was part of the wait, as a
+    /// click's was on a Mac. The chips are over the chat, in no scroll view, so a touch on
+    /// one is never the start of a scroll. `open` must only open.
     func dropdownChipStyle(opens open: @escaping () -> Void) -> some View {
-        if Platform.isMac {
-            buttonStyle(OpensOnPressStyle(open: open))
-        } else {
-            buttonStyle(.plain)
-        }
+        buttonStyle(OpensOnPressStyle(open: open))
     }
 }
 
