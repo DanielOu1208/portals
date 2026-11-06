@@ -212,6 +212,16 @@ export class Prices {
     return price;
   }
 
+  /**
+   * The name the table has `model` under, its plain name; null when it has no price. What
+   * leaves the host names a model only so (telemetry.ts): a name as the agent wrote it can
+   * carry more than the model ("custom:", a provider prefix of someone's own).
+   */
+  known(model: string): string | null {
+    for (const key of candidates(model)) if (this.table.has(key)) return key;
+    return null;
+  }
+
   /** What `counts` of `model` cost, in US dollars; null when the model has no price. */
   cost(model: string, counts: Pick<TokenCounts, "input" | "output" | "cacheRead" | "cacheWrite" | "cacheWrite1h">): number | null {
     const price = this.price(model);

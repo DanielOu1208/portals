@@ -74,6 +74,7 @@ export class SessionManager {
   /** What every session is given to tell: each listener in turn, one's failure not costing the others. */
   private readonly listener: SessionListener = {
     requestOpened: (id, request) => this.tell((listener) => listener.requestOpened?.(id, request)),
+    turnStarted: (id) => this.tell((listener) => listener.turnStarted?.(id)),
     turnEnded: (id, status, text) => this.tell((listener) => listener.turnEnded?.(id, status, text)),
     steerSettled: (id) => this.tell((listener) => listener.steerSettled?.(id)),
     activityChanged: (id) => this.tell((listener) => listener.activityChanged?.(id)),

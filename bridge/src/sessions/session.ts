@@ -106,6 +106,8 @@ export type ThreadActivity = "running" | "waiting";
 export interface SessionListener {
   /** A question was put to the app: an `approval` or a `clarify`, as `open_requests` lists it; `again` when it was put again (`Session.askAgain`). */
   requestOpened?(sessionID: string, request: OpenRequest): void;
+  /** A turn started, as the counters count one (the anonymous totals' turns, usage/telemetry.ts). */
+  turnStarted?(sessionID: string): void;
   /** A turn ended. `text` is the reply of a complete turn and the error of a failed one. */
   turnEnded?(sessionID: string, status: TurnStatus, text: string): void;
   /**
@@ -2416,6 +2418,7 @@ export class Session {
    */
   private turnStarted(preview: string | undefined, cleared: readonly string[] = []): boolean {
     if (counters.on) counters.turn("started");
+    this.tell((listener) => listener.turnStarted?.(this.id));
     const changes: ThreadChanges = preview ? { archived: undefined, inTurn: true, preview } : { archived: undefined, inTurn: true };
     const kept = this.writeTurn(() => this.write({ ...changes, ...this.clearedChanges(cleared) }, { turn: true }));
     this.noteBranch();
