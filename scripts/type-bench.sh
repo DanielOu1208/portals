@@ -80,7 +80,14 @@ for round in {1..$ROUNDS}; do
     fi
     typing_at=$EPOCHREALTIME
     start=$($BIN/rusage $app_pid)
-    wait_word $dir/typed.txt typed 60 || { echo "$label round $round: never ended"; }
+    # A round that did not type all 300 keys (it stalled, or the chat closed: "aborted") is
+    # left out, rather than divided by 300 into the medians.
+    if ! wait_word $dir/typed.txt typed 60; then
+      echo "$label round $round: never ended, left out"
+      kill $app_pid 2>/dev/null; app_pid=""; kill $bridge_pid 2>/dev/null; wait $bridge_pid 2>/dev/null; bridge_pid=""
+      forget_app
+      continue
+    fi
     end=$($BIN/rusage $app_pid)
     span=$(( EPOCHREALTIME - typing_at ))
     sleep 2
@@ -92,7 +99,12 @@ a, b, r0, r1 = ([float(x) for x in s.split()] for s in sys.argv[1:5]); span = fl
 rest_cpu = (r1[0] - r0[0]) / 10 * span; rest_ins = (r1[4] - r0[4]) / 10 * span
 print(f"cpu_ms_key={(b[0] - a[0] - rest_cpu) / 300:.2f} minstr_key={(b[4] - a[4] - rest_ins) / 300:.2f} cpu_pct_typing={(b[0] - a[0]) / span / 10:.1f} cpu_pct_rest={(r1[0] - r0[0]) / 100:.2f}")' \
       "$start" "$end" "$rest0" "$rest1" "$span" > $dir/result.txt
-    print -r -- "$label round $round $(cat $dir/result.txt) load $(sysctl -n vm.loadavg)" | tee -a $OUT/results.txt
+    # Counters not read (the app gone before the last read): left out too.
+    if [[ -s $dir/result.txt ]]; then
+      print -r -- "$label round $round $(cat $dir/result.txt) load $(sysctl -n vm.loadavg)" | tee -a $OUT/results.txt
+    else
+      echo "$label round $round: counters not read, left out"
+    fi
     kill $app_pid 2>/dev/null; for _ in {1..40}; do kill -0 $app_pid 2>/dev/null || break; sleep 0.2; done; app_pid=""
     kill $bridge_pid 2>/dev/null; wait $bridge_pid 2>/dev/null; bridge_pid=""
     forget_app

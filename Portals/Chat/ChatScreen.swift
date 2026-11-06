@@ -2140,7 +2140,9 @@ extension ChatScreen {
             } else {
                 target.insertText(String(letters[index % (inSearch ? 12 : letters.count)]))
             }
-            try? await Task.sleep(for: .milliseconds(80))
+            // The chat closed under it: the rest would go in unspaced, so the run says it
+            // stopped rather than that it typed all 300 keys.
+            do { try await Task.sleep(for: .milliseconds(80)) } catch { note("aborted"); return }
         }
         note("typed")
         #endif
