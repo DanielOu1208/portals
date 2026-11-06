@@ -41,9 +41,14 @@ struct NewThreadPickers: View {
     private var macChip: some View {
         let mac = fleet.model(for: host)?.host
         let name = mac?.name ?? ""
-        return Menu {
-            MacChoices(fleet: fleet, chat: chat)
-        } label: {
+        return MenuChip(
+            sections: { [fleet, chat] in Self.macChoices(fleet: fleet, chat: chat) },
+            tip: "Choose the host",
+            accessibilityLabel: "Host",
+            accessibilityValue: name,
+            accessibilityHint: "Starts the new thread on another host",
+            accessibilityIdentifier: "new-thread-mac"
+        ) {
             chip {
                 Image(systemName: mac?.macSymbol ?? "laptopcomputer")
                     .font(.app.footnote.weight(.medium))
@@ -52,14 +57,6 @@ struct NewThreadPickers: View {
                 name
             }
         }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-        .tip("Choose the host")
-        .accessibilityLabel("Host")
-        .accessibilityValue(name)
-        .accessibilityHint("Starts the new thread on another host")
-        .accessibilityIdentifier("new-thread-mac")
     }
 
     // MARK: The agent
@@ -96,9 +93,14 @@ struct NewThreadPickers: View {
     // MARK: The folder
 
     private var folderChip: some View {
-        Menu {
-            FolderChoices(fleet: fleet, chat: chat, onOtherFolder: onOtherFolder)
-        } label: {
+        MenuChip(
+            sections: { [fleet, chat, onOtherFolder] in Self.folderChoices(fleet: fleet, chat: chat, onOtherFolder: onOtherFolder) },
+            tip: "Choose the Folder",
+            accessibilityLabel: "Folder",
+            accessibilityValue: folder.isGeneral ? Folder.generalName : folder.name,
+            accessibilityHint: "Starts the new thread in another folder",
+            accessibilityIdentifier: "new-thread-folder"
+        ) {
             chip {
                 Image(systemName: folder.isGeneral ? Folder.generalSymbol : "folder")
                     .font(.app.footnote.weight(.medium))
@@ -107,14 +109,6 @@ struct NewThreadPickers: View {
                 folder.isGeneral ? Folder.generalName : folder.name
             }
         }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-        .tip("Choose the Folder")
-        .accessibilityLabel("Folder")
-        .accessibilityValue(folder.isGeneral ? Folder.generalName : folder.name)
-        .accessibilityHint("Starts the new thread in another folder")
-        .accessibilityIdentifier("new-thread-folder")
     }
 
     // MARK: Look
@@ -197,49 +191,39 @@ private struct ChipFlow: Layout {
     }
 }
 
-/// The folder chip's menu: the folders the Mac's space lists, as the sidebar has them, then
-/// Other Folder…. A view of its own, so that the layout is read where the menu is made, not
-/// each time the new thread's screen is drawn.
-private struct FolderChoices: View {
-    let fleet: Fleet
-    let chat: ThreadController
-    var onOtherFolder: (Agent) -> Void
-
-    var body: some View {
+extension NewThreadPickers {
+    /// The folder chip's menu: the folders the Mac's space lists, as the sidebar has them,
+    /// then Other Folder…. Made where the menu is made (`MenuChip`), so that the layout is
+    /// read there, not each time the new thread's screen is drawn.
+    static func folderChoices(fleet: Fleet, chat: ThreadController, onOtherFolder: @escaping (Agent) -> Void) -> [[MenuChoice]] {
         let folders = fleet.layout.spaces.first { $0.id == chat.agent.id.host }?.folders ?? []
-        ForEach(folders) { project in
-            Button {
+        let listed = folders.map { project in
+            MenuChoice(
+                id: "folder:" + project.id.path,
+                title: project.name,
+                symbol: project.id.path == chat.folder?.path ? "checkmark" : nil
+            ) {
                 fleet.remakeNewThread(with: chat.agent, in: Folder(project: project))
-            } label: {
-                if project.id.path == chat.folder?.path {
-                    Label(project.name, systemImage: "checkmark")
-                } else {
-                    Text(project.name)
-                }
             }
         }
-        if !folders.isEmpty { Divider() }
-        Button("Other Folder…", systemImage: "folder.badge.plus") { onOtherFolder(chat.agent) }
+        let other = MenuChoice(id: "other-folder", title: "Other Folder…", symbol: "folder.badge.plus") {
+            onOtherFolder(chat.agent)
+        }
+        return [listed, [other]]
     }
-}
 
-/// The Mac chip's menu: the Macs a new thread can start on, by the names their tabs show,
-/// in their order (`Fleet.macsForNewThread`), as the folder chip's lists its folders.
-private struct MacChoices: View {
-    let fleet: Fleet
-    let chat: ThreadController
-
-    var body: some View {
-        ForEach(fleet.macsForNewThread, id: \.id) { host in
-            Button {
+    /// The Mac chip's menu: the Macs a new thread can start on, by the names their tabs
+    /// show, in their order (`Fleet.macsForNewThread`), as the folder chip's lists its
+    /// folders.
+    static func macChoices(fleet: Fleet, chat: ThreadController) -> [[MenuChoice]] {
+        [fleet.macsForNewThread.map { host in
+            MenuChoice(
+                id: "host:\(host.id)",
+                title: host.host.name,
+                symbol: host.id == chat.agent.id.host ? "checkmark" : nil
+            ) {
                 fleet.remakeNewThread(on: host.id)
-            } label: {
-                if host.id == chat.agent.id.host {
-                    Label(host.host.name, systemImage: "checkmark")
-                } else {
-                    Text(host.host.name)
-                }
             }
-        }
+        }]
     }
 }
