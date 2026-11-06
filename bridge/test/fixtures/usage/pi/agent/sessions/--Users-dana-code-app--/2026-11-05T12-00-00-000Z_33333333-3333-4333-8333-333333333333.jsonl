@@ -1,0 +1,5 @@
+{"type":"session","version":3,"id":"33333333-3333-4333-8333-333333333333","timestamp":"2026-11-05T12:00:00.000Z","cwd":"/Users/dana/code/app"}
+{"type":"model_change","id":"m0000001","parentId":null,"timestamp":"2026-11-05T12:00:00.100Z","provider":"anthropic","modelId":"claude-sonnet-5-5"}
+{"type":"message","id":"u0000001","parentId":"m0000001","timestamp":"2026-11-05T12:00:01.000Z","message":{"role":"user","content":[{"type":"text","text":"Rename the file"}],"timestamp":1793880001000}}
+{"type":"message","id":"a0000001","parentId":"u0000001","timestamp":"2026-11-05T12:00:05.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Done."}],"api":"anthropic-messages","provider":"anthropic","model":"claude-sonnet-5-5","usage":{"input":12,"output":80,"cacheRead":2000,"cacheWrite":500,"reasoning":30,"totalTokens":2592,"cost":{"total":0}},"stopReason":"stop","timestamp":1793880005000,"responseId":"resp_dana_1"}}
+{"type":"compaction","id":"c0000001","parentId":"a0000001","timestamp":"2026-11-05T12:10:00.000Z","summary":"Renamed.","usage":{"input":900,"output":100,"cacheRead":0,"cacheWrite":0}}

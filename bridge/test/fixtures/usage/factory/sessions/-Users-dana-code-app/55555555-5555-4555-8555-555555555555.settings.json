@@ -1,0 +1,20 @@
+{
+  "model": "claude-opus-5-5",
+  "reasoningEffort": "high",
+  "tokenUsage": {
+    "inputTokens": 40,
+    "outputTokens": 900,
+    "cacheCreationTokens": 3000,
+    "cacheReadTokens": 50000,
+    "thinkingTokens": 200,
+    "factoryCredits": 1000
+  },
+  "inclusiveTokenUsage": {
+    "inputTokens": 90,
+    "outputTokens": 1900,
+    "cacheCreationTokens": 6000,
+    "cacheReadTokens": 90000,
+    "thinkingTokens": 400
+  },
+  "providerLock": "anthropic"
+}
