@@ -29,7 +29,7 @@ struct ModeChip: View {
                 label(named: false)
             }
         }
-        .buttonStyle(.plain)
+        .dropdownChipStyle { isPresented = true }
         .accessibilityLabel("Mode")
         .accessibilityValue(mode.pickerTitle(for: mode.mode))
         .accessibilityHint("Changes how much the agent asks before acting, for this thread")

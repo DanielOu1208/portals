@@ -56,7 +56,7 @@ struct ModelChip: View {
             .frame(height: height)
             .contentShape(.rect)
         }
-        .buttonStyle(.plain)
+        .dropdownChipStyle { isPresented = true }
         .accessibilityLabel("Model")
         .accessibilityValue([catalog.shortName(of: setting), shownLevel?.title].compactMap(\.self).joined(separator: ", "))
         .accessibilityHint("Changes the model and how hard it thinks, for this thread")
@@ -198,13 +198,29 @@ private struct ModelList: View {
     @State private var query = ""
     @FocusState private var isSearching: Bool
     @State private var position = ScrollPosition(idType: String.self)
+    /// Every row is there, not only those down to the model in use (`split(_:opensCut:)`).
+    @State private var showsAll = false
+    /// VoiceOver goes through the rows one by one: it gets them all from the start.
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     /// Rows shown at once before the list scrolls: half a row more shows that it does.
     @ScaledMetric(relativeTo: .body) private var scrollingHeight: CGFloat = 4.5 * 44
+    /// About how high a model's row and a provider's name are, for the room the rows still
+    /// to come keep under a list that opens cut.
+    @ScaledMetric(relativeTo: .body) private var rowEstimate: CGFloat = 44
+    @ScaledMetric(relativeTo: .footnote) private var headerEstimate: CGFloat = 32
 
     /// The most rows shown whole, without a search field or scrolling.
     private static let rowsShownWhole = 5
     /// The most rows, headers included, laid out at once rather than lazily.
     private static let rowsLaidOutAtOnce = 400
+    /// Rows past the model in use there from the start: more than the half of the
+    /// list in sight under it.
+    private static let rowsPastCurrent = 8
+    /// How long after the popover opens the rest of the list comes: once the system's
+    /// opening animation is done, so laying the rest out does not catch it mid-way. That
+    /// animation took about 250 ms on a Mac and about 450 ms to settle on the iPhone
+    /// simulator (2026-11-06), whose grow-in starts later after the tap.
+    private static let restAfter: Duration = Platform.isMac ? .milliseconds(400) : .milliseconds(700)
 
     init(catalog: ModelCatalog, setting: ModelSetting, onPick: @escaping (_ model: String, _ provider: String) -> Void) {
         self.catalog = catalog
@@ -232,7 +248,7 @@ private struct ModelList: View {
                     // for that is still laid out lazily.
                     let shown = providers
                     if shown.reduce(0, { $0 + 1 + $1.models.count }) <= Self.rowsLaidOutAtOnce {
-                        VStack(alignment: .leading, spacing: 0) { rows(of: shown) }
+                        VStack(alignment: .leading, spacing: 0) { rows(of: shown, opensCut: true) }
                             .scrollTargetLayout()
                     } else {
                         LazyVStack(alignment: .leading, spacing: 0) { rows(of: shown) }
@@ -248,11 +264,22 @@ private struct ModelList: View {
                 .onAppear {
                     if let current { position.scrollTo(id: current, anchor: .center) }
                 }
+                .task {
+                    try? await Task.sleep(for: Self.restAfter)
+                    showsAll = true
+                }
+                // A scroll by hand before the rest has come brings it at once, rather than
+                // reach the room kept for it empty.
+                .onScrollPhaseChange { _, phase in
+                    if phase != .idle, phase != .animating { showsAll = true }
+                }
                 // What the search leaves is shown from its top: kept centred where the
                 // model in use was, the first matches could be above the rows in sight.
                 // The search cleared, the whole list is back on the model in use, as it
                 // opened.
                 .onChange(of: query) {
+                    // Whatever it leaves, all of it.
+                    showsAll = true
                     if query.isEmpty, let current {
                         position.scrollTo(id: current, anchor: .center)
                     } else {
@@ -313,12 +340,39 @@ private struct ModelList: View {
         }
     }
 
+    /// The lines laid out: until the popover is open, those down to a few past the model in
+    /// use, which it opens on; the rest come under them a moment later, where they move
+    /// nothing in sight. Three hundred rows took about 85 ms to lay out on a Mac
+    /// (2026-11-06, a bench host with 300 models), all of it before the popover could
+    /// show anything; the model in use is near the top of most lists (its provider first).
+    /// Only a list laid out at once opens cut (`opensCut`): a lazy one lays out only what
+    /// is in sight anyway. The lines not laid out yet are `rest`, whose room is kept.
+    private func split(_ all: [Line], opensCut: Bool) -> (shown: [Line], rest: [Line]) {
+        guard opensCut, !showsAll, !voiceOverEnabled, scrolls, let current,
+              let index = all.firstIndex(where: { $0.id == current }) else {
+            return (all, [])
+        }
+        let end = min(all.count, index + 1 + Self.rowsPastCurrent)
+        return (Array(all[..<end]), Array(all[end...]))
+    }
+
+    /// About how high the lines not laid out yet will be.
+    private func height(of rest: [Line]) -> CGFloat {
+        rest.reduce(0) { total, line in
+            switch line {
+            case .provider: total + headerEstimate
+            case .model: total + rowEstimate
+            }
+        }
+    }
+
     @ViewBuilder
-    private func rows(of providers: [ModelProvider]) -> some View {
+    private func rows(of providers: [ModelProvider], opensCut: Bool = false) -> some View {
+        let (shown, rest) = split(lines(of: providers), opensCut: opensCut)
         // One ForEach of lines, each with an id of its own, for the scroll to the model in
         // use: a scroll view goes by its stack's ForEach ids, not by ids put on the views
         // of a ForEach inside another.
-        ForEach(lines(of: providers)) { line in
+        ForEach(shown) { line in
             switch line {
             case let .provider(provider):
                 Text(provider.name)
@@ -331,6 +385,14 @@ private struct ModelList: View {
             case let .model(model, provider):
                 row(model, in: provider)
             }
+        }
+        // The room of the rows still to come, so the list is as long as it will be from the
+        // start: a quick scroll found a false end under the few rows laid out, and the
+        // scroll bar changed size when the rest came (2026-11-06, Codex's review of #46).
+        if !rest.isEmpty {
+            Color.clear
+                .frame(height: height(of: rest))
+                .accessibilityHidden(true)
         }
         if providers.isEmpty {
             Text("No model matches.")
