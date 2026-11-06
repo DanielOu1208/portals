@@ -198,6 +198,8 @@ private struct ModelList: View {
     @State private var query = ""
     @FocusState private var isSearching: Bool
     @State private var position = ScrollPosition(idType: String.self)
+    /// Every row is there, not only those down to the model in use (`rows(of:)`).
+    @State private var showsAll = false
     /// Rows shown at once before the list scrolls: half a row more shows that it does.
     @ScaledMetric(relativeTo: .body) private var scrollingHeight: CGFloat = 4.5 * 44
 
@@ -205,6 +207,11 @@ private struct ModelList: View {
     private static let rowsShownWhole = 5
     /// The most rows, headers included, laid out at once rather than lazily.
     private static let rowsLaidOutAtOnce = 400
+    /// Rows past the model in use there from the start: more than the half of the
+    /// list in sight under it.
+    private static let rowsPastCurrent = 8
+    /// How long after the popover opens the rest of the list comes.
+    private static let restAfter: Duration = .milliseconds(400)
 
     init(catalog: ModelCatalog, setting: ModelSetting, onPick: @escaping (_ model: String, _ provider: String) -> Void) {
         self.catalog = catalog
@@ -247,6 +254,11 @@ private struct ModelList: View {
                 .scrollPosition($position, anchor: .center)
                 .onAppear {
                     if let current { position.scrollTo(id: current, anchor: .center) }
+                }
+                .task {
+                    // Once the system's opening animation (about 250 ms on a Mac) is done.
+                    try? await Task.sleep(for: Self.restAfter)
+                    showsAll = true
                 }
                 // What the search leaves is shown from its top: kept centred where the
                 // model in use was, the first matches could be above the rows in sight.
@@ -313,12 +325,25 @@ private struct ModelList: View {
         }
     }
 
+    /// The lines laid out: until the popover is open, those down to a few past the model in
+    /// use, which it opens on; the rest come under them a moment later, where they move
+    /// nothing in sight. Three hundred rows took about 85 ms to lay out on a Mac
+    /// (2026-11-06, a bench host with 300 models), all of it before the popover could
+    /// show anything; the model in use is near the top of most lists (its provider first).
+    private func shownLines(of providers: [ModelProvider]) -> [Line] {
+        let all = lines(of: providers)
+        guard !showsAll, scrolls, let current, let index = all.firstIndex(where: { $0.id == current }) else {
+            return all
+        }
+        return Array(all.prefix(index + 1 + Self.rowsPastCurrent))
+    }
+
     @ViewBuilder
     private func rows(of providers: [ModelProvider]) -> some View {
         // One ForEach of lines, each with an id of its own, for the scroll to the model in
         // use: a scroll view goes by its stack's ForEach ids, not by ids put on the views
         // of a ForEach inside another.
-        ForEach(lines(of: providers)) { line in
+        ForEach(shownLines(of: providers)) { line in
             switch line {
             case let .provider(provider):
                 Text(provider.name)
