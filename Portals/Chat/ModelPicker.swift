@@ -198,7 +198,7 @@ private struct ModelList: View {
     @State private var query = ""
     @FocusState private var isSearching: Bool
     @State private var position = ScrollPosition(idType: String.self)
-    /// Every row is there, not only those down to the model in use (`rows(of:)`).
+    /// Every row is there, not only those down to the model in use (`shownLines(of:)`).
     @State private var showsAll = false
     /// Rows shown at once before the list scrolls: half a row more shows that it does.
     @ScaledMetric(relativeTo: .body) private var scrollingHeight: CGFloat = 4.5 * 44
