@@ -399,7 +399,7 @@ class Lines {
         this.given += piece.length;
         return;
       }
-      if (!this.skipping) {
+      if (!this.skipping && this.carried + end <= longestLine) {
         this.carry.push(piece.subarray(0, end));
         const line = Buffer.concat(this.carry);
         this.lines(line, 0, line.length);
@@ -475,7 +475,7 @@ class Lines {
   }
 
   private give(bytes: Buffer, start: number, end: number): void {
-    if (end <= start || !this.parser.line) return;
+    if (end <= start || end - start > longestLine || !this.parser.line) return;
     let value: unknown;
     try {
       value = JSON.parse(bytes.toString("utf8", start, end));
