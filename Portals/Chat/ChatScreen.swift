@@ -557,11 +557,14 @@ struct ChatScreen: View {
             // answer, and the chat glided to keep its end in view each time (2026-10-28: "it should not cause the chat to move as it is an overlay"). Hung
             // over the bar's top from inside it, it could not be touched.
             .overlay(alignment: .bottom) {
-                composerMenu
-                    .padding(.horizontal, composerMargin)
-                    .padding(.bottom, Theme.grid)
-                    .chatColumn()
-                    .animation(.easeInOut(duration: 0.15), value: composerMenuShown)
+                let margin = composerMargin
+                DraftReader {
+                    composerMenu
+                        .padding(.horizontal, margin)
+                        .padding(.bottom, Theme.grid)
+                        .chatColumn()
+                        .animation(.easeInOut(duration: 0.15), value: composerMenuShown)
+                }
             }
             .safeAreaBar(edge: .bottom) {
                 VStack(spacing: Theme.grid) {
@@ -601,7 +604,7 @@ struct ChatScreen: View {
                             }
                             .transition(.opacity)
                         }
-                        composer
+                        DraftReader { composer }
                             .disabled(chat.isSendingMessageEdit || chat.isPreparingMessageEdit || isWorkingOnMessage)
                     }
                 }
@@ -2159,4 +2162,16 @@ final class TintlessBlurView: UIVisualEffectView {
         super.traitCollectionDidChange(previous)
         setNeedsLayout()
     }
+}
+
+/// Where a chat's draft is read: what reads it (the composer, and the menu over it of what
+/// is typed) is worked out in this view's body, not in the chat screen's, so that a key
+/// typed works out those again and not the whole chat screen with its transcript and bars
+/// (2026-11-06: "look around generally for what things are slow and can be sped up
+/// cheaply"; scripts/type-bench.sh). Made again with the chat screen, so nothing it shows
+/// is older than the screen.
+private struct DraftReader<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View { content() }
 }
