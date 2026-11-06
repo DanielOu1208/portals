@@ -1,0 +1,21 @@
+{
+  // Type checking only, as in relay/: Node runs the tests by stripping the types, and
+  // wrangler bundles src/ for the Worker. The Worker uses only what both have (fetch,
+  // Request, Response, crypto.subtle, atob), so the tests run the code the Worker runs.
+  "compilerOptions": {
+    "target": "es2024",
+    "lib": ["es2024"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["node"],
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "strict": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true
+  },
+  "include": ["src", "test"]
+}

@@ -1,0 +1,28 @@
+// The anonymous totals as a Cloudflare Worker, apart from portals-relay so it cannot touch
+// it; stats/README.md says how to deploy it and close its page with Cloudflare Access.
+{
+  "name": "portals-stats",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-09-01",
+  // Served at https://portals-stats.danielou1208.workers.dev only: no preview address per version.
+  "workers_dev": true,
+  "preview_urls": false,
+  "vars": {
+    // The Access team's domain ("<team>.cloudflareaccess.com") and the Access application's
+    // AUD tag. While either is empty the Worker takes POST /v1/day and refuses everything else.
+    "ACCESS_TEAM_DOMAIN": "",
+    "ACCESS_AUD": ""
+  },
+  "d1_databases": [
+    // Made with `wrangler d1 create portals-stats`; its id goes here before the first deploy.
+    { "binding": "DB", "database_name": "portals-stats", "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "migrations" }
+  ],
+  "ratelimits": [
+    // Days sent per caller's address. A host sends at most 7 days at once, and a few hosts
+    // can share an address. A namespace_id is any number unique within the account: the
+    // relay has 1801 to 1803.
+    { "name": "DAY_LIMIT", "namespace_id": "1901", "simple": { "limit": 60, "period": 60 } }
+  ],
+  // Cloudflare's request logs would keep each caller's address; the Worker logs nothing.
+  "observability": { "enabled": false }
+}
