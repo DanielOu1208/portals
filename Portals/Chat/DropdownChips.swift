@@ -240,6 +240,15 @@ final class MenuChipUIButton: UIButton {
     /// menu at a time.
     private var isOpen = false
 
+    /// What the chip shows (the host's or the folder's name), which a pop-up button's
+    /// value is: set as a property, a Mac's button left it out of what assistive apps read.
+    var shownValue: String?
+
+    override var accessibilityValue: String? {
+        get { shownValue }
+        set { shownValue = newValue }
+    }
+
     func setOpen(_ open: Bool) {
         guard open != isOpen else { return }
         isOpen = open
