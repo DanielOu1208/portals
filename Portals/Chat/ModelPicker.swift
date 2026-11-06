@@ -198,10 +198,16 @@ private struct ModelList: View {
     @State private var query = ""
     @FocusState private var isSearching: Bool
     @State private var position = ScrollPosition(idType: String.self)
-    /// Every row is there, not only those down to the model in use (`shownLines(of:)`).
+    /// Every row is there, not only those down to the model in use (`split(_:opensCut:)`).
     @State private var showsAll = false
+    /// VoiceOver goes through the rows one by one: it gets them all from the start.
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     /// Rows shown at once before the list scrolls: half a row more shows that it does.
     @ScaledMetric(relativeTo: .body) private var scrollingHeight: CGFloat = 4.5 * 44
+    /// About how high a model's row and a provider's name are, for the room the rows still
+    /// to come keep under a list that opens cut.
+    @ScaledMetric(relativeTo: .body) private var rowEstimate: CGFloat = 44
+    @ScaledMetric(relativeTo: .footnote) private var headerEstimate: CGFloat = 32
 
     /// The most rows shown whole, without a search field or scrolling.
     private static let rowsShownWhole = 5
@@ -262,11 +268,18 @@ private struct ModelList: View {
                     try? await Task.sleep(for: Self.restAfter)
                     showsAll = true
                 }
+                // A scroll by hand before the rest has come brings it at once, rather than
+                // reach the room kept for it empty.
+                .onScrollPhaseChange { _, phase in
+                    if phase != .idle, phase != .animating { showsAll = true }
+                }
                 // What the search leaves is shown from its top: kept centred where the
                 // model in use was, the first matches could be above the rows in sight.
                 // The search cleared, the whole list is back on the model in use, as it
                 // opened.
                 .onChange(of: query) {
+                    // Whatever it leaves, all of it.
+                    showsAll = true
                     if query.isEmpty, let current {
                         position.scrollTo(id: current, anchor: .center)
                     } else {
@@ -333,21 +346,33 @@ private struct ModelList: View {
     /// (2026-11-06, a bench host with 300 models), all of it before the popover could
     /// show anything; the model in use is near the top of most lists (its provider first).
     /// Only a list laid out at once opens cut (`opensCut`): a lazy one lays out only what
-    /// is in sight anyway.
-    private func shownLines(of providers: [ModelProvider], opensCut: Bool) -> [Line] {
-        let all = lines(of: providers)
-        guard opensCut, !showsAll, scrolls, let current, let index = all.firstIndex(where: { $0.id == current }) else {
-            return all
+    /// is in sight anyway. The lines not laid out yet are `rest`, whose room is kept.
+    private func split(_ all: [Line], opensCut: Bool) -> (shown: [Line], rest: [Line]) {
+        guard opensCut, !showsAll, !voiceOverEnabled, scrolls, let current,
+              let index = all.firstIndex(where: { $0.id == current }) else {
+            return (all, [])
         }
-        return Array(all.prefix(index + 1 + Self.rowsPastCurrent))
+        let end = min(all.count, index + 1 + Self.rowsPastCurrent)
+        return (Array(all[..<end]), Array(all[end...]))
+    }
+
+    /// About how high the lines not laid out yet will be.
+    private func height(of rest: [Line]) -> CGFloat {
+        rest.reduce(0) { total, line in
+            switch line {
+            case .provider: total + headerEstimate
+            case .model: total + rowEstimate
+            }
+        }
     }
 
     @ViewBuilder
     private func rows(of providers: [ModelProvider], opensCut: Bool = false) -> some View {
+        let (shown, rest) = split(lines(of: providers), opensCut: opensCut)
         // One ForEach of lines, each with an id of its own, for the scroll to the model in
         // use: a scroll view goes by its stack's ForEach ids, not by ids put on the views
         // of a ForEach inside another.
-        ForEach(shownLines(of: providers, opensCut: opensCut)) { line in
+        ForEach(shown) { line in
             switch line {
             case let .provider(provider):
                 Text(provider.name)
@@ -360,6 +385,14 @@ private struct ModelList: View {
             case let .model(model, provider):
                 row(model, in: provider)
             }
+        }
+        // The room of the rows still to come, so the list is as long as it will be from the
+        // start: a quick scroll found a false end under the few rows laid out, and the
+        // scroll bar changed size when the rest came (2026-11-06, Codex's review of #46).
+        if !rest.isEmpty {
+            Color.clear
+                .frame(height: height(of: rest))
+                .accessibilityHidden(true)
         }
         if providers.isEmpty {
             Text("No model matches.")
