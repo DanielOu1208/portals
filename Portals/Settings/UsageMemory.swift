@@ -23,6 +23,20 @@ final class UsageMemory {
 
     private(set) var hosts: [HostID: HostUsage] = [:]
 
+    /// Moves on whenever a host's usage changed, so the page's report is built again only then.
+    @ObservationIgnored private var revision = 0
+    @ObservationIgnored private var built: (key: ReportKey, report: UsageReport)?
+
+    private struct ReportKey: Equatable {
+        var revision: Int
+        var range: UsageRange
+        var host: HostID?
+        var sources: [HostID]
+        var names: [String]
+        /// The minute it was built in: the 24 hours move on with the clock.
+        var minute: Int
+    }
+
     /// Whether any host is reading its whole history for the first time.
     var isScanning: Bool {
         hosts.values.contains { $0.history?.scan.scanning == true }
@@ -33,6 +47,21 @@ final class UsageMemory {
         fleet.hosts.compactMap { host in
             hosts[host.id]?.history.map { UsageSource(host: host.id, name: host.host.name, history: $0) }
         }
+    }
+
+    /// `sources` added up for `range`, all of them or `host`'s, built again only when an
+    /// answer, the range, the host or the minute changed: the page's body is drawn far more
+    /// often than that (each answer, the chart's own switch, the fleet's changes), and a
+    /// report of 90 days of several hosts takes a while to add up.
+    func report(of sources: [UsageSource], range: UsageRange, host: HostID?, now: Date = .now) -> UsageReport {
+        let key = ReportKey(
+            revision: revision, range: range, host: host, sources: sources.map(\.host), names: sources.map(\.name),
+            minute: Int(now.timeIntervalSince1970 / 60)
+        )
+        if let built, built.key == key { return built.report }
+        let report = UsageReport(sources: sources, range: range, host: host, now: now)
+        built = (key, report)
+        return report
     }
 
     /// Asks every connected host of `fleet` again, all at once, until the task is cancelled:
@@ -54,35 +83,42 @@ final class UsageMemory {
             return (host.id, provider)
         }
         let days = UsageRange.askedDays()
-        await withTaskGroup(of: (HostID, HostUsage).self) { group in
+        await withTaskGroup(of: (HostID, HostUsage?).self) { group in
             for (id, provider) in asked {
                 let kept = hosts[id] ?? HostUsage()
                 group.addTask { (id, await Self.ask(provider, days: days, keeping: kept)) }
             }
             for await (id, usage) in group {
-                var usage = usage
+                // Cancelled (the page went, or a host came or went): what came back says
+                // nothing of the host, and what it said before stays.
+                guard var usage, !Task.isCancelled else { continue }
                 usage.isSettingTelemetry = hosts[id]?.isSettingTelemetry ?? false
+                if usage.history != hosts[id]?.history { revision += 1 }
                 hosts[id] = usage
             }
         }
     }
 
-    private nonisolated static func ask(_ provider: any UsageHistoryProviding, days: (from: String, to: String), keeping kept: HostUsage) async -> HostUsage {
+    /// `kept` brought up to date with what the host says; nil when the ask was cancelled.
+    private nonisolated static func ask(_ provider: any UsageHistoryProviding, days: (from: String, to: String), keeping kept: HostUsage) async -> HostUsage? {
         var usage = kept
         guard await provider.readsUsageHistory != false else {
-            return HostUsage(keepsUsage: false)
+            return Task.isCancelled ? nil : HostUsage(keepsUsage: false)
         }
         usage.keepsUsage = true
         do {
             usage.history = try await provider.usageHistory(from: days.from, to: days.to)
             usage.problem = nil
         } catch {
+            // A request cancelled with its task fails too, but that is no problem of the host's.
+            if error is CancellationError || Task.isCancelled { return nil }
             usage.problem = error.localizedDescription
         }
-        if await provider.sharesUsageTotals == true {
-            usage.telemetry = try? await provider.usageTelemetry(enabled: nil)
+        // A switch that could not be read this time is shown as it was last read.
+        if await provider.sharesUsageTotals == true, let telemetry = try? await provider.usageTelemetry(enabled: nil) {
+            usage.telemetry = telemetry
         }
-        return usage
+        return Task.isCancelled ? nil : usage
     }
 
     /// Turns `host`'s anonymous totals on or off; what the host answers is what is shown.

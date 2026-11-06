@@ -3,17 +3,17 @@ import SwiftUI
 
 // MARK: Usage
 
-/// What all coding on each Mac spends (2026-11-06: "track token usage over time and get
+/// What all coding on each host spends (2026-11-06: "track token usage over time and get
 /// more detailed insights on spending limits"): every host's usage, read from each agent's
-/// own history there, added up for a range, on all Macs or one (`UsageReport`). Tiles, the
+/// own history there, added up for a range, on all hosts or one (`UsageReport`). Tiles, the
 /// tokens by agent as lines, the dollars by type of token, the plans' limits with their
-/// pace, lists by model, folder and Mac, and each host's switch for its anonymous totals.
+/// pace, lists by model, folder and host, and each host's switch for its anonymous totals.
 struct UsageSettings: View {
     let fleet: Fleet
 
     private let memory = UsageMemory.shared
     @State private var range = UsageRange.week
-    /// One Mac's usage, or nil for all of them.
+    /// One host's usage, or nil for all of them.
     @State private var picked: HostID?
     /// The chart over an average day of the range, not day by day.
     @State private var overADay = false
@@ -22,7 +22,7 @@ struct UsageSettings: View {
     var body: some View {
         let sources = memory.sources(in: fleet)
         let shown = picked.flatMap { id in sources.contains { $0.host == id } ? id : nil }
-        let report = UsageReport(sources: sources, range: range, host: shown)
+        let report = memory.report(of: sources, range: range, host: shown)
         let colors = UsageColors.colors(for: report.agents, in: fleet)
         ScrollViewReader { scroller in
             Form {
@@ -57,7 +57,7 @@ struct UsageSettings: View {
                             .formHeader()
                     } footer: {
                         Text(overADay
-                            ? "How an average day of the \(range == .day ? "last 24 hours" : "last \(range.days) days") spreads over its hours, by the hours of each Mac's own day."
+                            ? "How an average day of the \(range == .day ? "last 24 hours" : "last \(range.days) days") spreads over its hours, by the hours of each host's own day."
                             : "Every type of token added: input, output and the cache read and written.")
                             .formFooter()
                     }
@@ -125,7 +125,7 @@ struct UsageSettings: View {
         let isSeen: Bool
     }
 
-    // MARK: Range and Mac
+    // MARK: Range and host
 
     @ViewBuilder
     private func choices(sources: [UsageSource]) -> some View {
@@ -139,8 +139,8 @@ struct UsageSettings: View {
             .labelsHidden()
             .accessibilityIdentifier("usage-range")
             if sources.count > 1 {
-                Picker("Mac", selection: $picked) {
-                    Text("All Macs").tag(HostID?.none)
+                Picker("Host", selection: $picked) {
+                    Text("All hosts").tag(HostID?.none)
                     ForEach(sources, id: \.host) { source in
                         Text(source.name).tag(Optional(source.host))
                     }
@@ -186,7 +186,10 @@ struct UsageSettings: View {
             })
         }
         if !host.isConnected {
-            return AnyView(Text("\(name) is not connected; its usage shows once it is.")
+            // What it said before it went is still counted: say so, rather than that it is not.
+            return AnyView(Text(usage?.history == nil
+                ? "\(name) is not connected; its usage shows once it is."
+                : "\(name) is not connected; its usage is as it last said.")
                 .foregroundStyle(.secondary))
         }
         if let problem = usage?.problem {
@@ -207,18 +210,18 @@ struct UsageSettings: View {
     private func countedText(sources: [UsageSource]) -> String {
         let counted = Set(sources.flatMap(\.history.agents))
         guard !counted.isEmpty else {
-            return "All coding on each Mac is counted, in Portals, the terminal and other apps, from each agent's own history there."
+            return "All coding on each host is counted, in Portals, the terminal and other apps, from each agent's own history there."
         }
         let names = UsageAgentName.order.filter(counted.contains).map(UsageAgentName.of)
             + counted.subtracting(UsageAgentName.order).sorted().map(UsageAgentName.of)
         let missing = UsageAgentName.known.filter { !counted.contains($0) }.map(UsageAgentName.of)
         let rest = missing.isEmpty ? "" : " Not counted yet: \(missing.formatted(.list(type: .and)))."
-        return "Counts \(names.formatted(.list(type: .and))), in Portals, the terminal and other apps, from each agent's own history on the Mac.\(rest)"
+        return "Counts \(names.formatted(.list(type: .and))), in Portals, the terminal and other apps, from each agent's own history on the host.\(rest)"
     }
 
     private func emptyText(sources: [UsageSource]) -> String {
-        if fleet.hosts.isEmpty { return "Add a Mac in Net to see what its agents spend." }
-        if sources.isEmpty { return "Usage shows once a Mac that keeps it is connected." }
+        if fleet.hosts.isEmpty { return "Add a host in Net to see what its agents spend." }
+        if sources.isEmpty { return "Usage shows once a host that keeps it is connected." }
         return range == .day ? "No tokens spent in the last 24 hours." : "No tokens spent in the last \(range.days) days."
     }
 
@@ -236,7 +239,7 @@ struct UsageSettings: View {
                 Text("Limits")
                     .formHeader()
             } footer: {
-                Text("Each plan's windows as the agent last told its Mac. The mark is where an even pace would be by now.")
+                Text("Each plan's windows as the agent last told its host. The mark is where an even pace would be by now.")
                     .formFooter()
             }
             .settingsRows()
@@ -251,7 +254,7 @@ struct UsageSettings: View {
         sliceSection("By model", report.byModel) { _ in .accentColor }
         sliceSection("By folder", report.byFolder, help: \.id) { _ in .accentColor }
         if showsMacs {
-            sliceSection("By Mac", report.byHost) { _ in .accentColor }
+            sliceSection("By host", report.byHost) { _ in .accentColor }
         }
     }
 
@@ -307,7 +310,7 @@ struct UsageSettings: View {
                 Text("Anonymous totals")
                     .formHeader()
             } footer: {
-                Text("Once a day each Mac sends the totals of what went through Portals: tokens by agent and model, turns, and how many devices connected. Never prompts, titles, paths, folder names or account details.")
+                Text("Once a day each host sends the totals of what went through Portals: tokens by agent and model, turns, and how many devices connected. Never prompts, titles, paths, folder names or account details.")
                     .formFooter()
             }
             .settingsRows()
