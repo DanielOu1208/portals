@@ -72,7 +72,7 @@ struct NewThreadPickers: View {
                 chat.agent.displayName
             }
         }
-        .buttonStyle(.plain)
+        .dropdownChipStyle { choosesAgent = true }
         .tip("Choose the Agent")
         .accessibilityLabel("Agent")
         .accessibilityValue(chat.agent.displayName)

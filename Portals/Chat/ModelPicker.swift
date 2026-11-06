@@ -56,7 +56,7 @@ struct ModelChip: View {
             .frame(height: height)
             .contentShape(.rect)
         }
-        .buttonStyle(.plain)
+        .dropdownChipStyle { isPresented = true }
         .accessibilityLabel("Model")
         .accessibilityValue([catalog.shortName(of: setting), shownLevel?.title].compactMap(\.self).joined(separator: ", "))
         .accessibilityHint("Changes the model and how hard it thinks, for this thread")
