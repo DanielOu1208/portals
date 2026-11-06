@@ -225,9 +225,12 @@ Cloudflare account as `portals-relay` but apart from it, so it cannot touch the 
   the address is the limiter's key only, never stored. No logs (`observability` off), no
   payload in any error.
 - Everything else needs Cloudflare Access: the Worker itself checks the
-  `Cf-Access-Jwt-Assertion` token (RS256, the team's certs, the app's AUD, from vars
+  `Cf-Access-Jwt-Assertion` token (RS256, the team's certs, the app's AUD, from the secrets
   `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD`) and refuses all but `POST /v1/day` when they are not
   set. So the page is closed even before Access is set up.
+- As deployed (2026-11-06): the page at https://stats.portals.build, a custom domain Access
+  covers whole (email-only policy); hosts send to `workers.dev`, which Access does not
+  cover and where the Worker refuses everything but `POST /v1/day`.
 - `GET /` is the page; `GET /api/summary?days=N` its data: by day, daily active users
   (distinct owners), active hosts (distinct installs), weekly and monthly actives, tokens by
   agent and type, dollars, devices by kind (the largest per owner), and the mix of agents,

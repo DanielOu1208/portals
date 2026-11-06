@@ -7,12 +7,13 @@
   // Served at https://portals-stats.danielou1208.workers.dev only: no preview address per version.
   "workers_dev": true,
   "preview_urls": false,
-  "vars": {
-    // The Access team's domain ("<team>.cloudflareaccess.com") and the Access application's
-    // AUD tag. While either is empty the Worker takes POST /v1/day and refuses everything else.
-    "ACCESS_TEAM_DOMAIN": "",
-    "ACCESS_AUD": ""
-  },
+  // The page's own address, which Cloudflare Access covers; workers.dev stays open for hosts'
+  // POST /v1/day, and the Worker refuses everything else there, as it has no Access token.
+  "routes": [{ "pattern": "stats.portals.build", "custom_domain": true }],
+  // ACCESS_TEAM_DOMAIN ("<team>.cloudflareaccess.com") and ACCESS_AUD (the Access
+  // application's AUD tag) are secrets (`wrangler secret put`), so a deploy from this file
+  // never blanks them. While either is unset the Worker takes POST /v1/day and refuses
+  // everything else.
   "d1_databases": [
     // Made with `wrangler d1 create portals-stats`; its id goes here before the first deploy.
     { "binding": "DB", "database_name": "portals-stats", "database_id": "63eae229-bbcb-4b11-9388-05dcb0664cca", "migrations_dir": "migrations" }

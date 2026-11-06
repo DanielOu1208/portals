@@ -47,7 +47,7 @@ each request (`Cf-Access-Jwt-Assertion`); the Worker checks that token itself
 (`src/access.ts`): signed RS256 by one of the team's keys (fetched from
 `https://<team>/cdn-cgi/access/certs` and kept an hour), issued by the team, for this
 application's AUD tag, and not expired. An email header alone is never trusted. While
-`ACCESS_TEAM_DOMAIN` or `ACCESS_AUD` is empty, everything but `POST /v1/day` answers 403,
+`ACCESS_TEAM_DOMAIN` or `ACCESS_AUD` (secrets, below) is unset, everything but `POST /v1/day` answers 403,
 so the page is closed even before Access is set up.
 
 ## Developing
@@ -101,30 +101,32 @@ Everything below runs from `stats/` with wrangler 4.139.0, and needs a yes first
    curl -i https://portals-stats.danielou1208.workers.dev/                         # 403
    ```
 
-5. Close the page with Cloudflare Access. In the Cloudflare dashboard, Zero Trust
-   (setting up a team the first time; the free plan is enough):
+5. Give the page its own address. `wrangler.jsonc`'s `routes` puts the Worker on
+   `stats.portals.build` too (a custom domain on a zone of the same account; the deploy in
+   step 4 makes its DNS record and certificate). Access covers only that address, so
+   `workers.dev` stays open for the hosts' `POST /v1/day`, which carries no Access sign-in;
+   there the Worker refuses everything else, as no Access token comes with it.
 
-   1. Access → Applications → Add an application → Self-hosted. Application domain
-      `portals-stats.danielou1208.workers.dev`, path empty (everything).
+6. Close the page with Cloudflare Access. In the Cloudflare dashboard, Zero Trust
+   (setting up a team the first time; the free plan is enough, though Cloudflare asks for
+   a card on file):
+
+   1. Access controls → Applications → Add an application → Self-hosted and private →
+      Public DNS. Public hostname `stats` . `portals.build`, path empty.
    2. A policy, action Allow, with an Include rule Emails → the maintainer's email only.
-   3. A second policy, action Bypass, Include Everyone, for the hosts' route: hosts carry
-      no Access sign-in, so `/v1/day` must not be held up by Access. Either add a second
-      application for the same domain with the path `v1/day` and only that Bypass policy
-      (the more specific path wins), or leave Access off that path some other way. The
-      Worker checks the token itself on every other route, so a bypass there opens nothing
-      else.
-   4. Save, and copy the application's **AUD tag** (the application's Overview, or
-      Additional settings), and the team's domain, `<team>.cloudflareaccess.com`
-      (Settings → Custom pages, or the sign-in page's address).
+   3. Create, then read the application's **AUD tag** and the team's domain,
+      `<team>.cloudflareaccess.com`. Both are in the address the page redirects to before
+      sign-in (`curl -sI -H 'Accept: text/html' https://stats.portals.build/`: the host of
+      `location`, and its `kid`).
 
-6. Put both in `wrangler.jsonc`'s `vars` (`ACCESS_TEAM_DOMAIN` without `https://`) and
-   deploy again:
+7. Give the Worker both as secrets, so a deploy from `wrangler.jsonc` never blanks them
+   (`ACCESS_TEAM_DOMAIN` without `https://`):
 
    ```sh
-   npx wrangler@4.139.0 deploy
+   printf %s '<team>.cloudflareaccess.com' | npx wrangler@4.139.0 secret put ACCESS_TEAM_DOMAIN
+   printf %s '<AUD tag>' | npx wrangler@4.139.0 secret put ACCESS_AUD
    ```
 
-   Then open https://portals-stats.danielou1208.workers.dev in a browser: Access asks for
-   the email, sends a code, and shows the page. `POST /v1/day` from step 4 should still
-   answer 400 (not a redirect to the sign-in page): if it is redirected, the bypass in
-   step 5.3 is missing, and hosts' days are being turned away.
+   Then open https://stats.portals.build in a browser: Access asks for the email, sends a
+   code, and shows the page. On `workers.dev`, `POST /v1/day` from step 4 still answers
+   400 and the page 403.
