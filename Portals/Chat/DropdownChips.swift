@@ -143,6 +143,11 @@ private struct MacMenuChip<Label: View>: View {
                     identifier: chip.accessibilityIdentifier,
                     isOpen: $isOpen
                 )
+                // A Mac's button puts its menu under its bezel, centred in it, which came out
+                // 2 points lower than SwiftUI's menu was, its top over the chip's bottom edge
+                // (measured from the pixels): reaching 4 points over the chip, its centre is
+                // 2 points higher, and the whole chip still takes the click.
+                .padding(.top, -4)
             }
     }
 }
