@@ -80,7 +80,10 @@ class DroidParser implements FileParser {
     counts.cacheRead = rise[2];
     counts.cacheWrite = rise[3];
     counts.reasoning = Math.min(rise[4], rise[1]);
-    counts.requests = 1;
+    // Droid keeps a running total, not its requests: a rise can hold one request or a
+    // hundred, so none are counted rather than a number that means nothing (2026-11-06:
+    // "for droids, request count, yes, you can hide it").
+    counts.requests = 0;
     const request: ReadRequest = {
       agent: "droid",
       session: this.session,

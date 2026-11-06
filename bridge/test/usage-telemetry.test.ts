@@ -132,7 +132,7 @@ test("a day goes exactly as the stats Worker takes it: no folder, Portals' rows 
       row("2026-11-05", { via: "elsewhere", input: 999999, output: 999999, requests: 99 }),
       row("2026-11-05", { agent: "codex", model: "gpt-5.5", folder: "/Users/dana/code/app", input: 1000, output: 500, reasoning: 200, cacheRead: 4000, requests: 3 }),
       // A name the table does not know, and one it knows under a prefix of someone's own.
-      row("2026-11-05", { agent: "droid", model: "custom:dana-secret-model", input: 7, output: 8, requests: 1 }),
+      row("2026-11-05", { agent: "droid", model: "custom:dana-secret-model", input: 7, output: 8, requests: 0 }),
       row("2026-11-05", { agent: "pi", model: "dana-corp/gpt-5.5", input: 10, output: 10, requests: 1 }),
       // Another day.
       row("2026-11-04", { input: 5, output: 5, requests: 1 }),
@@ -156,7 +156,7 @@ test("a day goes exactly as the stats Worker takes it: no folder, Portals' rows 
       usage: [
         { agent: "claude", model: "claude-opus-5-5", requests: 11, input: 120, output: 2030, cache_read: 300000, cache_write: 10000, reasoning: 0, usd: Math.round(opus * 1e6) / 1e6 },
         { agent: "codex", model: "gpt-5.5", requests: 3, input: 1000, output: 500, cache_read: 4000, cache_write: 0, reasoning: 200, usd: Math.round(gpt * 1e6) / 1e6 },
-        { agent: "droid", model: "other", requests: 1, input: 7, output: 8, cache_read: 0, cache_write: 0, reasoning: 0, usd: null },
+        { agent: "droid", model: "other", requests: 0, input: 7, output: 8, cache_read: 0, cache_write: 0, reasoning: 0, usd: null },
         { agent: "pi", model: "gpt-5.5", requests: 1, input: 10, output: 10, cache_read: 0, cache_write: 0, reasoning: 0, usd: Math.round((10 * 5e-6 + 10 * 30e-6) * 1e6) / 1e6 },
       ],
     });

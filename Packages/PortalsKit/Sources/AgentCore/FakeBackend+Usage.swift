@@ -133,7 +133,7 @@ extension FakeBackend {
         let cacheRead = max(Int(tokens) - input - output - cacheWrite, 0)
         let counts = UsageTokens(
             input: input, output: output, cacheRead: cacheRead, cacheWrite: cacheWrite, cacheWrite1h: agent == "claude" ? cacheWrite / 2 : 0,
-            reasoning: output / 3, requests: max(Int(tokens / 60000), 1)
+            reasoning: output / 3, requests: agent == "droid" ? 0 : max(Int(tokens / 60000), 1)  // Droid keeps no requests, as the host reads it
         )
         let usd = model.price.map { price in
             (Double(input) * price.input + Double(output) * price.output + Double(cacheRead) * price.cacheRead + Double(cacheWrite) * price.cacheWrite) / 1_000_000

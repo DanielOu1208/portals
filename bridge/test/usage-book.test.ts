@@ -49,7 +49,7 @@ test("the reader reads every agent's history; the resolver says what went throug
     assert.deepEqual(totals(rows, "codex", "portals"), { input: 1750, output: 190, requests: 5 });
     assert.deepEqual(totals(rows, "codex", "elsewhere"), { input: 1000, output: 100, requests: 1 });
     assert.deepEqual(totals(rows, "pi"), { input: 915, output: 200, requests: 3 });
-    assert.deepEqual(totals(rows, "droid"), { input: 40, output: 900, requests: 1 });
+    assert.deepEqual(totals(rows, "droid"), { input: 40, output: 900, requests: 0 });
     assert.ok(!asked.some(([, , , originator]) => originator === "portals-bridge"), "the resolver was asked about a session Codex says Portals started");
     assert.ok(asked.some(([agent, , , originator]) => agent === "codex" && originator === "codex-tui"));
     assert.ok(book.hours("2026-11-05", "2026-11-05").every((row) => row.tokens.length === 24));

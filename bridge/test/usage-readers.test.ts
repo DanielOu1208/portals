@@ -128,7 +128,7 @@ test("Droid: the settings' running total gives its rise at each change, at the t
   const reader = scanner(home);
   const first = await scanOnce(reader);
   assert.deepEqual(first.requests.map((request) => [request.agent, request.session, request.model, request.folder, request.at]), [["droid", "55555555-5555-4555-8555-555555555555", "claude-opus-5-5", folder, Date.parse("2026-11-05T14:30:00Z")]]);
-  assert.deepEqual(sum(first.requests), { input: 40, output: 900, cacheRead: 50000, cacheWrite: 3000, cacheWrite1h: 0, reasoning: 200, requests: 1 });
+  assert.deepEqual(sum(first.requests), { input: 40, output: 900, cacheRead: 50000, cacheWrite: 3000, cacheWrite1h: 0, reasoning: 200, requests: 0 });
   const value = JSON.parse(readFileSync(settings, "utf8"));
   value.tokenUsage = { inputTokens: 50, outputTokens: 1000, cacheCreationTokens: 3000, cacheReadTokens: 60000, thinkingTokens: 250 };
   // Rewritten in place by a rename, as Droid does: another inode, the same session.

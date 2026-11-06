@@ -280,7 +280,8 @@ function draw() {
       return [["Input", compact.format(t.input)], ["Output", compact.format(t.output)], ["Cache read", compact.format(t.cache_read)], ["Cache write", compact.format(t.cache_write)]];
     });
 
-  var mixDetail = function (row) { return whole.format(row.tokens) + " tokens, " + dollars.format(row.usd) + ", " + whole.format(row.requests) + " requests, " + whole.format(row.owners) + " users"; };
+  // Droid sends no requests (it keeps a running total only), so a row without any says none.
+  var mixDetail = function (row) { return whole.format(row.tokens) + " tokens, " + dollars.format(row.usd) + ", " + (row.requests > 0 ? whole.format(row.requests) + " requests, " : "") + whole.format(row.owners) + " users"; };
   bars(document.getElementById("agents"), data.mix.agents.map(function (row) { return Object.assign({ colour: colour(row.name) }, row); }),
     function (row) { return row.tokens; }, function (row) { return compact.format(row.tokens); }, mixDetail);
   var models = data.mix.models.slice();
