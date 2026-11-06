@@ -382,8 +382,9 @@ public enum SidebarSections {
     public static func search(_ query: String, in threads: [ThreadRecord]) -> [ThreadRecord] {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !needle.isEmpty else { return [] }
+        let holds = StandardContains(needle)
         return newestFirst(threads.filter {
-            $0.displayTitle.localizedStandardContains(needle) || ($0.preview?.localizedStandardContains(needle) ?? false)
+            holds.isIn($0.displayTitle) || ($0.preview.map(holds.isIn) ?? false)
         })
     }
 
@@ -392,5 +393,34 @@ public enum SidebarSections {
         threads.enumerated()
             .sorted { $0.element.updatedAt != $1.element.updatedAt ? $0.element.updatedAt > $1.element.updatedAt : $0.offset < $1.offset }
             .map(\.element)
+    }
+}
+
+/// `localizedStandardContains` for one needle over many texts: the same test, with the
+/// locale bridged once rather than for each text. Foundation's `localizedStandardContains`
+/// is `range(of:options: [.caseInsensitive, .diacriticInsensitive], locale: .current)`,
+/// which bridges the locale to `NSLocale` at every call and then asks CoreFoundation, as
+/// this does (`NSString`'s search is non-literal unless asked to be literal). The bridging
+/// was half of what a search of the sidebar cost as each key was typed (2026-11-06,
+/// scripts/type-bench.sh --search).
+public struct StandardContains {
+    private let needle: CFString
+    private let isEmpty: Bool
+    private let locale: CFLocale
+
+    public init(_ needle: String) {
+        self.needle = needle as CFString
+        isEmpty = needle.isEmpty
+        locale = Locale.current as CFLocale
+    }
+
+    /// Whether `text` holds the needle, as `text.localizedStandardContains(needle)` says.
+    public func isIn(_ text: String) -> Bool {
+        guard !isEmpty else { return false }
+        let text = text as CFString
+        let options: CFStringCompareFlags = [.compareCaseInsensitive, .compareDiacriticInsensitive, .compareNonliteral]
+        return CFStringFindWithOptionsAndLocale(
+            text, needle, CFRange(location: 0, length: CFStringGetLength(text)), options, locale, nil
+        )
     }
 }
