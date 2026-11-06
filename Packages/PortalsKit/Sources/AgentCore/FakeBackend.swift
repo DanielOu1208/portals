@@ -92,11 +92,18 @@ public actor FakeBackend: AgentBackend {
     /// opened, then everything played since, which a thread opened again is given, as a
     /// host gives its copy. Every other script keeps nothing.
     private var histories: [ThreadRef.ID: ThreadState] = [:]
+    /// What Settings, Usage is told of this host (`FakeBackend+Usage`).
+    let usageSample: UsageSample
+    /// The host's switch for anonymous totals, as Settings, Usage last set it.
+    var sharesUsage = true
 
-    public init(script: Script = .greeting, host: HostID = HostID(rawValue: "fake"), pace: Duration = .milliseconds(25)) {
+    public init(
+        script: Script = .greeting, host: HostID = HostID(rawValue: "fake"), pace: Duration = .milliseconds(25), usage: UsageSample = UsageSample()
+    ) {
         self.script = script
         self.host = host
         self.pace = pace
+        usageSample = usage
         (connectionStates, stateContinuation) = AsyncStream.makeStream(of: ConnectionState.self)
         if script == .demo { histories = Self.demoHistories(on: host) }
     }
