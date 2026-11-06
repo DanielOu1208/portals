@@ -3,11 +3,15 @@
 # long thread on screen. On scratch copies and a scratch bridge, never the installed app
 # or bridge.
 #
-#   scripts/type-bench.sh [--rounds N] [--port P] [--out DIR] <label>=<built .app> […]
+#   scripts/type-bench.sh [--rounds N] [--port P] [--out DIR] [--threads N] [--search] <label>=<built .app> […]
+#
+# With --search, the keys go into the sidebar's search field instead: "budget" typed and
+# taken out again, key by key (PORTALS_DEBUG_TYPE_BENCH_FIELD=search); --threads 600 then
+# gives the list a size worth searching.
 #
 # Each app is a Release Mac Catalyst build with the launch switches compiled in
 # (SWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG, see scripts/mac-scroll-bench.sh). For every
-# round, and every app in turn (A, B, A, B…): a scratch bridge with 60 threads
+# round, and every app in turn (A, B, A, B…): a scratch bridge with 60 threads (--threads)
 # (scripts/sidebar-bench/bridge.mts; the newest ends with a reply of 20,000 characters),
 # a scratch copy opened in the background on that newest thread (PORTALS_DEBUG_OPEN_PLAN),
 # which then puts 300 letters into its composer one at a time, 80 ms apart, through its
@@ -17,7 +21,7 @@
 set -uo pipefail
 zmodload zsh/datetime
 ROOT=${0:A:h:h}
-ROUNDS=3 PORT=${PORT:-9535}
+ROUNDS=3 PORT=${PORT:-9535} THREADS=60 FIELD=composer
 OUT=/private/tmp/type-bench-$(date +%H%M%S)
 APPS=()
 while (( $# )); do
@@ -25,6 +29,8 @@ while (( $# )); do
     --rounds) ROUNDS=$2; shift 2;;
     --port) PORT=$2; shift 2;;
     --out) OUT=$2; shift 2;;
+    --threads) THREADS=$2; shift 2;;
+    --search) FIELD=search; shift;;
     *=*) APPS+=($1); shift;;
     *) echo "unknown argument $1"; exit 2;;
   esac
@@ -59,7 +65,7 @@ for round in {1..$ROUNDS}; do
     label=${spec%%=*} app=${spec#*=}
     dir=$OUT/$label-$round
     mkdir -p $dir
-    node $ROOT/scripts/sidebar-bench/bridge.mts start $dir/bridge $PORT 60 $PASSWORD 5 8 100 > $dir/bridge.log 2>&1 &
+    node $ROOT/scripts/sidebar-bench/bridge.mts start $dir/bridge $PORT $THREADS $PASSWORD 5 8 100 > $dir/bridge.log 2>&1 &
     bridge_pid=$!
     for _ in {1..200}; do grep -q "listening on" $dir/bridge.log 2>/dev/null && break; sleep 0.1; done
     bundle=com.danielou.portals.type-bench-$label
@@ -67,7 +73,7 @@ for round in {1..$ROUNDS}; do
     [[ -d $copy ]] || $ROOT/scripts/mac-scroll-bench/prepare-app.sh $app $copy $bundle || exit 1
     hosts="[{\"name\":\"Scratch\",\"url\":\"http://127.0.0.1:$PORT\",\"user\":\"sidebar\",\"password\":\"$PASSWORD\"}]"
     open -g -n --env CFFIXED_USER_HOME=$dir/home --env "PORTALS_DEBUG_HOSTS=$hosts" \
-      --env PORTALS_DEBUG_OPEN_PLAN=$(head -1 $dir/bridge/ids.txt) --env PORTALS_DEBUG_TYPE_BENCH=$dir/typed.txt $copy
+      --env PORTALS_DEBUG_OPEN_PLAN=$(head -1 $dir/bridge/ids.txt) --env PORTALS_DEBUG_TYPE_BENCH=$dir/typed.txt --env PORTALS_DEBUG_TYPE_BENCH_FIELD=$FIELD $copy
     for _ in {1..50}; do app_pid=$(pgrep -f "$copy/Contents/MacOS/Portals" | head -1); [[ -n $app_pid ]] && break; sleep 0.2; done
     if ! wait_word $dir/typed.txt typing 60; then
       echo "$label round $round: never started typing"; kill $app_pid; app_pid=""; kill $bridge_pid; bridge_pid=""; continue

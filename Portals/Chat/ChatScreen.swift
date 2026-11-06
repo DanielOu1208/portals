@@ -2106,7 +2106,7 @@ extension ChatScreen {
         #if DEBUG && (targetEnvironment(simulator) || targetEnvironment(macCatalyst))
         guard isShown, !Self.typeBenchRan, let path = DebugLaunch.typeBenchPath else { return }
         Self.typeBenchRan = true
-        isComposing = true
+        if DebugLaunch.typeBenchField != "search" { isComposing = true }
         try? await Task.sleep(for: .seconds(1))
         let note = { (word: String) in
             let line = "\(word) \(ProcessInfo.processInfo.systemUptime)\n"
@@ -2116,18 +2116,30 @@ extension ChatScreen {
                 FileManager.default.createFile(atPath: path, contents: Data(line.utf8))
             }
         }
-        // Through the text view's own input, as the keyboard puts a key in (`insertText`).
-        func editable(in view: UIView) -> UITextView? {
-            if let text = view as? UITextView, text.isEditable, text.isFirstResponder { return text }
-            for sub in view.subviews { if let found = editable(in: sub) { return found } }
+        // Through the field's own input, as the keyboard puts a key in (`insertText`): the
+        // composer's, or with `PORTALS_DEBUG_TYPE_BENCH_FIELD=search` the sidebar's search
+        // field, where a word is typed and taken out again.
+        let inSearch = DebugLaunch.typeBenchField == "search"
+        func field(in view: UIView) -> (UIView & UIKeyInput)? {
+            if inSearch, let field = view as? UITextField, field.placeholder == "Search threads" { return field }
+            if !inSearch, let text = view as? UITextView, text.isEditable, text.isFirstResponder { return text }
+            for sub in view.subviews { if let found = field(in: sub) { return found } }
             return nil
         }
         let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
-        guard let field = windows.lazy.compactMap({ editable(in: $0) }).first else { note("no-field"); return }
+        guard let target = windows.lazy.compactMap({ field(in: $0) }).first else { note("no-field"); return }
+        if inSearch {
+            _ = target.becomeFirstResponder()
+            try? await Task.sleep(for: .seconds(1))
+        }
         note("typing")
-        let letters = Array("the quick brown fox jumps over the lazy dog ")
+        let letters = Array(inSearch ? "budget" : "the quick brown fox jumps over the lazy dog ")
         for index in 0..<300 {
-            field.insertText(String(letters[index % letters.count]))
+            if inSearch, index % 12 >= 6 {
+                target.deleteBackward()
+            } else {
+                target.insertText(String(letters[index % (inSearch ? 12 : letters.count)]))
+            }
             try? await Task.sleep(for: .milliseconds(80))
         }
         note("typed")

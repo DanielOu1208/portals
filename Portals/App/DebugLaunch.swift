@@ -604,6 +604,9 @@ enum DebugLaunch {
     /// write "typing <uptime>" and "typed <uptime>" to the file: what a key typed costs is
     /// the CPU between the two (scripts/type-bench.sh).
     static var typeBenchPath: String? { value("PORTALS_DEBUG_TYPE_BENCH") }
+    /// `PORTALS_DEBUG_TYPE_BENCH_FIELD`: `search`, the same in the sidebar's search field, a
+    /// word typed and taken out again, key by key.
+    static var typeBenchField: String? { value("PORTALS_DEBUG_TYPE_BENCH_FIELD") }
 
     /// `PORTALS_DEBUG_NO_WATCHDOG`: leave the main thread's watchdog out (`AppWatchdog`),
     /// to measure what it costs.
