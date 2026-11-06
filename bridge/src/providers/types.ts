@@ -829,6 +829,12 @@ export interface Provider {
    * in for one another. Absent: every thread's is the agent's.
    */
   usageScope?(thread: string | undefined): string;
+  /**
+   * Told what the agent says of the plan's limits by itself as its turns run (Claude Code's
+   * `rate_limit_event`, Codex's `account/rateLimits/updated`), for the readings the host
+   * keeps over time (usage/limits.ts). Set by the bridge; an agent with none says nothing.
+   */
+  onLimits?: (report: UsageReport) => void;
   /** The release of the agent's program the bridge knows of, and where it stands against the tested ones, for `/status`. */
   readonly version?: VersionCheck;
   /**

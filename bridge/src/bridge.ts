@@ -42,6 +42,7 @@ import { Registry } from "./sessions/registry.ts";
 import { readJSON } from "./store/jsonFile.ts";
 import { UpdateCheck, type UpdateCheckOptions } from "./updates.ts";
 import { DiskSpace, type DiskSpaceOptions } from "./disk.ts";
+import { startUsage, type RunningUsage, type UsageOptions } from "./usage/host.ts";
 import { version } from "./version.ts";
 
 // Puts the pieces together and starts listening. `main.ts` runs this; tests run it on
@@ -72,6 +73,8 @@ export interface BridgeOptions {
   disk?: Partial<Pick<DiskSpaceOptions, "statfs" | "everyMs">>;
   /** For the agents' programs: another home folder, environment, update time or source of latest releases (tests; feature agent_programs). */
   programs?: Partial<Pick<ProgramsOptions, "home" | "env" | "updateMs" | "latest">>;
+  /** For token analytics (feature usage_history): another home to read history under, a fetch that stays off the network, other timing (tests). */
+  usage?: UsageOptions;
 }
 
 /** How long telling another Mac which of its threads threads here keep at work may take. */
@@ -237,7 +240,17 @@ export async function startBridge(options: BridgeOptions = {}): Promise<RunningB
     : undefined;
   // Which programs are installed, and updating them (feature agent_programs).
   const programs = new AgentPrograms({ config, paths, providers, ...options.programs });
-  const gateway = new Gateway({ config, sessions, providers, folders, desk, fleet, looks, order, machine, pollNow, files, fileSearch, folderSearch, net, search, updates, disk, programs });
+  // What all coding on this computer spent, read from the agents' own history, which of it
+  // went through Portals, and the plans' limits over time (feature usage_history). A host
+  // that cannot start it goes on without it.
+  let usage: RunningUsage | undefined;
+  try {
+    usage = startUsage({ paths, registry, sessions, providers, usage: options.usage });
+    registry.added = usage.threadAdded;
+  } catch (error) {
+    log.warn("usage: token analytics could not start; the host goes on without them", { error: (error as Error).message });
+  }
+  const gateway = new Gateway({ config, sessions, providers, folders, desk, fleet, looks, order, machine, pollNow, files, fileSearch, folderSearch, net, search, updates, disk, programs, usage });
   net.listener = {
     moved: () => pollNow.moved(),
     // Set from the app, here or on another Mac: what this Mac passes on says it at once.
@@ -366,6 +379,8 @@ export async function startBridge(options: BridgeOptions = {}): Promise<RunningB
       closing ??= (async () => {
         // With a last line; only the bridge that started them stops them.
         if (counting) counters.stop();
+        // The totals read so far are saved, and the history reader ends.
+        const usageStopped = usage?.stop().catch((error: Error) => log.warn("usage: token analytics did not stop cleanly", { error: error.message }));
         // An agent that could not be asked which threads it has open is not asked again.
         following.abort();
         // Nobody is left waiting for a thread, nor for another Mac's copy of the net.
@@ -381,6 +396,7 @@ export async function startBridge(options: BridgeOptions = {}): Promise<RunningB
         folderSearch.close();
         gateway.closeAll();
         await sessions.close();
+        await usageStopped;
         // What the last turns called for is still sent.
         await notifier?.idle();
         notifier?.close();

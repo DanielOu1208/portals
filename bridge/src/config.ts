@@ -354,6 +354,8 @@ export interface Paths {
   update: string;
   /** When the latest releases of the agents' programs were last asked for, and what was said (src/providers/programLatest.ts). */
   programs: string;
+  /** What all coding on this computer spent: the daily totals, Portals' sessions, the limit readings, the prices (src/usage/). */
+  usage: string;
 }
 
 /** The deployed relay (relay/README.md): notifications (`push.relay`) and the tunnel (`relay.url`). */
@@ -435,6 +437,7 @@ export function pathsFor(home: string): Paths {
     counters: join(home, "counters.log"),
     update: join(state, "update.json"),
     programs: join(state, "programs.json"),
+    usage: join(state, "usage"),
   };
 }
 

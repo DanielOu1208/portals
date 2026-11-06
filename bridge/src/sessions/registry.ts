@@ -189,6 +189,11 @@ export class Registry {
    * not be saved, nor for one no listing shows.
    */
   moved: () => void = () => {};
+  /**
+   * Told of each thread put on the list (a new one, a fork, one taken up or back), once
+   * threads.json has it: the record of the sessions Portals ran (usage/sessions.ts).
+   */
+  added: (record: ThreadRecord) => void = () => {};
 
   /** `removedPath`: the threads taken off the list; `removed.json` beside `path` when not given. */
   constructor(path: string, removedPath = join(dirname(path), "removed.json")) {
@@ -284,6 +289,11 @@ export class Registry {
     }
     if (counters.on) counters.thread("added");
     this.moved();
+    try {
+      this.added(record);
+    } catch (error) {
+      log.warn("a thread put on the list could not be noted", { thread: record.id, error: (error as Error).message });
+    }
     // After threads.json: a stop in between, or a removed.json that cannot be written,
     // leaves it on the list, as it now is (an id in both is on the list).
     if (!this.removed.delete(record.id)) return;

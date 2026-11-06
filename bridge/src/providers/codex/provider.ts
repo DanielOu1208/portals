@@ -208,6 +208,7 @@ export function codexMcpText(servers: CodexMcpServer[], running: boolean): strin
 
 export class CodexProvider implements Provider, CodexHost {
   readonly supportsModes = true;
+  onLimits?: (report: UsageReport) => void;
   /** Its command the bridge runs itself (`mcpServerStatus/list`). */
   readonly executes = ["mcp"] as const;
 
@@ -370,6 +371,14 @@ export class CodexProvider implements Provider, CodexHost {
     notification: (method, params) => {
       if (method === "account/rateLimits/updated") {
         for (const session of this.sessions.values()) session.rateLimits(params?.rateLimits ?? {});
+        // One limit's windows, as `/usage` reads them, for the readings kept over time (usage/limits.ts).
+        if (params?.rateLimits) {
+          try {
+            this.onLimits?.(usageReport({ rateLimits: params.rateLimits }));
+          } catch (error) {
+            log.debug("Codex's limits could not be read", { error: (error as Error).message });
+          }
+        }
         return;
       }
       const threadID = params?.threadId ?? params?.thread?.id;

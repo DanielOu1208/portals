@@ -168,7 +168,8 @@
    "turn_file_undo",
    "disk_space",
    "subagent_read",
-   "agent_programs"
+   "agent_programs",
+   "usage_history"
   ],
   "events": {
    "mcp.auth": {
@@ -296,6 +297,13 @@
     "feature": "agent_programs",
     "params": [
      "program"
+    ]
+   },
+   "usage.history": {
+    "feature": "usage_history",
+    "params": [
+     "from",
+     "to"
     ]
    },
    "host.apps": {

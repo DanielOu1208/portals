@@ -496,6 +496,30 @@
       ]
     },
     {
+      "name": "usage.history",
+      "summary": "What all coding on this computer spent, from each agent's own history (feature usage_history): days from to to, inclusive, \"YYYY-MM-DD\" in the host's time zone, at most 400. Answers time_zone, agents (those whose history is read), scan (scanning while history is first read, progress from 0 to 1, scanned_at in milliseconds since 1970), days (one row a day, agent, model, folder and via, portals or elsewhere, with input, output, cache_read, cache_write, cache_write_1h, reasoning, already in output, requests and usd, the API price of now, null for a model the table does not have), hours (each day's tokens by hour, by agent and via), limits (each reading of a plan's window kept those days: at, agent, name, percent, resets_at in Unix seconds, window_seconds) and prices_at (when the price table was fetched, milliseconds).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "string"
+              },
+              "to": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ]
+          }
+        }
+      ]
+    },
+    {
       "name": "programs.list",
       "summary": "The programs of the agents on this computer (feature agent_programs): for each that is installed or has an agent here, its id, name, installed, version (null when it did not say), standing (tested, newer, untested, too old, missing), tested, minimum, how it was installed (own, npm, homebrew, app, other, null when it is not), can_update, command (what updates it, or what to run on this computer where the host cannot), latest and update_available where that can be found, agents (the agents it runs), takes_effect (when threads at work move to a new release: next_start, service_restart, gateway_restart), running_version (what a service that stays up runs, where that is not version), and update, the last update known, one under way or that ended while the host was down taken up from its record: state running, done or failed, started_at, ended_at, from, to, timed_out, line (the last thing it printed, while it runs), tail (the end of what it printed, once it has failed), unattended (running with nothing to hold it to its time, its own process having gone), cannot_tell_file (its record cannot be read, or it is past its time with nothing to prove what is left is its own: the file a person may remove, sure it is not running). A version is read at most once a minute, Hermes's at most once an hour, the host's own read at its start included, and with updates.check false only after an update someone asked for, and the latest releases are asked for at most every eight hours and only as this is asked.",
       "params": [
@@ -2193,7 +2217,8 @@
     "steer_withdrawn",
     "disk_space",
     "subagent_read",
-    "agent_programs"
+    "agent_programs",
+    "usage_history"
   ],
   "x-lean-deltas": {
     "capability": "lean_deltas",

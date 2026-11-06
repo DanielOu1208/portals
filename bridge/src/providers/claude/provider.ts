@@ -285,6 +285,7 @@ export class ClaudeProvider implements Provider, ClaudeHost {
     provider: "anthropic",
   };
   readonly supportsModes = true;
+  onLimits?: (report: UsageReport) => void;
   /** Its command the bridge runs itself: `/mcp`, in place of Claude Code's own, which needs a terminal. */
   readonly executes = ["mcp"] as const;
   /**
@@ -551,6 +552,8 @@ export class ClaudeProvider implements Provider, ClaudeHost {
 
   limitsHeard(info: Record<string, unknown>): void {
     this.heard.heard(info);
+    // Every window as last heard: those this event did not change are the same as their last reading, and not kept again.
+    this.onLimits?.(this.heard.report());
   }
 
   /**

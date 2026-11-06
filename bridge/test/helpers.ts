@@ -48,7 +48,14 @@ export interface TestBridgeOptions {
   disk?: BridgeOptions["disk"];
   /** For the agents' programs (feature agent_programs): its own home folder, environment and source of latest releases. */
   programs?: BridgeOptions["programs"];
+  /** For token analytics (feature usage_history): another home, sources or timing. Else the scratch home (test/environment.ts), read in the test's own thread, and no price list fetched. */
+  usage?: BridgeOptions["usage"];
 }
+
+/** The price list's fetch in tests: never the network. */
+export const offlineFetch: typeof fetch = async () => {
+  throw new Error("Tests do not fetch the price list.");
+};
 
 /** A volume of 500 GB with 200 GB free, for the tests that do not look at the disk: a full one on the test machine does not tell their threads so. */
 export const roomyDisk: NonNullable<BridgeOptions["disk"]>["statfs"] = async () => ({ bsize: 1000, blocks: 500e6, bavail: 200e6 });
@@ -102,7 +109,7 @@ export async function startTestBridge(options: TestBridgeOptions = {}): Promise<
     };
     writeFileSync(join(home, "config.json"), JSON.stringify(config));
   }
-  const bridge = await startBridge({ home, logCapacity: options.logCapacity, providers: options.providers, temporaryFolders: options.temporaryFolders, userHome: options.userHome, held: options.held, noticeRetries: options.noticeRetries, updates: options.updates, programs: options.programs, disk: { statfs: roomyDisk, ...options.disk } });
+  const bridge = await startBridge({ home, logCapacity: options.logCapacity, providers: options.providers, temporaryFolders: options.temporaryFolders, userHome: options.userHome, held: options.held, noticeRetries: options.noticeRetries, updates: options.updates, programs: options.programs, disk: { statfs: roomyDisk, ...options.disk }, usage: { inProcess: true, fetch: offlineFetch, ...options.usage } });
   return {
     ...bridge,
     get stopDeadlineMs() { return bridge.stopDeadlineMs; },

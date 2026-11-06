@@ -378,6 +378,11 @@
 //   updates one with its own command, the host's choice by how it was installed, and
 //   `usage.read` takes `agent` in place of `session_id`, for Settings > Agents, which has no
 //   thread to ask with (src/providers/programs.ts).
+// - `usage_history`: `usage.history` gives what all coding on the host spent, read from
+//   each agent's own history files (Claude Code, Codex, Pi, Droid), for a range of the host's
+//   days: daily totals by agent, model, folder and whether they went through Portals, with
+//   the API price of now in US dollars, each day's tokens by hour, and the readings of the
+//   plans' limits kept over those days (src/usage/, docs/plans/2026-11-06-token-analytics.md).
 
 export const bridgeFeatures = [
   "turn_file_undo",
@@ -456,6 +461,7 @@ export const bridgeFeatures = [
   "disk_space",
   "subagent_read",
   "agent_programs",
+  "usage_history",
 ] as const;
 
 export const bridgeProtocol = 1;

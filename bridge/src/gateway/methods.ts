@@ -29,6 +29,7 @@ import { McpAuthSettling, type McpAuthAction } from "../providers/mcpAuth.ts";
 import { ProgramRefused, type AgentPrograms, type ProgramReport } from "../providers/programs.ts";
 import { SettingRefused } from "../providers/types.ts";
 import { diskFields, type DiskReading } from "../disk.ts";
+import { historyAnswer, historyRangeProblem, type UsageParts } from "../usage/history.ts";
 
 // Every method the app calls (docs/gateway-protocol.md, section 5), with the params the
 // bridge reads. Params not listed are ignored, never rejected: Hermes rejects them, but
@@ -77,6 +78,8 @@ export interface GatewayContext {
   readonly openers?: Openers;
   /** The agents' programs on this computer, and updating them (feature agent_programs). */
   readonly programs: AgentPrograms;
+  /** What all coding on this computer spent, the prices and the plans' limits over time (feature usage_history); absent when it could not be started. */
+  readonly usage?: UsageParts;
 }
 
 /** The connection a call came on. */
@@ -189,8 +192,12 @@ export function usageTitle(kind: string, agentName: string, plan: string | undef
 const usageMaxAgeMs = 60_000;
 const usageAsked = new WeakMap<Provider, Map<string, { at: number; report: Promise<UsageReport> }>>();
 
-/** The agent's usage as of the last minute, or that it could not say, asked once for every device that asks meanwhile. */
-function recentUsage(agent: Provider, thread: string | undefined): Promise<UsageReport> {
+/**
+ * The agent's usage as of the last minute, or that it could not say, asked once for every
+ * device that asks meanwhile. Also the limit readings taken while a thread runs
+ * (usage/limits.ts `LimitSampler`), so they start no agent the panel would not.
+ */
+export function recentUsage(agent: Provider, thread: string | undefined): Promise<UsageReport> {
   const scope = agent.usageScope?.(thread) ?? "";
   let asked = usageAsked.get(agent);
   if (!asked) usageAsked.set(agent, (asked = new Map()));
@@ -647,6 +654,19 @@ export const methods: Record<string, MethodSpec> = {
       } catch (error) {
         throw new RpcError(ErrorCode.internal, `${agent.profile.displayName} did not say how much is used: ${(error as Error).message}`);
       }
+    },
+  },
+
+  "usage.history": {
+    summary:
+      "What all coding on this computer spent, from each agent's own history (feature usage_history): days from to to, inclusive, \"YYYY-MM-DD\" in the host's time zone, at most 400. Answers time_zone, agents (those whose history is read), scan (scanning while history is first read, progress from 0 to 1, scanned_at in milliseconds since 1970), days (one row a day, agent, model, folder and via, portals or elsewhere, with input, output, cache_read, cache_write, cache_write_1h, reasoning, already in output, requests and usd, the API price of now, null for a model the table does not have), hours (each day's tokens by hour, by agent and via), limits (each reading of a plan's window kept those days: at, agent, name, percent, resets_at in Unix seconds, window_seconds) and prices_at (when the price table was fetched, milliseconds).",
+    params: { from: "string", to: "string" },
+    required: ["from", "to"],
+    handle(params, { gateway }) {
+      const problem = historyRangeProblem(params.from, params.to);
+      if (problem) throw invalidParams(problem);
+      if (!gateway.usage) throw new RpcError(ErrorCode.internal, `The host is not reading usage on this ${machineWord()}.`);
+      return historyAnswer(gateway.usage, params.from as string, params.to as string);
     },
   },
 
