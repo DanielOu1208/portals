@@ -15,7 +15,7 @@
   },
   "d1_databases": [
     // Made with `wrangler d1 create portals-stats`; its id goes here before the first deploy.
-    { "binding": "DB", "database_name": "portals-stats", "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "migrations" }
+    { "binding": "DB", "database_name": "portals-stats", "database_id": "63eae229-bbcb-4b11-9388-05dcb0664cca", "migrations_dir": "migrations" }
   ],
   "ratelimits": [
     // Days sent per caller's address. A host sends at most 7 days at once, and a few hosts
