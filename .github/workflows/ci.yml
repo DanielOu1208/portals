@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [bridge, relay]
+        package: [bridge, relay, stats]
     defaults:
       run:
         working-directory: ${{ matrix.package }}
