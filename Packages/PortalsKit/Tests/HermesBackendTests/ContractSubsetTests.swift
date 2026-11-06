@@ -144,7 +144,14 @@ import Testing
             BridgeWire.Feature.steerWithdrawn,
             BridgeWire.Feature.subagentRead,
             BridgeWire.Feature.agentPrograms,
+            BridgeWire.Feature.usageHistory, BridgeWire.Feature.usageTelemetry,
         ])
+        // A host's switch for its anonymous totals: as the subset has it, and never sent to Hermes.
+        let telemetry = try #require(subset["bridge"]?["methods"]?[BridgeWire.Method.usageTelemetry])
+        #expect(telemetry["feature"]?.stringValue == BridgeWire.Feature.usageTelemetry)
+        let switching = try #require(try JSONValue(encoding: BridgeWire.UsageTelemetryParams(enabled: false)).objectValue)
+        #expect(Set(switching.keys) == Set(try #require(telemetry["params"]?.arrayValue).compactMap(\.stringValue)))
+        #expect(subset["methods"]?[BridgeWire.Method.usageTelemetry] == nil)
         // What one subagent did: named as Stop names it, and never sent to Hermes.
         let subagentRead = try #require(subset["bridge"]?["methods"]?[BridgeWire.Method.subagentRead])
         #expect(subagentRead["feature"]?.stringValue == BridgeWire.Feature.subagentRead)
