@@ -394,3 +394,40 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## Tokscale
+
+The host's reading of the coding agents' history for its token totals
+(`bridge/src/usage/readers/`) follows the counting rules of Tokscale 4.21.0
+(`crates/tokscale-core/src/sessions/`: `claudecode.rs`, `codex.rs`, `pi.rs`, `droid.rs`),
+https://github.com/junhoyeo/tokscale, by Junho Yeo: where each agent keeps its usage, a
+Claude Code request counted once by its message and request ids and raised to its
+fullest line, an advisor's iterations apart, Codex's running totals and their stale
+snapshots, a Codex fork's replayed turns told apart by their UUIDv7 time, Pi's copies
+counted once by response id, and reasoning kept inside the output. No code was copied:
+the readers are written for the host, in TypeScript. Prices are from LiteLLM's public
+list, as Tokscale's are.
+
+```
+MIT License
+
+Copyright (c) 2025 Junho Yeo
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
