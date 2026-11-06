@@ -293,7 +293,7 @@ final class HostModel: Identifiable {
         for host: HostConfig, credentials: any CredentialStore, relay: (@Sendable () async -> RelayRoute?)?
     ) -> any AgentBackend {
         if let script = DebugLaunch.fakeScript {
-            return FakeBackend(script: script, host: host.id, pace: DebugLaunch.fakePace)
+            return FakeBackend(script: script, host: host.id, pace: DebugLaunch.fakePace, usage: DebugLaunch.fakeUsage(for: host.id))
         }
         // The network watched, so a change of it reconnects at once (`HermesBackend.networkChanged`).
         return HermesBackend(
@@ -1287,6 +1287,11 @@ final class HostModel: Identifiable {
     /// without it.
     var panelProvider: (any ThreadPanelProviding)? {
         backend as? any ThreadPanelProviding
+    }
+
+    /// The host's side of Settings > Usage (`UsageHistoryProviding`): nil from a host without it.
+    var usageProvider: (any UsageHistoryProviding)? {
+        backend as? any UsageHistoryProviding
     }
 
     /// The host's side of Settings > Agents (`AgentProgramsProviding`): nil from a host without it.

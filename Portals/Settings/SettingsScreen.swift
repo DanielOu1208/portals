@@ -22,7 +22,7 @@ extension EnvironmentValues {
 
 /// A part of Settings.
 enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
-    case net, chat, agents, notifications, appearance, about
+    case net, chat, agents, usage, notifications, appearance, about
 
     var id: Self { self }
 
@@ -31,6 +31,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
         case .net: "Net"
         case .chat: "Chat"
         case .agents: "Agents"
+        case .usage: "Usage"
         case .notifications: "Notifications"
         case .appearance: "Appearance"
         case .about: "About"
@@ -42,6 +43,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
         case .net: "point.3.connected.trianglepath.dotted"
         case .chat: "bubble.left.and.bubble.right.fill"
         case .agents: "person.2.fill"
+        case .usage: "chart.xyaxis.line"
         case .notifications: "bell.badge.fill"
         case .appearance: "circle.lefthalf.filled"
         case .about: "info"
@@ -54,6 +56,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
         case .net: .blue
         case .chat: .green
         case .agents: .purple
+        case .usage: .orange
         case .notifications: .red
         case .appearance: .indigo
         case .about: .gray
@@ -62,7 +65,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
 }
 
 /// The app's settings, over the whole window (2026-10-25: "over the window"), in
-/// six parts: Net, Chat, Agents, Notifications, Appearance and About.
+/// seven parts: Net, Chat, Agents, Usage, Notifications, Appearance and About.
 ///
 /// - On a wide window (`WindowLayout.wideWidth`) the parts are listed where the sidebar
 ///   is, under Back to Chats, and the one chosen fills the rest of the window.
@@ -321,6 +324,7 @@ struct SettingsPage: View {
             case .net: NetSettings(fleet: fleet)
             case .chat: ChatSettings(fleet: fleet)
             case .agents: AgentSettings(fleet: fleet)
+            case .usage: UsageSettings(fleet: fleet)
             case .notifications: NotificationSettings(fleet: fleet)
             case .appearance: AppearanceSettings(fleet: fleet)
             case .about: AboutSettings(fleet: fleet)

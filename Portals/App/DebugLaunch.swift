@@ -142,8 +142,8 @@ enum DebugLaunch {
     /// camera, as Scan the code on the welcome screen does.
     static var scansForHost: Bool { value("PORTALS_DEBUG_HOST_SETTINGS") == "scan" }
 
-    /// Opens Settings at a part: `net`, `chat`, `agents`, `notifications`, `appearance`
-    /// or `about` (`SettingsSection`).
+    /// Opens Settings at a part: `net`, `chat`, `agents`, `usage`, `notifications`,
+    /// `appearance` or `about` (`SettingsSection`).
     static var settingsSection: SettingsSection? { value("PORTALS_DEBUG_SETTINGS").flatMap(SettingsSection.init(rawValue:)) }
 
     /// `PORTALS_DEBUG_AGENT_PROGRAM`: the id of a program whose page opens from Settings'
@@ -194,6 +194,34 @@ enum DebugLaunch {
     /// models as a bridge offers Claude Code's).
     static var fakeScript: FakeBackend.Script? {
         value("PORTALS_FAKE").flatMap(FakeBackend.Script.init(rawValue:))
+    }
+
+    /// `PORTALS_FAKE_USAGE`: how the scripted backend's hosts tell Settings, Usage of their
+    /// usage, a list of `scanning` (a first read of history 42% through), `old` (a host
+    /// from before usage was kept) and `locked` (anonymous totals kept off by the host's
+    /// environment), separated by `,`; each for every host, or with `@` and a host's id
+    /// for that one alone (`old@debug-3`). Unset, every host has its usage read.
+    static func fakeUsage(for host: HostID) -> FakeBackend.UsageSample {
+        var sample = FakeBackend.UsageSample()
+        for item in (value("PORTALS_FAKE_USAGE") ?? "").split(separator: ",") {
+            let parts = item.split(separator: "@", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            guard parts.count == 1 || parts[1] == host.rawValue else { continue }
+            switch parts[0] {
+            case "scanning": sample.scanning = 0.42
+            case "old": sample.keepsNone = true
+            case "locked": sample.totalsLocked = true
+            default: break
+            }
+        }
+        return sample
+    }
+
+    /// `PORTALS_DEBUG_USAGE`: how Settings, Usage opens, for a look at a part of it without
+    /// scrolling: a list separated by `,` of a range (`day`, `week`, `month`, `quarter`),
+    /// `spread` for the chart over an average day, and a part to scroll to (`chart`,
+    /// `cost`, `limits`, `lists`, `sharing`).
+    static var usageView: Set<String> {
+        Set((value("PORTALS_DEBUG_USAGE") ?? "").split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
     }
 
     /// `PORTALS_FAKE_PACE`: the scripted backend's pause between pieces, in

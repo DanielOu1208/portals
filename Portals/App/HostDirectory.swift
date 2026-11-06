@@ -25,9 +25,12 @@ enum HostDirectory {
     static func starting() -> Starting {
         if DebugLaunch.fakeScript != nil {
             // The scripted backend has its own folder, so trying it never touches real threads.
+            // `PORTALS_DEBUG_HOSTS` names several, each playing the script, to see how the
+            // screens list more than one Mac (Settings, Usage).
             let host = HostConfig(id: HostID(rawValue: "fake"), name: "Scripted", url: DebugLaunch.hermesURL)
             let scratch = ThreadStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent("Portals-fake", isDirectory: true))
-            return Starting(hosts: [host], credentials: InMemoryCredentialStore(), savesHosts: false, store: scratch)
+            let named = DebugLaunch.hosts?.map(\.host) ?? []
+            return Starting(hosts: named.isEmpty ? [host] : named, credentials: InMemoryCredentialStore(), savesHosts: false, store: scratch)
         }
         if DebugLaunch.startsFirstRun {
             // A new phone: nothing added, and nothing added kept past this launch.
