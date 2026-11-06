@@ -210,8 +210,11 @@ private struct ModelList: View {
     /// Rows past the model in use there from the start: more than the half of the
     /// list in sight under it.
     private static let rowsPastCurrent = 8
-    /// How long after the popover opens the rest of the list comes.
-    private static let restAfter: Duration = .milliseconds(400)
+    /// How long after the popover opens the rest of the list comes: once the system's
+    /// opening animation is done, so laying the rest out does not catch it mid-way. That
+    /// animation took about 250 ms on a Mac and about 450 ms to settle on the iPhone
+    /// simulator (2026-11-06), whose grow-in starts later after the tap.
+    private static let restAfter: Duration = Platform.isMac ? .milliseconds(400) : .milliseconds(700)
 
     init(catalog: ModelCatalog, setting: ModelSetting, onPick: @escaping (_ model: String, _ provider: String) -> Void) {
         self.catalog = catalog
@@ -239,7 +242,7 @@ private struct ModelList: View {
                     // for that is still laid out lazily.
                     let shown = providers
                     if shown.reduce(0, { $0 + 1 + $1.models.count }) <= Self.rowsLaidOutAtOnce {
-                        VStack(alignment: .leading, spacing: 0) { rows(of: shown) }
+                        VStack(alignment: .leading, spacing: 0) { rows(of: shown, opensCut: true) }
                             .scrollTargetLayout()
                     } else {
                         LazyVStack(alignment: .leading, spacing: 0) { rows(of: shown) }
@@ -256,7 +259,6 @@ private struct ModelList: View {
                     if let current { position.scrollTo(id: current, anchor: .center) }
                 }
                 .task {
-                    // Once the system's opening animation (about 250 ms on a Mac) is done.
                     try? await Task.sleep(for: Self.restAfter)
                     showsAll = true
                 }
@@ -330,20 +332,22 @@ private struct ModelList: View {
     /// nothing in sight. Three hundred rows took about 85 ms to lay out on a Mac
     /// (2026-11-06, a bench host with 300 models), all of it before the popover could
     /// show anything; the model in use is near the top of most lists (its provider first).
-    private func shownLines(of providers: [ModelProvider]) -> [Line] {
+    /// Only a list laid out at once opens cut (`opensCut`): a lazy one lays out only what
+    /// is in sight anyway.
+    private func shownLines(of providers: [ModelProvider], opensCut: Bool) -> [Line] {
         let all = lines(of: providers)
-        guard !showsAll, scrolls, let current, let index = all.firstIndex(where: { $0.id == current }) else {
+        guard opensCut, !showsAll, scrolls, let current, let index = all.firstIndex(where: { $0.id == current }) else {
             return all
         }
         return Array(all.prefix(index + 1 + Self.rowsPastCurrent))
     }
 
     @ViewBuilder
-    private func rows(of providers: [ModelProvider]) -> some View {
+    private func rows(of providers: [ModelProvider], opensCut: Bool = false) -> some View {
         // One ForEach of lines, each with an id of its own, for the scroll to the model in
         // use: a scroll view goes by its stack's ForEach ids, not by ids put on the views
         // of a ForEach inside another.
-        ForEach(shownLines(of: providers)) { line in
+        ForEach(shownLines(of: providers, opensCut: opensCut)) { line in
             switch line {
             case let .provider(provider):
                 Text(provider.name)
