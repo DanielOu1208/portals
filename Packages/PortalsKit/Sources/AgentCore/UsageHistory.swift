@@ -275,9 +275,20 @@ public enum UsageDay {
         calendar(zone).component(.hour, from: date)
     }
 
-    /// The start of hour `hour` of `day` in `zone`.
+    /// The start of hour `hour` of `day` in `zone`, as the clock there says it: from the
+    /// day and the hour, not midnight and the hours gone since, which on a day the clocks
+    /// change is an hour off from the change on (the host counts by the clock's hour).
     public static func start(ofHour hour: Int, of day: String, in zone: TimeZone) -> Date? {
-        start(of: day, in: zone).flatMap { calendar(zone).date(byAdding: .hour, value: hour, to: $0) }
+        guard (0 ..< 24).contains(hour), let midnight = start(of: day, in: zone) else { return nil }
+        let calendar = calendar(zone)
+        var parts = calendar.dateComponents([.year, .month, .day], from: midnight)
+        parts.hour = hour
+        return calendar.date(from: parts)
+    }
+
+    /// The start of the hour `date` is in, in `zone`: on the half hour in a zone half an hour off.
+    public static func startOfHour(containing date: Date, in zone: TimeZone) -> Date {
+        calendar(zone).dateInterval(of: .hour, for: date)?.start ?? Date(timeIntervalSince1970: (date.timeIntervalSince1970 / 3600).rounded(.down) * 3600)
     }
 }
 

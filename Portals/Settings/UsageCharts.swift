@@ -265,7 +265,7 @@ struct UsageLimitRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.grid * 0.75) {
             HStack(alignment: .firstTextBaseline) {
-                Text("\(UsageAgentName.of(pace.agent)), \(pace.name)")
+                Text(title)
                 Spacer(minLength: Theme.grid)
                 Text(pace.hasReset ? "–" : UsageFormat.share(pace.percent / 100))
                     .monospacedDigit()
@@ -294,8 +294,14 @@ struct UsageLimitRow: View {
                 .foregroundStyle(.secondary)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(UsageAgentName.of(pace.agent)), \(pace.name)")
+        .accessibilityLabel(title)
         .accessibilityValue(accessibilityValue)
+    }
+
+    /// The agent and window, and the host where two hosts read windows of that name (two accounts).
+    private var title: String {
+        let window = "\(UsageAgentName.of(pace.agent)), \(pace.name)"
+        return pace.hostName.map { "\(window), on \($0)" } ?? window
     }
 
     /// When it runs out, or that it lasts; how far from an even pace.

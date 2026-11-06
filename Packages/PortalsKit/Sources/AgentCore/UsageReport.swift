@@ -114,8 +114,12 @@ public struct UsageLimitPace: Hashable, Sendable, Identifiable {
     /// When it runs out at the rate so far; nil when it lasts until the reset, or no rate
     /// can be told.
     public var runsOutAt: Date?
+    /// The host it was read on, and its name, when another host read a window of the same
+    /// name that is not this one (another account): nil when it is shown once.
+    public var host: HostID?
+    public var hostName: String?
 
-    public var id: String { "\(agent) \(name)" }
+    public var id: String { "\(agent) \(name)\(host.map { " \($0.rawValue)" } ?? "")" }
 
     /// Points under an even pace by now: in reserve when positive, over pace when negative.
     public var reserve: Double? {
@@ -222,30 +226,41 @@ public struct UsageReport: Hashable, Sendable {
 
         var rows: [(source: UsageSource, row: UsageDayRow)] = []
         var byDay: [String: [String: Int]] = [:]
-        var byHour: [Date: [String: Int]] = [:]
+        /// The 24 hours' tokens by agent, by how many hours before the hour in progress
+        /// each began: 0 is the hour in progress, 23 the first of the 24.
+        var byHoursBack: [Int: [String: Int]] = [:]
+        /// The start of the hour in progress on the first host counted: the last point.
+        var lastHour: Date?
         var hourSums: [String: [Double]] = [:]
-        let thisHour = Self.hourStart(now)
 
         for source in chosen {
             let history = source.history
             let zone = history.timeZone
             let today = UsageDay.string(for: now, in: zone)
             if range == .day {
-                // The last 24 hours: today's hours to now, and yesterday's after this hour.
+                // The last 24 hours: the hour in progress on the host and the 23 before it,
+                // each hour placed by when it began there, so a host half an hour off, or
+                // on a day its clocks change, still has 24 and draws each where it was.
                 let yesterday = UsageDay.adding(-1, to: today, in: zone)
                 let hourNow = UsageDay.hour(of: now, in: zone)
-                func inWindow(_ day: String) -> Range<Int> { day == today ? 0 ..< hourNow + 1 : hourNow + 1 ..< 24 }
+                let current = UsageDay.startOfHour(containing: now, in: zone)
+                if lastHour == nil { lastHour = current }
+                func hoursBack(_ hour: Int, of day: String) -> Int? {
+                    guard let start = UsageDay.start(ofHour: hour, of: day, in: zone) else { return nil }
+                    let back = Int((current.timeIntervalSince(start) / 3600).rounded(.down))
+                    return (0 ..< 24).contains(back) ? back : nil
+                }
                 var shares: [String: Double] = [:]
                 for hours in history.hours where hours.day == today || hours.day == yesterday {
-                    let window = inWindow(hours.day)
                     let all = hours.tokens.reduce(0, +)
-                    let within = hours.tokens[window].reduce(0, +)
-                    shares[Self.key(hours.day, hours.agent, hours.viaPortals)] = all > 0 ? Double(within) / Double(all) : nil
-                    for hour in window where hours.tokens[hour] > 0 {
-                        guard let start = UsageDay.start(ofHour: hour, of: hours.day, in: zone) else { continue }
-                        byHour[Self.hourStart(start), default: [:]][hours.agent, default: 0] += hours.tokens[hour]
+                    var within = 0
+                    for hour in 0 ..< 24 where hours.tokens[hour] > 0 {
+                        guard let back = hoursBack(hour, of: hours.day) else { continue }
+                        within += hours.tokens[hour]
+                        byHoursBack[back, default: [:]][hours.agent, default: 0] += hours.tokens[hour]
                         hourSums[hours.agent, default: Array(repeating: 0, count: 24)][hour] += Double(hours.tokens[hour])
                     }
+                    shares[Self.key(hours.day, hours.agent, hours.viaPortals)] = all > 0 ? Double(within) / Double(all) : nil
                 }
                 for row in history.days where row.day == today || row.day == yesterday {
                     // A day's rows are cut to the share of its tokens the hours put in the
@@ -303,15 +318,17 @@ public struct UsageReport: Hashable, Sendable {
         byHost = Self.slices(rows, all: all, key: { $0.source.host.rawValue }, name: { names[$0] ?? $0 })
 
         // Every agent with tokens in the range, those the chart draws, most first.
-        let drawn = Set(byDay.values.flatMap(\.keys)).union(byHour.values.flatMap(\.keys)).union(byAgent.map(\.id))
+        let drawn = Set(byDay.values.flatMap(\.keys)).union(byHoursBack.values.flatMap(\.keys)).union(byAgent.map(\.id))
         let ranked = byAgent.map(\.id)
         let agents = ranked + drawn.subtracting(ranked).sorted(by: Self.agentOrder)
         self.agents = agents
 
         if range == .day {
-            series = (0 ..< 24).flatMap { back -> [UsagePoint] in
-                let start = thisHour.addingTimeInterval(-Double(23 - back) * 3600)
-                return agents.map { UsagePoint(agent: $0, date: start, tokens: byHour[start]?[$0] ?? 0) }
+            let last = lastHour ?? UsageDay.startOfHour(containing: now, in: calendar.timeZone)
+            series = (0 ..< 24).flatMap { index -> [UsagePoint] in
+                let back = 23 - index
+                let start = last.addingTimeInterval(-Double(back) * 3600)
+                return agents.map { UsagePoint(agent: $0, date: start, tokens: byHoursBack[back]?[$0] ?? 0) }
             }
         } else {
             // This device's days of the range, and any day a host a zone ahead is in already.
@@ -328,14 +345,7 @@ public struct UsageReport: Hashable, Sendable {
             (0 ..< 24).map { UsageSpreadPoint(agent: agent, hour: $0, tokens: (hourSums[agent]?[$0] ?? 0) / Double(range.days)) }
         }
 
-        var latest: [String: UsageLimitReading] = [:]
-        for reading in chosen.flatMap(\.history.limits) {
-            let key = "\(reading.agent) \(reading.name)"
-            if latest[key].map({ $0.at < reading.at }) ?? true { latest[key] = reading }
-        }
-        limits = latest.values
-            .map { UsageLimitPace($0, now: now) }
-            .sorted { $0.agent == $1.agent ? Self.windowOrder($0, $1) : Self.agentOrder($0.agent, $1.agent) }
+        limits = Self.limits(of: chosen, now: now)
 
         var counted = Set(chosen.flatMap(\.history.agents))
         counted.formUnion(agents)
@@ -346,10 +356,6 @@ public struct UsageReport: Hashable, Sendable {
 
     private static func key(_ day: String, _ agent: String, _ viaPortals: Bool) -> String {
         "\(day) \(agent) \(viaPortals)"
-    }
-
-    private static func hourStart(_ date: Date) -> Date {
-        Date(timeIntervalSince1970: (date.timeIntervalSince1970 / 3600).rounded(.down) * 3600)
     }
 
     /// The name a folder is shown by: its last part.
@@ -370,7 +376,45 @@ public struct UsageReport: Hashable, Sendable {
     private static func windowOrder(_ one: UsageLimitPace, _ other: UsageLimitPace) -> Bool {
         let first = one.windowSeconds ?? .infinity
         let second = other.windowSeconds ?? .infinity
-        return first == second ? one.name < other.name : first < second
+        if first != second { return first < second }
+        return one.name == other.name ? (one.hostName ?? "") < (other.hostName ?? "") : one.name < other.name
+    }
+
+    /// The latest reading of each window on each host. Hosts signed in to one account read
+    /// the same windows: a reading another host made later, with the same reset and no less
+    /// used, is the same window read again, and only the later is kept. What is left of one
+    /// name on more than one host is another account's, and says which host it is.
+    static func limits(of sources: [UsageSource], now: Date) -> [UsageLimitPace] {
+        var latest: [String: (source: UsageSource, reading: UsageLimitReading)] = [:]
+        for source in sources {
+            for reading in source.history.limits {
+                let key = "\(source.host.rawValue) \(reading.agent) \(reading.name)"
+                if latest[key].map({ $0.reading.at < reading.at }) ?? true { latest[key] = (source, reading) }
+            }
+        }
+        var paces: [UsageLimitPace] = []
+        for group in Dictionary(grouping: latest.values, by: { "\($0.reading.agent) \($0.reading.name)" }).values {
+            var kept: [(source: UsageSource, reading: UsageLimitReading)] = []
+            for entry in group.sorted(by: { $0.reading.at > $1.reading.at }) {
+                let again = kept.contains { later in
+                    later.reading.resetsAt == entry.reading.resetsAt
+                        && (later.reading.resetsAt == nil ? later.reading.percent == entry.reading.percent : later.reading.percent >= entry.reading.percent)
+                }
+                if !again { kept.append(entry) }
+            }
+            // A window that started again since it was read says nothing beside one read since.
+            let current = kept.filter { $0.reading.resetsAt.map { $0 > now } ?? true }
+            if !current.isEmpty { kept = current }
+            for entry in kept {
+                var pace = UsageLimitPace(entry.reading, now: now)
+                if kept.count > 1 {
+                    pace.host = entry.source.host
+                    pace.hostName = entry.source.name
+                }
+                paces.append(pace)
+            }
+        }
+        return paces.sorted { $0.agent == $1.agent ? windowOrder($0, $1) : agentOrder($0.agent, $1.agent) }
     }
 
     private static func slices(

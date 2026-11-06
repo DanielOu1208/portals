@@ -100,7 +100,9 @@ extension FakeBackend {
                 // The day's tokens spread over its hours, today's only up to now.
                 let shown = day == today ? Array(dayShape.prefix(hourNow + 1)) + Array(repeating: 0, count: 23 - hourNow) : dayShape
                 let sum = shown.reduce(0, +)
-                for (via, total) in counted where sum > 0 && total > 0 {
+                // In a fixed order: a dictionary's own order differs from one call to the next.
+                for via in [true, false] where sum > 0 {
+                    guard let total = counted[via], total > 0 else { continue }
                     let tokens = shown.enumerated().map { hour, weight in
                         Int(Double(total) * weight / sum * (0.7 + dice("\(day) \(agent) \(hour)") * 0.6))
                     }

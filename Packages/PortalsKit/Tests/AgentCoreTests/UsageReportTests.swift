@@ -104,6 +104,52 @@ import Testing
         #expect(day.spread.first { $0.hour == 10 }?.tokens == 0)
     }
 
+    @Test func theTwentyFourHoursOfAHostHalfAnHourOffAreAllDrawnWhereTheyBegan() {
+        // 04:15 UTC is 09:45 in Kolkata: the hour in progress there began at 03:30 UTC, and
+        // the first of the 24 is yesterday's 10:00 there, 04:30 UTC.
+        let kolkata = TimeZone(identifier: "Asia/Kolkata")!
+        let now = Date(timeIntervalSince1970: 1_793_852_100)
+        var today = Array(repeating: 0, count: 24)
+        today[9] = 100
+        var yesterday = Array(repeating: 0, count: 24)
+        yesterday[10] = 50
+        let host = Self.source("india", "Studio", zone: kolkata, days: [
+            Self.row("2026-11-05", input: 100), Self.row("2026-11-04", input: 50),
+        ], hours: [
+            UsageHourRow(day: "2026-11-05", agent: "claude", viaPortals: false, tokens: today),
+            UsageHourRow(day: "2026-11-04", agent: "claude", viaPortals: false, tokens: yesterday),
+        ])
+        let day = UsageReport(sources: [host], range: .day, now: now, calendar: Self.calendar)
+        #expect(day.totals.input == 150)
+        #expect(day.series.count == 24)
+        #expect(day.series.reduce(0) { $0 + $1.tokens } == 150)
+        #expect(day.series.last?.date == Date(timeIntervalSince1970: 1_793_849_400))
+        #expect(day.series.last?.tokens == 100)
+        #expect(day.series.first?.date == Date(timeIntervalSince1970: 1_793_766_600))
+        #expect(day.series.first?.tokens == 50)
+    }
+
+    @Test func onTheDayTheClocksGoBackEachHourIsDrawnWhenItBegan() {
+        // 1 November 2026 in New York: 02:00 summer time is 01:00 again. Its hour 3 began
+        // at 08:00 UTC, not three hours after midnight's 04:00.
+        let newYork = TimeZone(identifier: "America/New_York")!
+        #expect(UsageDay.start(ofHour: 3, of: "2026-11-01", in: newYork) == Date(timeIntervalSince1970: 1_793_520_000))
+        #expect(UsageDay.start(ofHour: 0, of: "2026-11-01", in: newYork) == Date(timeIntervalSince1970: 1_793_505_600))
+        // 12:30 there, 17:30 UTC.
+        let now = Date(timeIntervalSince1970: 1_793_554_200)
+        var hours = Array(repeating: 0, count: 24)
+        hours[3] = 100
+        hours[12] = 7
+        let host = Self.source("ny", "MacBook", zone: newYork, days: [Self.row("2026-11-01", input: 107)], hours: [
+            UsageHourRow(day: "2026-11-01", agent: "claude", viaPortals: false, tokens: hours),
+        ])
+        let day = UsageReport(sources: [host], range: .day, now: now, calendar: Self.calendar)
+        #expect(day.series.first { $0.tokens == 100 }?.date == Date(timeIntervalSince1970: 1_793_520_000))
+        #expect(day.series.last?.date == Date(timeIntervalSince1970: 1_793_552_400))
+        #expect(day.series.last?.tokens == 7)
+        #expect(day.series.reduce(0) { $0 + $1.tokens } == 107)
+    }
+
     @Test func anAverageDaySpreadsTheRangesHours() {
         var hours = Array(repeating: 0, count: 24)
         hours[10] = 700
@@ -197,6 +243,34 @@ import Testing
         // A window with no length is known by its name.
         #expect(limits.first?.windowSeconds == 18000)
         #expect(Self.report([one, two], .week, host: "one").limits.last?.percent == 40)
+        #expect(limits.allSatisfy { $0.hostName == nil })
+    }
+
+    @Test func twoHostsOnTwoAccountsShowEachWindowWithItsHost() {
+        // Another account: its window resets at another time.
+        let mine = UsageLimitReading(at: Self.now.addingTimeInterval(-600), agent: "claude", name: "weekly", percent: 50, resetsAt: Self.now.addingTimeInterval(86400), windowSeconds: 604_800)
+        let other = UsageLimitReading(at: Self.now.addingTimeInterval(-300), agent: "claude", name: "weekly", percent: 20, resetsAt: Self.now.addingTimeInterval(3 * 86400), windowSeconds: 604_800)
+        let one = Self.source("one", "MacBook", days: [], limits: [mine])
+        let two = Self.source("two", "Mac mini", days: [], limits: [other])
+        let limits = Self.report([one, two], .week).limits
+        // By the host's name.
+        #expect(limits.map(\.hostName) == ["Mac mini", "MacBook"])
+        #expect(limits.map(\.percent) == [20, 50])
+        #expect(Set(limits.map(\.id)).count == 2)
+        // Picked alone, a host's window needs no name.
+        #expect(Self.report([one, two], .week, host: "two").limits.map(\.hostName) == [nil])
+
+        // The same reset, but less used later: not one window read twice.
+        let less = UsageLimitReading(at: Self.now.addingTimeInterval(-60), agent: "claude", name: "weekly", percent: 10, resetsAt: Self.now.addingTimeInterval(86400), windowSeconds: 604_800)
+        let three = Self.source("three", "Studio", days: [], limits: [less])
+        #expect(Self.report([one, three], .week).limits.count == 2)
+
+        // A window that started again since it was read gives way to one read since.
+        let stale = UsageLimitReading(at: Self.now.addingTimeInterval(-9 * 86400), agent: "claude", name: "weekly", percent: 90, resetsAt: Self.now.addingTimeInterval(-2 * 86400), windowSeconds: 604_800)
+        let four = Self.source("four", "Old Mac", days: [], limits: [stale])
+        let shown = Self.report([one, four], .week).limits
+        #expect(shown.map(\.percent) == [50])
+        #expect(shown.first?.hostName == nil)
     }
 
     @Test func paceIsTheShareUsedAgainstTheShareGone() {
@@ -242,6 +316,10 @@ import Testing
         let again = FakeBackend.sampleUsage(on: HostID(rawValue: "one"), from: "2026-08-01", to: "2026-11-06", now: Self.now)
         let other = FakeBackend.sampleUsage(on: HostID(rawValue: "two"), from: "2026-08-01", to: "2026-11-06", now: Self.now)
         #expect(first == again)
+        // Several times: a dictionary walked in its own order would differ on some calls only.
+        for _ in 0..<8 {
+            #expect(FakeBackend.sampleUsage(on: HostID(rawValue: "one"), from: "2026-08-01", to: "2026-11-06", now: Self.now) == first)
+        }
         #expect(first.days != other.days)
         #expect(!first.days.isEmpty)
         #expect(first.days.allSatisfy { $0.day <= UsageDay.string(for: Self.now, in: .current) })
