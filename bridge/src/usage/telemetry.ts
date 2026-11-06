@@ -348,9 +348,13 @@ export interface TelemetryOptions {
   configPath: string;
   /** The host's environment: `DO_NOT_TRACK`, `PORTALS_TELEMETRY`, `PORTALS_STATS_URL`. */
   env: NodeJS.ProcessEnv;
-  /** The usage book (book.ts): a day's rows, and whether a scan has read past the day's end. */
-  book: { days(from: string, to: string): DayRow[]; scan(): ScanState };
-  prices: PriceBook;
+  /**
+   * The usage book (book.ts): a day's rows, and whether a scan has read past the day's end;
+   * and the prices. Without them (a host whose usage could not start) nothing is sent, and
+   * the switch still works.
+   */
+  book?: { days(from: string, to: string): DayRow[]; scan(): ScanState };
+  prices?: PriceBook;
   /** The time zone the book's days are in. */
   timeZone: string;
   version: string;
@@ -472,7 +476,7 @@ export class Telemetry {
       os: this.options.os ?? process.platform,
       turns: counts.turns,
       portals,
-      usage: usageRows(this.options.book.days(day, day), day, this.options.prices),
+      usage: this.options.book && this.options.prices ? usageRows(this.options.book.days(day, day), day, this.options.prices) : [],
     };
   }
 
@@ -519,6 +523,7 @@ export class Telemetry {
     const [today] = this.calendar.at(now);
     this.prune(today);
     if (now < this.retryAt) return;
+    if (!this.options.book || !this.options.prices) return;
     const scan = this.options.book.scan();
     if (scan.scanning || scan.scannedAt === undefined) return;
     const [scannedDay] = this.calendar.at(scan.scannedAt);
