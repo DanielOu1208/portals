@@ -599,6 +599,12 @@ enum DebugLaunch {
     /// this file, a line a second (`FrameMeter`), for scripts/mac-scroll-bench.sh.
     static var framesPath: String? { value("PORTALS_DEBUG_FRAMES") }
 
+    /// `PORTALS_DEBUG_TYPE_BENCH`: `<file>`. Ten seconds after a chat comes on screen, put
+    /// 300 letters into its composer one at a time, 80 ms apart, as keys typed would, and
+    /// write "typing <uptime>" and "typed <uptime>" to the file: what a key typed costs is
+    /// the CPU between the two (scripts/type-bench.sh).
+    static var typeBenchPath: String? { value("PORTALS_DEBUG_TYPE_BENCH") }
+
     /// `PORTALS_DEBUG_NO_WATCHDOG`: leave the main thread's watchdog out (`AppWatchdog`),
     /// to measure what it costs.
     static var leavesOutWatchdog: Bool { value("PORTALS_DEBUG_NO_WATCHDOG") != nil }

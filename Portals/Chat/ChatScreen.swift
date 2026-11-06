@@ -638,6 +638,9 @@ struct ChatScreen: View {
             .onDebugLaunch(DebugLaunch.draft != nil) {
                 if chat.composer.text.isEmpty { chat.composer.text = DebugLaunch.draft ?? "" }
             }
+            .onDebugLaunch(DebugLaunch.typeBenchPath != nil, after: .seconds(10)) {
+                await typeBench()
+            }
             .onDebugLaunch(DebugLaunch.focusesComposer, after: .seconds(1)) {
                 isComposing = true
             }
@@ -2090,6 +2093,43 @@ private struct TintlessBlur: UIViewRepresentable {
     }
 
     func updateUIView(_ view: TintlessBlurView, context: Context) {}
+}
+
+extension ChatScreen {
+    /// Once, in the chat on screen (`PORTALS_DEBUG_TYPE_BENCH`).
+    @MainActor private static var typeBenchRan = false
+
+    func typeBench() async {
+        #if DEBUG && (targetEnvironment(simulator) || targetEnvironment(macCatalyst))
+        guard isShown, !Self.typeBenchRan, let path = DebugLaunch.typeBenchPath else { return }
+        Self.typeBenchRan = true
+        isComposing = true
+        try? await Task.sleep(for: .seconds(1))
+        let note = { (word: String) in
+            let line = "\(word) \(ProcessInfo.processInfo.systemUptime)\n"
+            if let handle = FileHandle(forWritingAtPath: path) {
+                handle.seekToEndOfFile(); handle.write(Data(line.utf8)); try? handle.close()
+            } else {
+                FileManager.default.createFile(atPath: path, contents: Data(line.utf8))
+            }
+        }
+        // Through the text view's own input, as the keyboard puts a key in (`insertText`).
+        func editable(in view: UIView) -> UITextView? {
+            if let text = view as? UITextView, text.isEditable, text.isFirstResponder { return text }
+            for sub in view.subviews { if let found = editable(in: sub) { return found } }
+            return nil
+        }
+        let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
+        guard let field = windows.lazy.compactMap({ editable(in: $0) }).first else { note("no-field"); return }
+        note("typing")
+        let letters = Array("the quick brown fox jumps over the lazy dog ")
+        for index in 0..<300 {
+            field.insertText(String(letters[index % letters.count]))
+            try? await Task.sleep(for: .milliseconds(80))
+        }
+        note("typed")
+        #endif
+    }
 }
 
 final class TintlessBlurView: UIVisualEffectView {
