@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -10,7 +10,7 @@ import type { Source } from "../src/usage/readers/common.ts";
 import type { UsageAgent, UsageVia } from "../src/usage/types.ts";
 import { historyHome } from "./usage-fixtures.ts";
 
-// The book (src/usage/book.ts): history read in its worker thread and added to the days,
+// The book (src/usage/book.ts): history read in its own process and added to the days,
 // through Portals or elsewhere as the host's resolver says, read again after a poke,
 // saved and loaded again without counting twice, and a reader that fails never taking
 // the host with it.
@@ -25,7 +25,7 @@ function totals(rows: { agent: UsageAgent; via: UsageVia; input: number; output:
   return { input: mine.reduce((sum, row) => sum + row.input, 0), output: mine.reduce((sum, row) => sum + row.output, 0), requests: mine.reduce((sum, row) => sum + row.requests, 0) };
 }
 
-test("the worker reads every agent's history; the resolver says what went through Portals, and Codex's Portals originator always does", async () => {
+test("the reader reads every agent's history; the resolver says what went through Portals, and Codex's Portals originator always does", async () => {
   const home = historyHome();
   const stateDir = mkdtempSync(join(tmpdir(), "portals-usage-book-"));
   const asked: [UsageAgent, string, number, string | undefined][] = [];
@@ -149,4 +149,31 @@ test("scans never run two at once: a burst of pokes while one runs is one more s
   } finally {
     await book.stop();
   }
+});
+
+test("a scan that finds nothing new writes nothing; its time is written on stop", async () => {
+  const home = historyHome(["claude"]);
+  const stateDir = mkdtempSync(join(tmpdir(), "portals-usage-book-"));
+  const saved = join(stateDir, "usage", "usage.json");
+  const book = startUsageBook({ stateDir, home, env: {}, via: () => "elsewhere", timeZone: "UTC", inProcess: true, pokeMs: 1, saveEveryMs: 0 });
+  let last = 0;
+  try {
+    await book.scanned();
+    // The first scan ever is written, its time with it.
+    const first = statSync(saved, { bigint: true });
+    assert.equal(typeof JSON.parse(readFileSync(saved, "utf8")).scannedAt, "number");
+    for (let index = 0; index < 4; index++) {
+      const next = book.scanned();
+      book.poke();
+      await next;
+    }
+    const after = statSync(saved, { bigint: true });
+    assert.equal(after.ino, first.ino, "an idle scan wrote the totals again");
+    assert.equal(after.mtimeNs, first.mtimeNs);
+    last = book.scan().scannedAt ?? 0;
+    assert.ok(last > 0);
+  } finally {
+    await book.stop();
+  }
+  assert.equal(JSON.parse(readFileSync(saved, "utf8")).scannedAt, last);
 });

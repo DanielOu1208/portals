@@ -17,10 +17,11 @@ import { piSources } from "./readers/pi.ts";
 // read again from the start, and what it gave before is replaced, not added to. A file
 // that is gone keeps what it gave: agents delete old transcripts, and the totals only grow.
 //
-// Runs in a worker thread (scanWorker.ts), so the host's loop never waits on it, or in
-// the host's own for tests. It keeps no totals: it tells its owner each file's new
-// requests and cursor (`ScanMessage`), and the owner (book.ts, store.ts) adds them up and
-// saves both together, so a stop at any moment leaves cursors and totals that agree.
+// Runs in a short-lived process of its own (scanWorker.ts), so the host's loop never
+// waits on it, or in the host's own thread for tests. It keeps no totals: it tells its
+// owner each file's new requests and cursor (`ScanMessage`), and the owner (book.ts,
+// store.ts) adds them up and saves both together, so a stop at any moment leaves cursors
+// and totals that agree.
 //
 // Memory stays small whatever the history weighs: files are read in pieces, lines that
 // cannot hold usage are passed over by a text search without being made into strings,
@@ -62,7 +63,7 @@ export type ScanMessage =
   | { type: "gone"; path: string; cursor: Cursor }
   /** A file gone long enough to be let go of: its record goes, its counts stay. */
   | { type: "forget"; path: string }
-  /** A file about to be read: should the worker end while reading it, its owner tells the next one to leave it (`ScannerOptions.avoid`). */
+  /** A file about to be read: should the reader end while reading it, its owner tells the next one to leave it (`ScannerOptions.avoid`). */
   | { type: "reading"; path: string; size: number }
   /** Bytes read so far of the bytes this scan reads. */
   | { type: "progress"; done: number; total: number }
@@ -75,7 +76,7 @@ export interface ScannerOptions extends SourceOptions {
   cursors?: Record<string, Cursor>;
   /** Where to read; every agent's by default. */
   sources?: Source[];
-  /** Files not to read at these sizes: a worker ended while reading them. */
+  /** Files not to read at these sizes: a reader ended while reading them. */
   avoid?: Record<string, number>;
 }
 
@@ -85,7 +86,7 @@ export const goneKept = 30 * 24 * 60 * 60_000;
 const pieceBytes = 256 * 1024;
 /**
  * Lines longer than this are passed over: the longest usage line of a year of one Mac's
- * history was 2 MB, and a line many times that, parsed, could cost the worker its memory
+ * history was 2 MB, and a line many times that, parsed, could cost the reader its memory
  * (its heap is 48 MB: book.ts).
  */
 export const longestLine = 8 * 1024 * 1024;
@@ -165,7 +166,7 @@ export class Scanner {
     post({ type: "done", files: found.length, read: work.length, bytes: total, ms: Math.round(performance.now() - clock) });
   }
 
-  /** The cursors as they are now, for a test or a restarted worker's owner. */
+  /** The cursors as they are now, for a test or a restarted reader's owner. */
   snapshot(): Record<string, Cursor> {
     return Object.fromEntries(this.cursors);
   }

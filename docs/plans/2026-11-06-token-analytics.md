@@ -24,7 +24,7 @@ The asks, 2026-11-06:
 |---|---|
 | What is counted | All coding on the Mac (terminal, other apps, Portals), from each agent's own history files; Portals' threads marked as such |
 | Tokscale | Borrow, don't fork: its knowledge of where each agent keeps usage and its counting rules (MIT, credited in THIRD_PARTY_NOTICES.md), no Rust, no binary |
-| Dependencies | None new: Node's own `fs`, `zlib` (zstd), `worker_threads`, later `node:sqlite`; Swift Charts in the app |
+| Dependencies | None new: Node's own `fs`, `zlib` (zstd), `child_process`, later `node:sqlite`; Swift Charts in the app |
 | Dollars | Shown, as an API-equivalent estimate, labelled as not the bill |
 | Anonymous totals | On by default, with an off switch (Settings, CLI, config.json, `DO_NOT_TRACK`) |
 | Who sees the totals | Only the maintainer: a private page |
@@ -74,7 +74,8 @@ How it stays light:
   again from the start, and its earlier counts are replaced, not added to.
 - Before `JSON.parse`, a quick text check skips lines that cannot hold usage (tool output and
   images are most of the bytes).
-- Scanning runs in a `worker_thread`, so the host's loop never waits on it. When: at start,
+- Scanning runs in a short-lived child process (first built as a `worker_thread`, whose freed
+  memory stayed in the host), so the host's loop never waits on it. When: at start,
   every 10 minutes, and shortly after a turn ends; a scan with nothing new costs a few `stat`s.
 - The first scan reads the whole history once (on the development Mac 7.2 GB: Claude Code
   4.4 GB in 1,104 files, Codex 2.2 GB in 2,601, Droid 566 MB, Pi 57 MB). Its time is
@@ -241,7 +242,7 @@ Cloudflare account as `portals-relay` but apart from it, so it cannot touch the 
 | Part | Files |
 |---|---|
 | Shared shapes | `bridge/src/usage/types.ts` (written first; changed only with care, every part reads it) |
-| Reading history | `bridge/src/usage/readers/{claude,codex,pi,droid}.ts`, `scanner.ts` (cursors, worker thread), `scanWorker.ts`, `store.ts` (daily totals, hours), `book.ts` (the `UsageBook`), `prices.ts` + `prices.json` + `bridge/scripts/prices.ts`; tests `bridge/test/usage-*.test.ts` with fixtures in `bridge/test/fixtures/usage/` |
+| Reading history | `bridge/src/usage/readers/{claude,codex,pi,droid}.ts`, `scanner.ts` (cursors, reader process), `scanWorker.ts`, `store.ts` (daily totals, hours), `book.ts` (the `UsageBook`), `prices.ts` + `prices.json` + `bridge/scripts/prices.ts`; tests `bridge/test/usage-*.test.ts` with fixtures in `bridge/test/fixtures/usage/` |
 | Host wiring | `bridge/src/usage/sessions.ts` (Portals' sessions), `limits.ts` (limit readings), the gateway methods and features, `bridge.ts`, `config.ts` paths, contract.json, docs/gateway-protocol.md |
 | Telemetry | `bridge/src/usage/telemetry.ts`, the CLI's `telemetry on|off|status`, the setup line, README section |
 | Server | `stats/` (worker, D1 migrations, page, tests, README) |

@@ -1,5 +1,6 @@
+import { fork, type ChildProcess } from "node:child_process";
 import { join } from "node:path";
-import { Worker } from "node:worker_threads";
+import { fileURLToPath } from "node:url";
 import { log } from "../log.ts";
 import type { ReadRequest, Source } from "./readers/common.ts";
 import { readAgents, Scanner, type ScanMessage } from "./scanner.ts";
@@ -9,14 +10,18 @@ import type { DayRow, HourRow, ScanState, UsageAgent, UsageBook, UsageVia } from
 // The book of usage (types.ts `UsageBook`): what all coding on this computer spent, read
 // from the agents' history (scanner.ts) and kept as daily totals (store.ts). Read at
 // start, every 10 minutes, and a few seconds after `poke` (a turn ended); never two reads
-// at once. The reading runs in a worker thread (scanWorker.ts), or in this thread when
-// `inProcess` (tests).
+// at once. The reading runs in a short-lived process of its own (scanWorker.ts, one each
+// scan), so the memory it takes goes back to the system when it ends, or in this thread
+// when `inProcess` (tests).
 //
 // Nothing here may stop the host, or keep it from stopping, whatever goes wrong (the
 // rule at the top of counters.ts): every timer's and message's work is one `try`, every
-// promise is caught, the worker does not keep the process alive, and a worker that ends
+// promise is caught, the reader does not keep the process alive, and a reader that ends
 // or errs is started again later, with the cursors this side has, so the host goes on
 // without the numbers rather than not at all.
+//
+// The totals are written only when a scan changed them (and after the first scan ever,
+// and on stop, for its time): a scan with nothing new writes nothing.
 
 /**
  * Whether a request went through Portals: the host's own record of the sessions it ran
@@ -48,11 +53,11 @@ export interface UsageBookOptions {
   pokeMs?: number;
   /** How often the totals are written at most (2 minutes). */
   saveEveryMs?: number;
-  /** How long after a worker ended a new one may start (1 minute, doubled each time up to the scan interval). */
+  /** How long after a reader ended a new one may start (1 minute, doubled each time up to the scan interval). */
   restartMs?: number;
-  /** How long a scan may run before its worker is ended (30 minutes). */
+  /** How long a scan may run before its reader is ended (30 minutes). */
   longestScanMs?: number;
-  /** The worker's module, scanWorker's by default: a test gives one that fails. */
+  /** The reader's module, scanWorker's by default: a test gives one that fails. */
   worker?: URL;
 }
 
@@ -93,7 +98,9 @@ export function startUsageBook(options: UsageBookOptions): RunningUsageBook {
   let saveTimer: NodeJS.Timeout | undefined;
   let pokeTimer: NodeJS.Timeout | undefined;
   let restartTimer: NodeJS.Timeout | undefined;
-  let worker: Worker | undefined;
+  let worker: ChildProcess | undefined;
+  /** When the scan time was last written, so a stop writes it only when it moved on. */
+  let savedScannedAt = store.scannedAt;
   let restartMs = firstRestartMs;
   let notBefore = 0;
   let endScan: (() => void) | undefined;
@@ -119,6 +126,7 @@ export function startUsageBook(options: UsageBookOptions): RunningUsageBook {
     try {
       store.save();
       savedAt = clock();
+      savedScannedAt = store.scannedAt;
     } catch (error) {
       log.warn("usage: the totals could not be saved; they are tried again later", { why: (error as Error).message });
     }
@@ -152,38 +160,63 @@ export function startUsageBook(options: UsageBookOptions): RunningUsageBook {
     }
   };
 
-  const startWorker = (): Worker | undefined => {
+  const startWorker = (): ChildProcess | undefined => {
     if (worker) return worker;
     if (clock() < notBefore) return undefined;
     try {
-      const started = new Worker(options.worker ?? workerUrl, {
-        workerData: { home: options.home, env: sourceEnv, cursors: store.cursors(), avoid },
-        execArgv: [],
-        // Its own heap, small, so a first read of a year of history stays near 300 MB for
-        // the whole process (the largest compressed Codex file is most of the rest: zstd
-        // keeps a whole single-segment frame while it reads it). A worker that needs more
-        // ends, and the host does not; the file it was reading is left until it changes.
-        resourceLimits: { maxOldGenerationSizeMb: 48, maxYoungGenerationSizeMb: 4 },
+      const started = fork(fileURLToPath(options.worker ?? workerUrl), [], {
+        // A process, not a worker thread: what a read takes (zstd's buffers and the reads'
+        // native memory most of all) goes back to the system when it ends, where a worker's
+        // stayed in the host's own memory for good (a year of one Mac's history left the
+        // host near 220 MB after its first read in a worker, near 100 MB this way). Its heap
+        // is small, so the reader stays near 300 MB at its peak (the largest compressed
+        // Codex file is most of it: zstd keeps a whole single-segment frame while it reads
+        // it). A reader that needs more ends, and the host does not; the file it was reading
+        // is left until it changes. Nothing of the host's environment: it is told where to
+        // read. Messages as JSON: the advanced serialization's large buffers stayed in the
+        // host's memory too (near 195 MB after the same read).
+        execArgv: ["--max-old-space-size=48", "--max-semi-space-size=2"],
+        env: {},
+        stdio: ["ignore", "ignore", "pipe", "ipc"],
+        serialization: "json",
       });
       started.unref();
-      started.on("message", (message: ScanMessage) => {
-        handle(message);
-        if (message.type === "done" && started === worker) endScan?.();
-      });
-      started.on("error", (error) => log.warn("usage: the history reader stopped", { why: error.message }));
-      started.on("exit", (code) => {
+      started.channel?.unref();
+      // What it says as it fails (an error it did not catch, its heap running out), the
+      // end of it only, for the line logged when it ends.
+      let said = "";
+      started.stderr?.setEncoding("utf8");
+      started.stderr?.on("data", (text: string) => (said = (said + text).slice(-2_000)));
+      (started.stderr as { unref?: () => void } | null)?.unref?.();
+      let ended = false;
+      const end = (code: number | null) => {
+        if (ended) return;
+        ended = true;
         if (started !== worker) return;
         worker = undefined;
         if (!stopped && code !== 0) {
-          // Ended while reading a file: the next worker leaves that file until it changes.
+          // Ended while reading a file: the next reader leaves that file until it changes.
           if (reading) avoid[reading.path] = reading.size;
-          log.warn("usage: the history reader ended; it is started again later", { code });
+          const why = said.split("\n").map((line) => line.trim()).filter((line) => /error/i.test(line)).pop();
+          log.warn("usage: the history reader ended; it is started again later", why ? { code, why } : { code });
         }
         reading = undefined;
         notBefore = clock() + restartMs;
         restartMs = Math.min(restartMs * 2, everyMs);
         endScan?.();
+      };
+      started.on("message", (message: ScanMessage) => {
+        handle(message);
+        if (message.type === "done" && started === worker) endScan?.();
       });
+      started.on("error", (error) => {
+        // It could not start, or be told to scan: it is ended, and counts as having ended.
+        log.warn("usage: the history reader stopped", { why: error.message });
+        if (ended) return;
+        end(null);
+        started.kill();
+      });
+      started.on("exit", (code) => end(code));
       worker = started;
       return started;
     } catch (error) {
@@ -201,7 +234,7 @@ export function startUsageBook(options: UsageBookOptions): RunningUsageBook {
     }
     const reader = startWorker();
     if (!reader) {
-      // Not yet: a worker ended a moment ago. Read once it may start again.
+      // Not yet: a reader ended a moment ago. Read once it may start again.
       if (!restartTimer && !stopped) {
         restartTimer = setTimeout(() => {
           restartTimer = undefined;
@@ -213,14 +246,18 @@ export function startUsageBook(options: UsageBookOptions): RunningUsageBook {
     await new Promise<void>((resolve) => {
       const watchdog = setTimeout(() => {
         log.warn("usage: a scan of history took too long; its reader is ended", { minutes: Math.round(longestScanMs / 60_000) });
-        void reader.terminate().catch(() => undefined);
+        reader.kill();
       }, longestScanMs).unref();
       endScan = () => {
         clearTimeout(watchdog);
         endScan = undefined;
         resolve();
       };
-      reader.postMessage({ type: "scan" });
+      reader.send({ type: "scan", home: options.home, env: sourceEnv, cursors: store.cursors(), avoid }, (error) => {
+        if (!error) return;
+        log.warn("usage: the history reader could not be told to scan", { why: error.message });
+        reader.kill();
+      });
     });
   };
 
@@ -238,16 +275,19 @@ export function startUsageBook(options: UsageBookOptions): RunningUsageBook {
         running = false;
         if (stopped) return;
         const finished = worker !== undefined || options.inProcess;
-        // The worker goes once its scan is done, and its memory with it: a scan is ten
-        // minutes apart, and a new worker starts in a few milliseconds.
+        // The reader goes once its scan is done, and its memory with it: a scan is ten
+        // minutes apart, and a new reader starts in a few tens of milliseconds.
         if (worker) {
           const ending = worker;
           worker = undefined;
-          void ending.terminate().catch(() => undefined);
+          ending.kill();
         }
         if (finished) {
           store.scannedAt = clock();
-          store.dirty = true;
+          // Only the first scan ever is written for its time alone (so a restart knows
+          // history was read); after it, a scan that found nothing new writes nothing,
+          // and the time goes with the next change, or on stop.
+          if (first) store.dirty = true;
           first = false;
           restartMs = firstRestartMs;
         }
@@ -267,7 +307,7 @@ export function startUsageBook(options: UsageBookOptions): RunningUsageBook {
   const every = setInterval(run, everyMs);
   every.unref();
   // Not unref'd: an unref'd immediate in a loop with nothing else to do never runs, and
-  // this one only starts the first scan (whose worker does not keep the process alive).
+  // this one only starts the first scan (whose reader does not keep the process alive).
   setImmediate(run);
 
   return {
@@ -308,13 +348,12 @@ export function startUsageBook(options: UsageBookOptions): RunningUsageBook {
       const ending = worker;
       worker = undefined;
       endScan?.();
-      if (ending) {
-        try {
-          await Promise.race([ending.terminate(), new Promise((resolve) => setTimeout(resolve, 2_000).unref())]);
-        } catch {
-          // Ended already.
-        }
+      if (ending && ending.exitCode === null && ending.signalCode === null) {
+        const exited = new Promise((resolve) => ending.once("exit", resolve));
+        ending.kill();
+        await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 2_000).unref())]);
       }
+      if (store.scannedAt !== savedScannedAt) store.dirty = true;
       save();
       for (const resolve of waiters) resolve();
       waiters = [];
