@@ -383,6 +383,10 @@
 //   days: daily totals by agent, model, folder and whether they went through Portals, with
 //   the API price of now in US dollars, each day's tokens by hour, and the readings of the
 //   plans' limits kept over those days (src/usage/, docs/plans/2026-11-06-token-analytics.md).
+// - `usage_telemetry`: `usage.telemetry` says whether the host sends its anonymous daily
+//   totals, whether its environment keeps them off (`locked: "env"`, `DO_NOT_TRACK` or
+//   `PORTALS_TELEMETRY=0`) and the last day sent, and with `enabled` sets its switch,
+//   `telemetry` in config.json (src/usage/telemetry.ts, README "Anonymous usage totals").
 
 export const bridgeFeatures = [
   "turn_file_undo",
@@ -462,6 +466,7 @@ export const bridgeFeatures = [
   "subagent_read",
   "agent_programs",
   "usage_history",
+  "usage_telemetry",
 ] as const;
 
 export const bridgeProtocol = 1;

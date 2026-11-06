@@ -29,6 +29,7 @@ import { McpAuthSettling, type McpAuthAction } from "../providers/mcpAuth.ts";
 import { ProgramRefused, type AgentPrograms, type ProgramReport } from "../providers/programs.ts";
 import { SettingRefused } from "../providers/types.ts";
 import { diskFields, type DiskReading } from "../disk.ts";
+import type { Telemetry } from "../usage/telemetry.ts";
 import { historyAnswer, historyRangeProblem, type UsageParts } from "../usage/history.ts";
 
 // Every method the app calls (docs/gateway-protocol.md, section 5), with the params the
@@ -78,6 +79,8 @@ export interface GatewayContext {
   readonly openers?: Openers;
   /** The agents' programs on this computer, and updating them (feature agent_programs). */
   readonly programs: AgentPrograms;
+  /** The anonymous daily totals' sender and its switch (feature usage_telemetry). */
+  readonly telemetry?: Telemetry;
   /** What all coding on this computer spent, the prices and the plans' limits over time (feature usage_history); absent when it could not be started. */
   readonly usage?: UsageParts;
 }
@@ -350,6 +353,8 @@ export const methods: Record<string, MethodSpec> = {
       caller.keepsAsyncQuestions = caller.takesRequests && params.async_questions === true;
       // Named as who answered in the request.cancel its answer settles (feature answer_owner).
       caller.deviceID = typeof params.device === "string" && params.device !== "" && params.device.length <= 128 ? params.device : undefined;
+      // A device a day, by kind, for the anonymous totals (usage/telemetry.ts): a linked Mac's call never says this.
+      gateway.telemetry?.deviceConnected(caller.signedIn, caller.deviceID);
       // Told from now on, until it says otherwise or closes (pollNow.ts).
       gateway.pollNow.ask(caller, params.poll_now === true);
       // The answer is the boundary: no compact frame comes before the opt-in is acknowledged.
@@ -667,6 +672,21 @@ export const methods: Record<string, MethodSpec> = {
       if (problem) throw invalidParams(problem);
       if (!gateway.usage) throw new RpcError(ErrorCode.internal, `The host is not reading usage on this ${machineWord()}.`);
       return historyAnswer(gateway.usage, params.from as string, params.to as string);
+    },
+  },
+
+  "usage.telemetry": {
+    summary:
+      "Whether the host sends its anonymous daily totals (feature usage_telemetry): with enabled, sets the switch first (telemetry in config.json, every other key kept; off lets go of what was counted for days not sent). Answers enabled, locked (env when DO_NOT_TRACK or PORTALS_TELEMETRY=0 in the host's environment keeps it off whatever the switch says, else null) and last_sent_day (\"YYYY-MM-DD\", the last day the stats server took, null before any).",
+    params: { enabled: "boolean" },
+    handle(params, { gateway }) {
+      if (!gateway.telemetry) throw new RpcError(ErrorCode.internal, `The host has no anonymous totals on this ${machineWord()}.`);
+      if (typeof params.enabled !== "boolean") return gateway.telemetry.answer();
+      try {
+        return gateway.telemetry.set(params.enabled);
+      } catch (error) {
+        throw new RpcError(ErrorCode.internal, (error as Error).message);
+      }
     },
   },
 

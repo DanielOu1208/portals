@@ -50,6 +50,8 @@ export interface TestBridgeOptions {
   programs?: BridgeOptions["programs"];
   /** For token analytics (feature usage_history): another home, sources or timing. Else the scratch home (test/environment.ts), read in the test's own thread, and no price list fetched. */
   usage?: BridgeOptions["usage"];
+  /** For the anonymous totals (feature usage_telemetry): another environment, clock or fetch. Else the test's, which keeps them off (PORTALS_TELEMETRY=0). */
+  telemetry?: BridgeOptions["telemetry"];
 }
 
 /** The price list's fetch in tests: never the network. */
@@ -109,7 +111,7 @@ export async function startTestBridge(options: TestBridgeOptions = {}): Promise<
     };
     writeFileSync(join(home, "config.json"), JSON.stringify(config));
   }
-  const bridge = await startBridge({ home, logCapacity: options.logCapacity, providers: options.providers, temporaryFolders: options.temporaryFolders, userHome: options.userHome, held: options.held, noticeRetries: options.noticeRetries, updates: options.updates, programs: options.programs, disk: { statfs: roomyDisk, ...options.disk }, usage: { inProcess: true, fetch: offlineFetch, ...options.usage } });
+  const bridge = await startBridge({ home, logCapacity: options.logCapacity, providers: options.providers, temporaryFolders: options.temporaryFolders, userHome: options.userHome, held: options.held, noticeRetries: options.noticeRetries, updates: options.updates, programs: options.programs, disk: { statfs: roomyDisk, ...options.disk }, usage: { inProcess: true, fetch: offlineFetch, ...options.usage }, telemetry: options.telemetry });
   return {
     ...bridge,
     get stopDeadlineMs() { return bridge.stopDeadlineMs; },

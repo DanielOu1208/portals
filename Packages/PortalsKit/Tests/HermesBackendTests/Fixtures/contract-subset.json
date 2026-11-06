@@ -169,7 +169,8 @@
    "disk_space",
    "subagent_read",
    "agent_programs",
-   "usage_history"
+   "usage_history",
+   "usage_telemetry"
   ],
   "events": {
    "mcp.auth": {
@@ -304,6 +305,12 @@
     "params": [
      "from",
      "to"
+    ]
+   },
+   "usage.telemetry": {
+    "feature": "usage_telemetry",
+    "params": [
+     "enabled"
     ]
    },
    "host.apps": {

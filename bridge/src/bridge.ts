@@ -43,6 +43,8 @@ import { readJSON } from "./store/jsonFile.ts";
 import { UpdateCheck, type UpdateCheckOptions } from "./updates.ts";
 import { DiskSpace, type DiskSpaceOptions } from "./disk.ts";
 import { startUsage, type RunningUsage, type UsageOptions } from "./usage/host.ts";
+import { systemTimeZone } from "./usage/store.ts";
+import { Telemetry, type TelemetryOptions } from "./usage/telemetry.ts";
 import { version } from "./version.ts";
 
 // Puts the pieces together and starts listening. `main.ts` runs this; tests run it on
@@ -75,6 +77,8 @@ export interface BridgeOptions {
   programs?: Partial<Pick<ProgramsOptions, "home" | "env" | "updateMs" | "latest">>;
   /** For token analytics (feature usage_history): another home to read history under, a fetch that stays off the network, other timing (tests). */
   usage?: UsageOptions;
+  /** For the anonymous totals (feature usage_telemetry): another environment (the stats address, the switch's lock), clock, fetch or timing (tests). */
+  telemetry?: Partial<Pick<TelemetryOptions, "env" | "clock" | "fetch" | "timeZone" | "firstMs" | "everyMs" | "answerMs" | "backoffMs">>;
 }
 
 /** How long telling another Mac which of its threads threads here keep at work may take. */
@@ -94,6 +98,8 @@ export interface RunningBridge {
   disk: DiskSpace;
   /** The agents' programs: for tests, which wait for an update's end. */
   programs: AgentPrograms;
+  /** The anonymous totals' sender: for tests, which have it look for a day to send. */
+  telemetry: Telemetry | undefined;
   /** Signal shutdown budget; normally eight seconds, at most sixteen. */
   readonly stopDeadlineMs?: number;
   /** Stops everything; once, however often it is called. */
@@ -250,7 +256,29 @@ export async function startBridge(options: BridgeOptions = {}): Promise<RunningB
   } catch (error) {
     log.warn("usage: token analytics could not start; the host goes on without them", { error: (error as Error).message });
   }
-  const gateway = new Gateway({ config, sessions, providers, folders, desk, fleet, looks, order, machine, pollNow, files, fileSearch, folderSearch, net, search, updates, disk, programs, usage });
+  // The anonymous daily totals (feature usage_telemetry): on unless config.json's
+  // `telemetry` or the environment says otherwise. Sends nothing without the usage book,
+  // and the switch still answers.
+  let telemetry: Telemetry | undefined;
+  try {
+    const sender = new Telemetry({
+      stateDir: paths.state,
+      configPath: paths.config,
+      env: process.env,
+      book: usage?.book,
+      prices: usage?.prices,
+      timeZone: usage?.book.timeZone ?? systemTimeZone(),
+      version,
+      netID: () => net.revision().id,
+      platformOf: (id) => net.list(null).members.find((member) => member.id === id)?.platform,
+      ...options.telemetry,
+    });
+    sessions.listen({ turnStarted: () => sender.turnStarted() });
+    telemetry = sender;
+  } catch (error) {
+    log.warn("usage: the anonymous totals could not start; nothing is sent", { error: (error as Error).message });
+  }
+  const gateway = new Gateway({ config, sessions, providers, folders, desk, fleet, looks, order, machine, pollNow, files, fileSearch, folderSearch, net, search, updates, disk, programs, usage, telemetry });
   net.listener = {
     moved: () => pollNow.moved(),
     // Set from the app, here or on another Mac: what this Mac passes on says it at once.
@@ -335,6 +363,7 @@ export async function startBridge(options: BridgeOptions = {}): Promise<RunningB
   }
   updates?.start();
   disk.start();
+  telemetry?.start();
   // The threads an agent still runs are followed again; then those that had messages
   // waiting when the bridge stopped are loaded, so the messages are sent.
   const following = new AbortController();
@@ -372,6 +401,7 @@ export async function startBridge(options: BridgeOptions = {}): Promise<RunningB
     updates,
     disk,
     programs,
+    telemetry,
     get stopDeadlineMs() {
       return Math.min(16_000, Math.max(stopDeadlineMs, ...[...providers.values()].map((provider) => provider.stopDeadlineMs ?? 0)));
     },
@@ -380,6 +410,7 @@ export async function startBridge(options: BridgeOptions = {}): Promise<RunningB
         // With a last line; only the bridge that started them stops them.
         if (counting) counters.stop();
         // The totals read so far are saved, and the history reader ends.
+        telemetry?.stop();
         const usageStopped = usage?.stop().catch((error: Error) => log.warn("usage: token analytics did not stop cleanly", { error: error.message }));
         // An agent that could not be asked which threads it has open is not asked again.
         following.abort();
